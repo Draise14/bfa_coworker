@@ -47,7 +47,7 @@ LAYOUT_ICON_NAMES = ("reframe_full", "reframe_full_blur", "reframe_full_tracked"
 THEMES = ("dark", "light")
 SIZES = (32, 64)
 
-_STATE: dict[str, Any] = {"previews": None, "key": None}
+_STATE: dict[str, Any] = {}
 
 
 def png_path(name: str, theme: str, size: int) -> str:
@@ -76,23 +76,30 @@ def _current_key() -> tuple[str, int]:
     return theme_for(text), size_for(scale)
 
 
+def _collection(group: str, names: tuple) -> Any:
+    """The preview collection *group* ("wand" or "layout") for the current theme and size, made on demand.  Two
+    collections, so the Reframe layout icons (#606) never change how the wand icons load."""
+    key = _current_key()
+    state = _STATE.setdefault(group, {"previews": None, "key": None})
+    if state["previews"] is None or state["key"] != key:
+        import bpy.utils.previews  # pylint: disable=import-error
+        if state["previews"] is not None:
+            bpy.utils.previews.remove(state["previews"])
+        previews = bpy.utils.previews.new()
+        theme, size = key
+        for icon in names:
+            path = png_path(icon, theme, size)
+            if os.path.isfile(path):
+                previews.load(icon, path, "IMAGE")
+        state["previews"], state["key"] = previews, key
+    return state["previews"]
+
+
 def icon_id(name: str) -> int:
     """The ``icon_value`` of wand icon *name* for the current theme, or 0."""
     try:
-        key = _current_key()
-        previews = _STATE["previews"]
-        if previews is None or _STATE["key"] != key:
-            import bpy.utils.previews  # pylint: disable=import-error
-            if previews is not None:
-                bpy.utils.previews.remove(previews)
-            previews = bpy.utils.previews.new()
-            theme, size = key
-            for icon in ICON_NAMES + LAYOUT_ICON_NAMES:
-                path = png_path(icon, theme, size)
-                if os.path.isfile(path):
-                    previews.load(icon, path, "IMAGE")
-            _STATE["previews"], _STATE["key"] = previews, key
-        preview = previews.get(name)
+        group, names = ("layout", LAYOUT_ICON_NAMES) if name in LAYOUT_ICON_NAMES else ("wand", ICON_NAMES)
+        preview = _collection(group, names).get(name)
         return preview.icon_id if preview is not None else 0
     except Exception:  # pylint: disable=broad-exception-caught
         return 0        # no previews (background, a missing file): the caller's Blender icon
@@ -119,11 +126,11 @@ def menu(layout: Any, menu_id: str, *, name: str, fallback: str, text: str | Non
 
 
 def free() -> None:
-    previews = _STATE["previews"]
-    _STATE["previews"] = _STATE["key"] = None
-    if previews is not None:
-        try:
-            import bpy.utils.previews  # pylint: disable=import-error
-            bpy.utils.previews.remove(previews)
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
+    for group in ("wand", "layout"):
+        state = _STATE.pop(group, None)
+        if state is not None and state["previews"] is not None:
+            try:
+                import bpy.utils.previews  # pylint: disable=import-error
+                bpy.utils.previews.remove(state["previews"])
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass

@@ -52,7 +52,8 @@ def register(mcp: FastMCP) -> None:
                 crops, 50 / 50), ``split_top`` (two thirds on top, one third below),
                 ``split_bottom`` (one third on top, two thirds below). ``track_all`` (each part of
                 a split follows its own subject) needs subject finding and is not available yet.
-                Empty with ``swap=true``: only swap.
+                Empty with ``swap=true``: only swap. Empty without it: read, answer each strip's
+                current layout in ``layouts`` and change nothing.
             strips: Strip names (a split's either part stands for both). Empty: the selected strips.
             swap: Exchange which framing of the picture is shown top and bottom in the splits named
                 (after building ``layout`` when one is given).
@@ -60,7 +61,8 @@ def register(mcp: FastMCP) -> None:
         Returns:
             ``status`` (ok / nothing / error), ``message``, ``layout``, ``changed`` (strips given
             the layout), ``created`` / ``removed`` (strip names), ``unchanged`` (already in that
-            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``tracking`` and ``scene``.
+            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``tracking``, ``layouts`` (read mode: strip ->
+            {layout, part, partner}; layout is "" when it has none) and ``scene``.
         """
         p = Params(layout=layout, strips=tuple(strips or ()), swap=bool(swap))
         return send_code(toolcode_format_call(_TOOL_CALL, p), strict_json=True)

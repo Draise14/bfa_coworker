@@ -51,6 +51,7 @@ from bpy.types import Menu, Operator  # pylint: disable=import-error
 from . import reframe_follow
 from . import reframe_math as rm
 from .shared import icon
+from .wand import reframe_apply as _layouts
 from .wand import scene as _seq
 
 GROUP_NAME = "Coworker Reframe v1"
@@ -382,6 +383,8 @@ def _reset_transform(strip: Any) -> None:
 
 def reframe_strip(scene: Any, strip: Any, mode: str, reset: bool = False) -> str:
     """Give *strip* its Reframe modifier (or update its sizes); returns added / kept / reset."""
+    if _layouts.is_split_part(strip):
+        raise ReframeError("'{:s}' is part of a split: use the Reframe layouts (Strip > Coworker > Reframe Layout) to change it.".format(strip.name))
     ng = ensure_group()
     w, h = canvas_size(scene)
     sw, sh = source_size(strip)
@@ -432,6 +435,12 @@ def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resoluti
     if missing:
         raise ReframeError("No movie, image or scene strip named {:s} in '{:s}'.".format(
             ", ".join(repr(n) for n in missing), scene.name))
+    # Parts of a split (#606) have crop and transform, not the modifier: Make Vertical leaves them alone.
+    left_alone = [s.name for s in strips if _layouts.is_split_part(s)]
+    strips = [s for s in strips if s.name not in left_alone]
+    if not strips and left_alone:
+        raise ReframeError("All the strips are parts of a split: use the Reframe layouts (Strip > Coworker > "
+                           "Reframe Layout) to change them.")
     if not strips:
         raise ReframeError("No visible movie, image or scene strips in '{:s}'.".format(scene.name))
     names = [s.name for s in strips]
@@ -462,7 +471,7 @@ def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resoluti
             window.scene = target
     return {"scene": target.name, "source_scene": scene.name, "copied": copied, "mode": mode,
             "resolution": [w, h], "added": done["added"], "kept": done["kept"], "reset": done["reset"],
-            "captions": captions}
+            "captions": captions, "left_alone": left_alone}
 
 
 # -- Nudge / mode / reset ------------------------------------------------------------------
@@ -476,6 +485,8 @@ def _set_animated(scene: Any, mod: Any, name: str, value: Any) -> None:
 
 
 def apply_reframe(scene: Any, strip: Any, action: str, step: float = 0.1) -> str:
+    if _layouts.is_split_part(strip):          # a split's parts have crop and transform, not the modifier (#606)
+        raise ReframeError("'{:s}' is part of a split: use the Reframe layouts (Strip > Coworker > Reframe Layout) to change it.".format(strip.name))
     mod = find_modifier(strip)
     if mod is None:
         reframe_strip(scene, strip, "BLUR_FILL" if action == "BLUR_FILL" else "CROP")
@@ -744,6 +755,8 @@ class BFACW_OT_make_vertical(Operator):
             parts.append("{:d} shot(s) reframed".format(len(done["added"]) + len(done["reset"])))
         if done["kept"]:
             parts.append("{:d} kept their framing".format(len(done["kept"])))
+        if done.get("left_alone"):
+            parts.append("{:d} part(s) of a split left alone".format(len(done["left_alone"])))
         if done.get("captions", {}).get("message"):
             parts.append(done["captions"]["message"])
         self.report({'INFO'}, "Make Vertical: " + ", ".join(parts))
@@ -789,6 +802,14 @@ class BFACW_OT_reframe(Operator):
         if not strips:
             self.report({'WARNING'}, "Select movie, image or scene strips to reframe.")
             return {'CANCELLED'}
+        parts = [s.name for s in strips if _layouts.is_split_part(s)]
+        if parts:                   # #606: a split's parts keep to the Reframe layouts
+            strips = [s for s in strips if s.name not in parts]
+            if not strips:
+                self.report({'ERROR'}, "This strip is part of a split: use the Reframe layouts "
+                                       "(Strip > Coworker > Reframe Layout).")
+                return {'CANCELLED'}
+            self.report({'WARNING'}, "{:d} part(s) of a split left alone: use the Reframe layouts.".format(len(parts)))
         try:
             for s in strips:
                 apply_reframe(scene, s, self.action, self.step)

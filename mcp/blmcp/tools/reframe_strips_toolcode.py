@@ -34,6 +34,7 @@ class Result(NamedTuple):
     skipped: list[Any] | None = None
     swapped: list[str] | None = None
     tracking: str | None = None
+    layouts: dict[str, Any] | None = None
     scene: str | None = None
 
 

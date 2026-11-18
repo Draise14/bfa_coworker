@@ -84,7 +84,8 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   `split_bottom` (1/3 on top, 2/3 below); `track_all` is not available yet. A split is two ordinary strips of the
   same source (the strip, and its duplicate below on the next free channel) with crop and transform each; it
   replaces the earlier layout, so any order of layouts ends the same as the last one alone. `swap=true` exchanges
-  top and bottom (alone with `layout=""`). The layout is stored on each strip (`coworker_layout`). Captions and
+  top and bottom (alone with `layout=""`). With neither a layout nor `swap` it only reads: `layouts` gives each
+  named / selected strip's current layout (and its part and partner in a split). The layout is stored on each strip (`coworker_layout`). Captions and
   audio are never touched; Remove Silences and Edit by Transcript cut both parts together. It adds and removes
   strips, so it waits while a render or bake runs.
 - `get_transcript_text(strip)` — A transcribed clip's words as they play now, one numbered line per sentence

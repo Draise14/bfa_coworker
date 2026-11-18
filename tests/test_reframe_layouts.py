@@ -69,14 +69,15 @@ class TestLayoutTable(unittest.TestCase):
     def test_tooltips_say_what_they_do_and_that_no_agent_is_needed(self):
         for item in rl.LAYOUTS:
             self.assertGreater(len(item.description), 40, item.id)
+            self.assertTrue(item.short, item.id)
         for item in rl.LAYOUTS:
             if item.id in ("full_tracked", "track_all"):
                 continue
             self.assertTrue(item.description.endswith("\nWorks without the agent started."), item.id)
         tracked = rl.layout("full_tracked").description
-        self.assertIn("works without the agent started", tracked)
-        self.assertIn("the tracking needs a connected vision-capable model", tracked)
-        self.assertIn("needs subject finding (coming)", rl.layout("track_all").description)
+        self.assertTrue(tracked.endswith("\nWorks without the agent started, except the tracking, which needs a "
+                                          "connected vision-capable model."))
+        self.assertTrue(rl.layout("track_all").description.endswith("\nNeeds subject finding (coming)."))
 
     def test_every_layout_has_its_icon(self):
         icons = _import("wand.icons")
@@ -275,6 +276,8 @@ class Stand(ra.Backend):
         assert name not in {s.name for s in strips}, "name taken"
         assert not any(s.channel == channel and s.left_handle < strip.right_handle and strip.left_handle < s.right_handle
                        for s in strips), "channel not free"
+        assert not any(s.type == "TEXT" and s.channel < channel and s.left_handle < strip.right_handle
+                       and strip.left_handle < s.right_handle for s in strips), "the part would hide a caption"
         twin = Strip(name, strip.type, channel, strip.left_handle, strip.right_handle, strip.path)
         strips.append(twin)
         self.log.append(("duplicate", name))
@@ -285,6 +288,14 @@ class Stand(ra.Backend):
             strips.remove(strip)
             object.__setattr__(strip, "_freed", True)
             self.log.append(("remove",))
+
+    def shift_channels(self, strips, first):
+        for strip in sorted((s for s in strips if s.channel >= first), key=lambda s: -s.channel):
+            strip.channel += 1
+        self.log.append(("shift", first))
+
+    def align(self, strips, top, partner):
+        partner.left_handle, partner.right_handle = top.left_handle, top.right_handle
 
     def modifier_state(self, strip):
         return None if strip.mod is None else {"blur": strip.mod == "BLUR_FILL", "keyed": strip.keyed}
@@ -342,7 +353,8 @@ class TestReplace(unittest.TestCase):
             self.assertEqual(out["status"], "ok", out)
             self.assertEqual(out["changed"], ["clip"])
             clip = strips[0]
-            self.assertEqual(ra.tag_of(clip)["layout"], layout_id if layout_id != "full_tracked" else "full_tracked")
+            # the tag never says Tracked: that is read from the keys
+            self.assertEqual(ra.tag_of(clip)["layout"], layout_id if layout_id != "full_tracked" else "full")
             names = sorted(s.name for s in strips)
             if layout_id in SPLITS:
                 self.assertEqual(names, ["Caption 1", "clip", "clip (bottom)", "talk"])
@@ -499,7 +511,7 @@ class TestReplace(unittest.TestCase):
     def test_tracked_and_the_tag_follows_what_started(self):
         strips = _edit()
         out = _apply(strips, "full_tracked", ["clip"], Stand())
-        self.assertEqual(ra.tag_of(strips[0])["layout"], "full_tracked")
+        self.assertEqual(ra.current_layout(strips[0], Stand()), "full_tracked")
         self.assertTrue(strips[0].keyed)
         self.assertIn("Following the subject", out["message"])
         # Away from it: the keys go with the layout.
@@ -663,15 +675,225 @@ class TestCuts(unittest.TestCase):
         self.assertEqual(ra.swap_parts(None, strips, ["clip"], Stand())["status"], "ok")
         self.assertEqual(ra.swap_parts(None, strips, ["clip.001"], Stand())["status"], "nothing")
 
-    def test_a_part_moved_alone_loses_its_partner(self):
+    def test_a_trimmed_part_is_still_found_and_nothing_is_left_behind(self):
         strips = _edit()
         _apply(strips, "split_half", ["clip"])
-        next(s for s in strips if s.name == "clip (bottom)").left_handle = 10       # no longer over the same frames
-        self.assertIsNone(ra.find_partner(strips, strips[0]))
-        out = _apply(strips, "split_top", ["clip"])                  # still rebuilds cleanly from the strip
+        twin = next(s for s in strips if s.name == "clip (bottom)")
+        twin.right_handle = 70                                  # the artist trimmed the bottom part by 6 frames
+        self.assertIs(ra.find_partner(strips, strips[0]), twin)
+        self.assertIs(ra.find_partner(strips, twin), strips[0])
+        out = _apply(strips, "full", ["clip"])
+        self.assertEqual(out["removed"], ["clip (bottom)"])
+        self.assertEqual(sorted(s.name for s in strips), ["Caption 1", "clip", "talk"])
+
+    def test_a_dragged_part_is_found_by_the_stored_name(self):
+        strips = _edit()
+        _apply(strips, "split_half", ["clip"])
+        twin = next(s for s in strips if s.name == "clip (bottom)")
+        twin.left_handle, twin.right_handle = 300, 375          # dragged far away: no frame in common
+        self.assertIs(ra.find_partner(strips, strips[0]), twin)
+        out = _apply(strips, "split_top", ["clip"])
+        self.assertEqual((out["status"], out["removed"]), ("ok", ["clip (bottom)"]))
+        new = next(s for s in strips if s.name == "clip (bottom)")
+        self.assertEqual((new.left_handle, new.right_handle), (1, 76))
+        self.assertEqual(sum(1 for s in strips if s.name.startswith("clip")), 2)
+
+    def test_a_pair_is_not_stolen_by_another_piece(self):
+        strips = _edit()
+        _apply(strips, "split_half", ["clip"])
+        _cut(strips, 40)
+        piece = next(s for s in strips if s.name == "clip (bottom).001")
+        strips.remove(piece)                                    # that piece's partner is gone for good
+        lone = next(s for s in strips if s.name == "clip.001")
+        self.assertIsNone(ra.find_partner(strips, lone), "clip (bottom) belongs to clip, exactly")
+        self.assertEqual(ra.find_partner(strips, next(s for s in strips if s.name == "clip")).name, "clip (bottom)")
+
+    def test_swap_puts_a_moved_partner_back_in_step_first(self):
+        strips = _edit()
+        _apply(strips, "split_half", ["clip"])
+        twin = next(s for s in strips if s.name == "clip (bottom)")
+        twin.right_handle = 70
+        out = ra.swap_parts(None, strips, ["clip"], Stand())
         self.assertEqual(out["status"], "ok")
-        self.assertEqual(sum(1 for s in strips if s.name.startswith("clip")), 3,
-                         "the moved part stays: it was no longer a part of the pair")
+        self.assertEqual((twin.left_handle, twin.right_handle), (1, 76))
+
+    def test_back_to_full_removes_every_other_part_over_the_clip_and_no_other_piece(self):
+        strips = _edit()
+        _apply(strips, "split_half", ["clip"])
+        _cut(strips, 40)
+        extra = Strip("stray", "MOVIE", 7, 5, 30)
+        extra.props["coworker_layout"] = {"layout": "split_half", "part": 1, "group": "clip", "partner": "clip"}
+        strips.append(extra)                                    # a leftover second part over the first piece
+        out = _apply(strips, "full", ["clip"])
+        self.assertIn("stray", out["removed"])
+        self.assertIn("clip (bottom)", out["removed"])
+        self.assertTrue(any(s.name == "clip (bottom).001" for s in strips), "the other piece's pair stays")
+        self.assertTrue(any(s.name == "clip.001" for s in strips))
+
+
+class TestChannels(unittest.TestCase):
+
+    def _check_below_text(self, strips):
+        twin = next(s for s in strips if s.name == "clip (bottom)")
+        for s in strips:
+            if s.type == "TEXT" and s.left_handle < twin.right_handle and twin.left_handle < s.right_handle:
+                self.assertLess(twin.channel, s.channel, s.name)
+
+    def test_a_caption_right_above_the_picture_stays_on_top(self):
+        strips = Seq([Strip("clip", channel=1), Strip("talk", "SOUND", 2), Strip("Caption 1", "TEXT", 3, 1, 40)])
+        _apply(strips, "split_half", ["clip"])
+        self._check_below_text(strips)
+        text = next(s for s in strips if s.name == "Caption 1")
+        self.assertEqual(text.channel, 4, "the captions moved up one, with everything above the picture")
+        self.assertEqual(next(s for s in strips if s.name == "talk").channel, 3)
+        self.assertEqual(next(s for s in strips if s.name == "clip (bottom)").channel, 2)
+
+    def test_a_word_motion_block_above_the_caption(self):
+        strips = Seq([Strip("clip", channel=1), Strip("talk", "SOUND", 2)])
+        strips += [Strip("Caption 1", "TEXT", 3, 1, 40), Strip("w1", "TEXT", 4, 1, 10), Strip("w2", "TEXT", 5, 10, 20),
+                   Strip("w3", "TEXT", 6, 20, 30)]
+        _apply(strips, "split_bottom", ["clip"])
+        self._check_below_text(strips)
+        self.assertEqual(sorted(s.channel for s in strips if s.type == "TEXT"), [4, 5, 6, 7], "the block kept its order")
+        self.assertEqual(next(s for s in strips if s.name == "clip (bottom)").channel, 2)
+
+    def test_a_free_channel_below_the_text_is_used_before_anything_moves(self):
+        strips = Seq([Strip("clip", channel=1), Strip("Caption 1", "TEXT", 4, 1, 40)])
+        backend = Stand()
+        _apply(strips, "split_half", ["clip"], backend)
+        self.assertEqual(next(s for s in strips if s.name == "clip (bottom)").channel, 2)
+        self.assertEqual(next(s for s in strips if s.name == "Caption 1").channel, 4)
+        self.assertNotIn("shift", [e[0] for e in backend.log])
+
+    def test_a_text_on_a_later_stretch_does_not_matter(self):
+        strips = Seq([Strip("clip", channel=1), Strip("Caption 9", "TEXT", 2, 200, 240)])
+        _apply(strips, "split_half", ["clip"])
+        self.assertEqual(next(s for s in strips if s.name == "clip (bottom)").channel, 2)
+
+    def test_the_picture_above_the_captions_gets_a_channel_below_them(self):
+        strips = Seq([Strip("Caption 1", "TEXT", 2, 1, 40), Strip("clip", channel=3), Strip("a", "SOUND", 1, 1, 76)])
+        _apply(strips, "split_half", ["clip"])
+        self._check_below_text(strips)
+
+    def test_no_room_at_all_changes_nothing(self):
+        strips = Seq([Strip("clip", channel=1), Strip("Caption 1", "TEXT", 2, 1, 40)] +
+                     [Strip("s{:d}".format(c), "MOVIE", c, 1, 76) for c in range(3, 129)])
+        before = _snap(strips)
+        out = _apply(strips, "split_half", ["clip"])
+        self.assertEqual(out["status"], "error")
+        self.assertIn("no room", out["message"])
+        self.assertEqual(_snap(strips), before)
+
+    def test_free_channel_never_returns_a_taken_one(self):
+        strips = Seq([Strip("clip", channel=1)] + [Strip("a{:d}".format(c), "MOVIE", c, 1, 76) for c in range(2, 129)])
+        with self.assertRaises(ra.LayoutError):
+            ra.free_channel(strips, strips[0])
+        strips = Seq([Strip("clip", channel=128)])
+        channel, shift = ra.plan_channel(strips, strips[0])
+        self.assertEqual((channel, shift), (127, False))
+
+    def test_a_locked_strip_in_the_way_refuses(self):
+        strips = Seq([Strip("clip", channel=1), Strip("Caption 1", "TEXT", 2, 1, 40)])
+        strips[1].lock = True
+        before = _snap(strips)
+        out = _apply(strips, "split_half", ["clip"])
+        self.assertEqual(out["status"], "error")
+        self.assertIn("locked", out["message"])
+        self.assertEqual(_snap(strips), before)
+
+
+class TestOtherEntries(unittest.TestCase):
+    """Make Vertical again and the old Reframe entries leave a split's parts alone."""
+
+    def test_split_parts_are_recognised(self):
+        strips = _edit()
+        self.assertFalse(ra.is_split_part(strips[0]))
+        _apply(strips, "split_half", ["clip"])
+        self.assertTrue(ra.is_split_part(strips[0]))
+        self.assertTrue(ra.is_split_part(next(s for s in strips if s.name == "clip (bottom)")))
+        _apply(strips, "full", ["clip"])
+        self.assertFalse(ra.is_split_part(strips[0]))
+
+    def test_every_modifier_entry_checks_for_a_split(self):
+        text = (_ADDON / "reframe.py").read_text(encoding="utf-8")
+        for name in ("def reframe_strip", "def apply_reframe"):
+            body = text[text.index(name):]
+            self.assertIn("_layouts.is_split_part(strip)", body[:900], name)
+        make = text[text.index("def make_vertical"):text.index("# -- Nudge / mode / reset")]
+        self.assertIn("left_alone", make)
+        self.assertIn("_layouts.is_split_part(s)", make)
+        operator = text[text.index("class BFACW_OT_reframe(Operator)"):text.index("class BFACW_OT_reframe_follow_subject")]
+        self.assertIn("is_split_part", operator)
+        self.assertIn("part of a split", operator)
+
+    def test_the_tag_cleared_before_the_modifier_is_made(self):
+        # reframe_strip refuses a tagged part, so a layout change clears the tag first.
+        strips = _edit()
+        _apply(strips, "split_half", ["clip"])
+        seen = []
+
+        class Checking(Stand):
+            def make_full(self, scene, strip, mode):
+                seen.append(ra.tag_of(strip))
+                super().make_full(scene, strip, mode)
+        _apply(strips, "full", ["clip"], Checking())
+        self.assertEqual(seen, [None])
+
+
+class TestReadAndCanvas(unittest.TestCase):
+
+    def test_layouts_of(self):
+        strips = _edit(count=2)
+        _apply(strips, "split_top", ["clip1"])
+        strips[1].mod = "BLUR_FILL"
+        out = ra.layouts_of(None, strips, ["clip1", "clip (bottom)", "clip2", "talk", "nope"], Stand())
+        self.assertEqual(out["clip1"], {"layout": "split_top", "part": 0, "partner": "clip1 (bottom)"})
+        self.assertEqual(out["clip2"], {"layout": "full_blur"})
+        self.assertNotIn("talk", out)
+        self.assertNotIn("nope", out)
+
+    def test_a_full_tag_without_its_modifier_is_not_already_full(self):
+        strips = _edit()
+        _apply(strips, "full", ["clip"])
+        strips[0].mod = None                                   # the artist removed the modifier
+        self.assertEqual(ra.current_layout(strips[0], Stand()), "")
+        out = _apply(strips, "full", ["clip"])
+        self.assertEqual((out["changed"], out["unchanged"]), (["clip"], []))
+        self.assertEqual(strips[0].mod, "CROP")
+
+    def test_tracked_reads_from_the_keys_not_the_tag(self):
+        strips = _edit()
+        _apply(strips, "full_tracked", ["clip"], Stand(tracking="no vision model"))
+        self.assertEqual(ra.current_layout(strips[0], Stand()), "full")
+        strips[0].keyed = True
+        self.assertEqual(ra.current_layout(strips[0], Stand()), "full_tracked")
+
+    def test_split_numbers_use_the_unscaled_resolution(self):
+        text = (_ADDON / "reframe_layouts.py").read_text(encoding="utf-8")
+        body = text[text.index("    def canvas_size"):text.index("    def split_problem")]
+        self.assertIn("resolution_x", body)
+        self.assertNotIn("resolution_percentage", body)
+        # and the numbers for 1080 x 1920 do not depend on the percentage at all
+        top, bottom = rl.plan("split_half", 1920, 1080, 1080, 1920).parts
+        self.assertEqual(top.offset, (0.0, 480.0))
+
+    def test_the_sidebar_box_leaves_the_toolshelf_icons_alone_on_bforartists(self):
+        # Preview icons drawn in the sidebar blanked the toolshelf's Video buttons (measured on Bforartists 5.2.3):
+        # with the toolshelf tabs on, the sidebar box takes the Blender icons and keeps its PNGs for the toolshelf.
+        text = (_ADDON / "reframe_layouts.py").read_text(encoding="utf-8")
+        body = text[text.index("def _draw_buttons"):text.index("class BFACW_PT_reframe_sidebar")]
+        self.assertIn('getattr(context.space_data, "show_toolshelf_tabs", False)', body)
+        self.assertIn("previews=previews", body)
+        self.assertEqual(body.count("previews=previews"), 2)
+
+    def test_rotation_and_origin_are_reset_with_the_rest(self):
+        strips = _edit()
+        strips[0].transform.rotation = 0.4
+        strips[0].transform.origin = (0.2, 0.9)
+        _apply(strips, "split_half", ["clip"])
+        for strip in strips[:1] + [s for s in strips if s.name == "clip (bottom)"]:
+            self.assertEqual(strip.transform.rotation, 0.0)
+            self.assertEqual(tuple(strip.transform.origin), (0.5, 0.5))
 
 
 class TestOtherWands(unittest.TestCase):

@@ -55,12 +55,41 @@ SWAP_TIP = ("Swap the top and bottom of a split: what the top part shows goes to
             "round.\nWorks without the agent started.")
 RESET_TIP = ("Put the selected strips back to their layout's default framing: a split part to the centre of the "
              "picture, a Full Frame strip centred with no keys.\nWorks without the agent started.")
-# Strip properties a duplicate takes over (the ones a part of a split should look the same in).
+# Strip properties a duplicate takes over (it is a faithful copy: only crop and transform are the layout's).
 _COPIED = ("blend_type", "blend_alpha", "color_multiply", "color_saturation", "mute", "use_flip_x", "use_flip_y",
-           "alpha_mode", "multiply_alpha", "use_deinterlace", "use_float", "color_tag")
+           "alpha_mode", "multiply_alpha", "use_deinterlace", "use_float", "color_tag", "use_reverse_frames",
+           "strobe", "stream_index", "use_proxy", "use_default_fade")
+# Strip modifiers whose settings hold a curve (they can't be copied exactly at data level) and the
+# compositor ones other than Reframe's own: a strip with one of these is refused, naming it.
+_NOT_COPIABLE = {"CURVES": "Curves", "HUE_CORRECT": "Hue Correct", "COMPOSITOR": "Compositor"}
 
 
-# -- the Blender backend ---------------------------------------------------------------------
+def _ours(mod: Any) -> bool:
+    """Reframe's own compositor modifier (the layout's, never copied)."""
+    return mod.type == 'COMPOSITOR' and reframe._is_ours(getattr(mod, "node_group", None))  # pylint: disable=protected-access
+
+
+def _copy_struct(source: Any, target: Any, depth: int = 0) -> None:
+    """Copy the plain settings of RNA struct *source* onto *target* (nested structs too, collections no)."""
+    for prop in source.bl_rna.properties:
+        name = prop.identifier
+        if name == "rna_type" or depth > 3:
+            continue
+        try:
+            if prop.type == 'COLLECTION':
+                continue
+            value = getattr(source, name)
+            if prop.type == 'POINTER':
+                if value is None or prop.is_readonly:
+                    if value is not None:
+                        _copy_struct(value, getattr(target, name), depth + 1)
+                    continue
+                setattr(target, name, value)
+            elif not prop.is_readonly:
+                setattr(target, name, value)
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            continue
+
 
 def _copy_props(source: Any, target: Any) -> None:
     for name in _COPIED:
@@ -72,10 +101,64 @@ def _copy_props(source: Any, target: Any) -> None:
         target.colorspace_settings.name = source.colorspace_settings.name
     except (AttributeError, TypeError, ValueError, RuntimeError):
         pass
+    try:                                  # proxy settings
+        if source.proxy is not None and target.proxy is not None:
+            _copy_struct(source.proxy, target.proxy)
+    except (AttributeError, TypeError, RuntimeError):
+        pass
+    for mod in source.modifiers:          # the artist's own (colour grades): the same stack, in order
+        if _ours(mod):
+            continue
+        try:
+            new = target.modifiers.new(mod.name, mod.type)
+            _copy_struct(mod, new)
+        except (AttributeError, TypeError, ValueError, RuntimeError):
+            continue
+
+
+def _timing(twin: Any, strip: Any) -> None:
+    """*twin* over exactly the frames of *strip*, the same part of the same media."""
+    twin.content_start = strip.content_start
+    left, right = int(strip.left_handle), int(strip.right_handle)
+    if int(twin.right_handle) < right:
+        twin.right_handle = right
+    twin.left_handle = left
+    twin.right_handle = right
+
+
+def _connect(strips: Any, strip: Any, twin: Any) -> bool:
+    """Connect the duplicate to the original the way Blender connects strips (``sequencer.connect``), so they
+    move together; needs a Sequencer area, so False (nothing changed) where there is none."""
+    wm = bpy.context.window_manager
+    for window in wm.windows:
+        for area in window.screen.areas:
+            if area.type != 'SEQUENCE_EDITOR':
+                continue
+            region = next((r for r in area.regions if r.type == 'WINDOW'), None)
+            if region is None:
+                return False
+            was = [(s.name, s.select) for s in strips]
+            try:
+                for s in strips:
+                    s.select = s.name in (strip.name, twin.name)
+                with bpy.context.temp_override(window=window, area=area, region=region):
+                    bpy.ops.sequencer.connect()
+                return True
+            except (RuntimeError, TypeError, AttributeError):
+                return False
+            finally:
+                found = {s.name: s for s in strips}
+                for name, selected in was:
+                    if name in found:
+                        found[name].select = selected
+    return False
 
 
 class BlenderBackend(ra.Backend):
     """``reframe_apply.Backend`` on the real Sequencer."""
+
+    def __init__(self, scene: Any = None) -> None:
+        self.scene = scene
 
     def source_size(self, strip: Any) -> tuple[int, int]:
         try:
@@ -84,42 +167,74 @@ class BlenderBackend(ra.Backend):
             raise ra.LayoutError(str(ex)) from None
 
     def canvas_size(self, scene: Any) -> tuple[int, int]:
-        return reframe.canvas_size(scene)
+        # Strip transform offsets are in whole-frame pixels whatever Resolution % says: a split's numbers use
+        # the unscaled size (at 50 % the render is half size, the layout the same).
+        return max(1, int(scene.render.resolution_x)), max(1, int(scene.render.resolution_y))
+
+    def split_problem(self, strip: Any) -> str:
+        for mod in strip.modifiers:
+            if mod.type in _NOT_COPIABLE and not _ours(mod):
+                return "has a {:s} modifier, which can't be copied exactly to the second part: remove it first".format(
+                    _NOT_COPIABLE[mod.type])
+        return ""
 
     def duplicate(self, strips: Any, strip: Any, name: str, channel: int) -> Any:
+        source = strip.name
         start = int(round(float(strip.content_start)))
         try:
             if strip.type == "MOVIE":
-                twin = strips.new_movie(name, bpy.path.abspath(strip.filepath), channel, start)
+                path = strip.filepath
+                twin = strips.new_movie(name, bpy.path.abspath(path), channel, start)
             elif strip.type == "IMAGE":
-                first = bpy.path.abspath(os.path.join(strip.directory, strip.elements[0].filename))
+                directory = strip.directory
+                first = bpy.path.abspath(os.path.join(directory, strip.elements[0].filename))
+                names = [e.filename for e in strip.elements]
                 twin = strips.new_image(name, first, channel, start)
-                for element in list(strip.elements)[1:]:
-                    twin.elements.append(element.filename)
+                for filename in names[1:]:
+                    twin.elements.append(filename)
             elif strip.type == "SCENE":
                 twin = strips.new_scene(name, strip.scene, channel, start)
-                twin.scene_input = strip.scene_input
-                twin.scene_camera = strip.scene_camera
             else:
                 raise ra.LayoutError("'{:s}' can't be split".format(strip.name))
         except (RuntimeError, TypeError, ValueError) as ex:
-            raise ra.LayoutError("Couldn't make the second part of '{:s}': {!s}".format(strip.name, ex)) from None
-        twin.content_start = strip.content_start
-        left, right = int(strip.left_handle), int(strip.right_handle)
-        if int(twin.right_handle) < right:
-            twin.right_handle = right
-        twin.left_handle = left
-        twin.right_handle = right
+            raise ra.LayoutError("Couldn't make the second part of '{:s}': {!s}".format(source, ex)) from None
+        twin_name = twin.name
+        strip = {s.name: s for s in strips}[source]          # looked up again after adding a strip
+        twin = {s.name: s for s in strips}[twin_name]
+        if strip.type == "MOVIE":
+            try:
+                twin.filepath = path                         # as the original has it: a relative path stays relative
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                pass
+        elif strip.type == "IMAGE":
+            try:
+                twin.directory = directory
+            except (AttributeError, TypeError, ValueError, RuntimeError):
+                pass
+        else:
+            twin.scene_input = strip.scene_input
+            twin.scene_camera = strip.scene_camera
+        _timing(twin, strip)
         _copy_props(strip, twin)
         twin.channel = channel
-        return twin
+        _connect(strips, strip, twin)
+        return {s.name: s for s in strips}[twin_name]
 
     def remove(self, strips: Any, doomed: list) -> None:
         from .wand.prefetch import remove_strips
         remove_strips(strips, doomed)
 
-    def __init__(self, scene: Any = None) -> None:
-        self.scene = scene
+    def shift_channels(self, strips: Any, first: int) -> None:
+        names = [s.name for s in sorted((s for s in strips if s.channel >= first), key=lambda s: -s.channel)]
+        for name in names:
+            found = {s.name: s for s in strips}[name]
+            try:
+                found.channel = found.channel + 1
+            except (RuntimeError, TypeError, ValueError) as ex:
+                raise ra.LayoutError("Couldn't make room above '{:s}': {!s}".format(name, ex)) from None
+
+    def align(self, strips: Any, top: Any, partner: Any) -> None:
+        _timing(partner, top)
 
     def modifier_state(self, strip: Any) -> dict | None:
         mod = reframe.find_modifier(strip)
@@ -193,7 +308,7 @@ def _report(op: Operator, out: dict[str, Any]) -> set[str]:
         op.report({'WARNING'}, out["message"])
     else:
         op.report({'ERROR'}, out["message"])
-    return {'CANCELLED'}
+    return {'FINISHED'} if out.get("partial") else {'CANCELLED'}     # part-way: keep the undo step
 
 
 def _poll(cls: Any, context: Any) -> bool:
@@ -272,9 +387,10 @@ class BFACW_OT_reframe_reset(Operator):
 
 # -- placement -------------------------------------------------------------------------------
 
-def _layout_button(layout: Any, item: rl.Layout, current: str, *, text: str = "") -> None:
-    """One layout's button: its icon (Coworker's PNG, else the Blender fallback), pressed when current."""
-    value = wand_icons.icon_id(item.icon) if item.icon else 0
+def _layout_button(layout: Any, item: rl.Layout, current: str, *, text: str = "", previews: bool = True) -> None:
+    """One layout's button: its icon (Coworker's PNG, else the Blender fallback), pressed when current.  *previews*
+    False: the Blender icon only (see :func:`_draw_buttons`)."""
+    value = wand_icons.icon_id(item.icon) if item.icon and previews else 0
     kwargs: dict[str, Any] = {"text": text, "depress": current == item.id}
     if value:
         op = layout.operator("bfacw.reframe_layout", icon_value=value, **kwargs)
@@ -290,16 +406,23 @@ def _action_buttons(layout: Any, *, text: bool) -> None:
 
 def _draw_buttons(layout: Any, context: Any, *, wide: bool) -> None:
     current = _active_layout(context)
+    # Bforartists with its toolshelf tabs on draws the Video wand icons (previews) in the toolshelf: previews
+    # drawn in the sidebar at the same time leave those blank (measured, #606).  So the sidebar box uses the
+    # Blender fallback icons there, and its own PNGs where the toolshelf has none (Blender, tabs off).
+    previews = not (wide and getattr(context.space_data, "show_toolshelf_tabs", False))
     items = {item.id: item for item in rl.LAYOUTS}
     if wide:
-        for group in (("full", "full_blur", "full_tracked"), ("split_half", "split_top", "split_bottom")):
-            grid = layout.grid_flow(row_major=True, columns=3, even_columns=True, even_rows=True, align=True)
-            grid.scale_y = 1.8
+        for title, group in (("One picture", ("full", "full_blur", "full_tracked")),
+                             ("Split in two", ("split_half", "split_top", "split_bottom"))):
+            layout.label(text=title)
+            grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, even_rows=True, align=True)
+            grid.scale_y = 1.5
             for layout_id in group:
-                _layout_button(grid, items[layout_id], current)
+                _layout_button(grid, items[layout_id], current, text=items[layout_id].short, previews=previews)
         row = layout.row(align=True)
+        row.scale_y = 1.5
         row.enabled = False
-        _layout_button(row, items["track_all"], current, text="Track All")
+        _layout_button(row, items["track_all"], current, text="Track All", previews=previews)
         row = layout.row(align=True)
         _action_buttons(row, text=True)
     else:
@@ -389,13 +512,11 @@ def layout_id(text: Any) -> str:
 
 def tool_reframe_strips(layout: Any = "", strips: Any = None, swap: bool = False) -> dict[str, Any]:
     """``reframe_strips`` (MCP): the operators' work without a UI, one undo step.  *layout* ``""`` with
-    *swap* only swaps; both builds the layout, then swaps."""
+    *swap* only swaps; both builds the layout, then swaps; neither answers each strip's current layout."""
     wanted = layout_id(layout) if str(layout or "").strip() else ""
     if str(layout or "").strip() and not wanted:
         return {"status": "error", "message": "Unknown layout '{!s}'. Use one of: {:s}.".format(
             layout, ", ".join(rl.buildable()))}
-    if not wanted and not swap:
-        return {"status": "error", "message": "Give a layout ({:s}) or swap=true.".format(", ".join(rl.buildable()))}
     scene = _wand._tool_scene()  # pylint: disable=protected-access
     if scene is None or scene.sequence_editor is None:
         return {"status": "error", "message": "The Sequencer's scene has no strips"}
@@ -404,7 +525,12 @@ def tool_reframe_strips(layout: Any = "", strips: Any = None, swap: bool = False
     names = [str(n) for n in strips or ()] or _selected_names(scene)
     if not names:
         return {"status": "nothing", "message": "No strips named and none selected: name the movie, image or scene "
-                                                 "strips to reframe (strips=[...])", "scene": scene.name}
+                                                 "strips (strips=[...])", "scene": scene.name}
+    if not wanted and not swap:            # read mode: what layout the strips are in
+        found = ra.layouts_of(scene, _level_strips(scene), names, BlenderBackend(scene))
+        text = ", ".join("{:s}: {:s}".format(n, row["layout"] or "none") for n, row in found.items())
+        return {"status": "ok", "message": text or "No movie, image or scene strip among them",
+                "layouts": found, "scene": scene.name}
     out: dict[str, Any] = {"status": "ok", "message": "", "changed": []}
     if wanted:
         out = build(scene, wanted, names)

@@ -2326,7 +2326,8 @@ EXPECTED_TOOLS = [
 "                crops, 50 / 50), ``split_top`` (two thirds on top, one third below),\n"
 "                ``split_bottom`` (one third on top, two thirds below). ``track_all`` (each part of\n"
 "                a split follows its own subject) needs subject finding and is not available yet.\n"
-"                Empty with ``swap=true``: only swap.\n"
+"                Empty with ``swap=true``: only swap. Empty without it: read, answer each strip's\n"
+"                current layout in ``layouts`` and change nothing.\n"
 "            strips: Strip names (a split's either part stands for both). Empty: the selected strips.\n"
 "            swap: Exchange which framing of the picture is shown top and bottom in the splits named\n"
 "                (after building ``layout`` when one is given).\n"
@@ -2334,7 +2335,8 @@ EXPECTED_TOOLS = [
 "        Returns:\n"
 "            ``status`` (ok / nothing / error), ``message``, ``layout``, ``changed`` (strips given\n"
 "            the layout), ``created`` / ``removed`` (strip names), ``unchanged`` (already in that\n"
-"            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``tracking`` and ``scene``.\n"
+"            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``tracking``, ``layouts`` (read mode: strip ->\n"
+"            {layout, part, partner}; layout is \"\" when it has none) and ``scene``.\n"
 "        ",
         "inputSchema": {
             "properties": {

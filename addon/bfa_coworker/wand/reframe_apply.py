@@ -37,6 +37,10 @@ __all__ = (
     "current_layout",
     "find_partner",
     "free_channel",
+    "is_split_part",
+    "layouts_of",
+    "partners_of",
+    "plan_channel",
     "reset_framing",
     "swap_parts",
     "tag_of",
@@ -71,6 +75,18 @@ class Backend:
         raise NotImplementedError
 
     def remove(self, strips: Any, doomed: list) -> None:
+        raise NotImplementedError
+
+    def shift_channels(self, strips: Any, first: int) -> None:
+        """Move every strip on channel *first* and above up by one channel (top one first), the whole level."""
+        raise NotImplementedError
+
+    def split_problem(self, strip: Any) -> str:
+        """Why *strip* can't be copied exactly to a second part ("" when it can)."""
+        return ""
+
+    def align(self, strips: Any, top: Any, partner: Any) -> None:
+        """Put *partner* over exactly the frames of *top* (content start and both handles)."""
         raise NotImplementedError
 
     def modifier_state(self, strip: Any) -> dict | None:
@@ -126,28 +142,72 @@ def _span(strip: Any) -> tuple[int, int]:
     return int(strip.left_handle), int(strip.right_handle)
 
 
-def find_partner(strips: Any, strip: Any) -> Any:
-    """The other part of *strip*'s split: the strip of the same group, the other part, over the same
-    frames (a cut gives each piece its own partner); ``None`` when there is none."""
+def _overlap(a: tuple[int, int], b: tuple[int, int]) -> int:
+    return min(a[1], b[1]) - max(a[0], b[0])
+
+
+def _is_split(layout_id: str) -> bool:
+    try:
+        return bool(rl.layout(layout_id).parts[1:])
+    except KeyError:
+        return False
+
+
+def is_split_part(strip: Any) -> bool:
+    """True when *strip* carries a split layout's tag (Make Vertical and the old Reframe entries leave it alone)."""
     tag = tag_of(strip)
-    if tag is None or not rl.layout(tag["layout"]).parts[1:]:
-        return None
+    return tag is not None and _is_split(tag["layout"])
+
+
+def partners_of(strips: Any, strip: Any) -> list:
+    """The other part(s) of *strip*'s split, best first: the strip of the same group and the other part over
+    exactly the same frames; else one overlapping it in time (the artist trimmed a part, or dragged the top part
+    and its sound but not the duplicate); else the one whose name the tag stores.  A strip that is exactly the
+    partner of another one is not taken."""
+    tag = tag_of(strip)
+    if tag is None or not _is_split(tag["layout"]):
+        return []
     span = _span(strip)
+    peers = []
     for other in strips:
         if other is strip or other.name == strip.name:
             continue
         other_tag = tag_of(other)
-        if other_tag is not None and other_tag["group"] == tag["group"] and other_tag["part"] != tag["part"] \
-                and other_tag["layout"] == tag["layout"] and _span(other) == span:
-            return other
-    return None
+        if other_tag is not None and other_tag["group"] == tag["group"] and other_tag["part"] != tag["part"]                 and _is_split(other_tag["layout"]):
+            peers.append((other, other_tag))
+
+    def exact_elsewhere(candidate: Any, candidate_tag: dict) -> bool:
+        return any(o is not strip and o.name != strip.name and o is not candidate
+                   and tag_of(o) is not None and tag_of(o)["group"] == tag["group"]
+                   and tag_of(o)["part"] != candidate_tag["part"] and _span(o) == _span(candidate)
+                   for o in strips)
+
+    ranked = []
+    for other, other_tag in peers:
+        over = _overlap(span, _span(other))
+        if _span(other) == span:
+            ranked.append((0, 0, other))
+        elif exact_elsewhere(other, other_tag):
+            continue
+        elif over > 0:
+            ranked.append((1, -over, other))
+        elif other.name == tag["partner"]:
+            ranked.append((2, 0, other))
+    ranked.sort(key=lambda row: (row[0], row[1]))
+    return [row[2] for row in ranked]
+
+
+def find_partner(strips: Any, strip: Any) -> Any:
+    """The other part of *strip*'s split (:func:`partners_of`'s first), or ``None``."""
+    found = partners_of(strips, strip)
+    return found[0] if found else None
 
 
 def current_layout(strip: Any, backend: Backend) -> str:
-    """The layout *strip* is in: its tag, else Make Vertical's modifier read as Full Frame or Blur Fill,
-    else ``""``."""
+    """The layout *strip* is in: a split's tag, else what its Reframe modifier shows (Full Frame, Blur Fill, or
+    Tracked once Offset X is keyed), else ``""`` (a tag whose modifier the artist removed counts for nothing)."""
     tag = tag_of(strip)
-    if tag is not None:
+    if tag is not None and _is_split(tag["layout"]):
         return tag["layout"]
     state = backend.modifier_state(strip)
     if state is None:
@@ -155,16 +215,41 @@ def current_layout(strip: Any, backend: Backend) -> str:
     return "full_blur" if state.get("blur") else ("full_tracked" if state.get("keyed") else "full")
 
 
-def free_channel(strips: Any, strip: Any) -> int:
-    """The lowest channel above *strip*'s with nothing over its frames."""
+def plan_channel(strips: Any, strip: Any, ignore: Any = ()) -> tuple[int, bool]:
+    """``(channel, shift)`` for the second part of *strip*'s split.  Opaque and above a caption it would hide
+    it, so it goes below every text strip that overlaps the clip in time: on a free channel over the clip's
+    frames above *strip*'s, else below it; with none, *shift* is True: every strip from that channel up moves up
+    by one first (:meth:`Backend.shift_channels`) and the part takes the freed one.  ``LayoutError`` when the
+    128 channels leave no room."""
     left, right = _span(strip)
-    taken = {other.channel for other in strips
-             if other is not strip and other.name != strip.name and _span(other)[0] < right and left < _span(other)[1]}
-    channel = int(strip.channel) + 1
-    while channel in taken and channel < MAX_CHANNEL:
-        channel += 1
-    if channel > MAX_CHANNEL:
-        raise LayoutError("There is no free channel above '{:s}' for the second part".format(strip.name))
+    others = [o for o in strips if o is not strip and o.name != strip.name and o.name not in ignore
+              and _span(o)[0] < right and left < _span(o)[1]]
+    texts = [o.channel for o in others if o.type == "TEXT"]
+    ceiling = min(texts) if texts else MAX_CHANNEL + 1
+    taken = {o.channel for o in others}
+    for channel in range(int(strip.channel) + 1, min(ceiling, MAX_CHANNEL + 1)):
+        if channel not in taken:
+            return channel, False
+    for channel in range(min(int(strip.channel), ceiling) - 1, 0, -1):
+        if channel not in taken:
+            return channel, False
+    insert = min(int(strip.channel) + 1, ceiling)
+    for o in strips:
+        if int(o.channel) >= insert and getattr(o, "lock", False) and o.name not in ignore:
+            raise LayoutError("'{:s}' is locked and in the way of the second part of '{:s}': unlock it first".format(
+                o.name, strip.name))
+    highest = max((int(o.channel) for o in strips if o.name not in ignore), default=0)
+    if highest + 1 > MAX_CHANNEL or insert > MAX_CHANNEL:
+        raise LayoutError("There is no room for the second part of '{:s}': all {:d} channels are in use".format(
+            strip.name, MAX_CHANNEL))
+    return insert, True
+
+
+def free_channel(strips: Any, strip: Any) -> int:
+    """The channel :func:`plan_channel` finds without moving anything (``LayoutError`` when it would have to)."""
+    channel, shift = plan_channel(strips, strip)
+    if shift:
+        raise LayoutError("No free channel for the second part of '{:s}'".format(strip.name))
     return channel
 
 
@@ -188,13 +273,24 @@ def _partner_name(base: str, used: set[str]) -> str:
 def _set_part(strip: Any, part: rl.Part) -> None:
     strip.transform.scale_x = strip.transform.scale_y = part.scale
     strip.transform.offset_x, strip.transform.offset_y = part.offset
+    _no_rotation(strip)
     strip.crop.min_x, strip.crop.max_x, strip.crop.min_y, strip.crop.max_y = part.crop
+
+
+def _no_rotation(strip: Any) -> None:
+    t = strip.transform
+    t.rotation = 0.0
+    try:
+        t.origin = (0.5, 0.5)
+    except (AttributeError, TypeError):
+        pass
 
 
 def _neutral(strip: Any) -> None:
     t = strip.transform
     t.offset_x = t.offset_y = 0.0
     t.scale_x = t.scale_y = 1.0
+    _no_rotation(strip)
     strip.crop.min_x = strip.crop.max_x = strip.crop.min_y = strip.crop.max_y = 0
 
 
@@ -240,15 +336,16 @@ def _groups(strips: Any, names: list[str], skipped: list[dict]) -> list[tuple[st
 
 # -- build -----------------------------------------------------------------------------------
 
-def _clean(scene: Any, strips: Any, base_name: str, partner_name: str, backend: Backend, removed: list[str]) -> None:
-    """Take everything the earlier layout made off the group (the partner, the modifier and its keys,
-    crop, transform, tag), leaving the base strip as it was before any layout."""
-    if partner_name:
-        partner = _by_name(strips).get(partner_name)
-        if partner is not None:
-            backend.remove(strips, [partner])
-            removed.append(partner_name)
-    base = _by_name(strips)[base_name]               # looked up again: the removal above freed a strip
+def _clean(scene: Any, strips: Any, base_name: str, backend: Backend, removed: list[str]) -> None:
+    """Take everything the earlier layout made off the group (every other part over the strip's frames, the
+    modifier and its keys, crop, transform, tag), leaving the base strip as it was before any layout."""
+    base = _by_name(strips)[base_name]
+    doomed = partners_of(strips, base)
+    if doomed:
+        names = [d.name for d in doomed]
+        backend.remove(strips, doomed)
+        removed.extend(names)
+    base = _by_name(strips)[base_name]               # looked up again: the removal above freed strips
     backend.clear_modifier(scene, base)
     _neutral(base)
     _clear_tag(base)
@@ -263,9 +360,13 @@ def _build(scene: Any, strips: Any, base_name: str, layout_id: str, backend: Bac
     parts = rl.plan(layout_id, sw, sh, fw, fh).parts
     if item.modifier:
         backend.make_full(scene, base, item.modifier)
-        _write_tag(base, "full" if item.tracked else layout_id, 0, base_name, "")
+        # The tag never says Tracked: that is read from the keys, once they exist.
+        _write_tag(base, "full_blur" if item.modifier == "BLUR_FILL" else "full", 0, base_name, "")
         return item.tracked
-    channel = free_channel(strips, base)
+    channel, shift = plan_channel(strips, base)
+    if shift:
+        backend.shift_channels(strips, channel)
+        base = _by_name(strips)[base_name]
     twin_name = _partner_name(base_name, {s.name for s in strips})
     twin = backend.duplicate(strips, base, twin_name, channel)    # adds a strip: `base` is looked up again below
     twin_name = twin.name
@@ -318,16 +419,41 @@ def apply_layout(scene: Any, strips: Any, layout_id: str, names: list[str], back
     created: list[str] = []
     removed: list[str] = []
     track: list[str] = []
+    todo = []
     for base_name, partner_name in groups:
         base = _by_name(strips)[base_name]
         now = current_layout(base, backend)
         intact = bool(partner_name) or not item.parts[1:]
         if now == layout_id and intact and not item.tracked:     # already so; Tracked runs again
             unchanged.append(base_name)
-            continue
-        _clean(scene, strips, base_name, partner_name, backend, removed)
-        if _build(scene, strips, base_name, layout_id, backend, created):
-            track.append(base_name)
+        else:
+            todo.append(base_name)
+    if item.parts[1:]:                  # a second part that can be copied exactly, and room for it: before any change
+        for base_name in list(todo):
+            why = backend.split_problem(_by_name(strips)[base_name])
+            if why:
+                skipped.append({"strip": base_name, "reason": why})
+                todo.remove(base_name)
+        if not todo and not unchanged:
+            return {"status": "nothing", "changed": [], "created": [], "removed": [], "skipped": skipped,
+                    "unchanged": [], "message": "Nothing to reframe: " + "; ".join(
+                        "'{:s}' {:s}".format(x["strip"], x["reason"]) for x in skipped[:3])}
+        try:
+            for base_name in todo:
+                base = _by_name(strips)[base_name]
+                plan_channel(strips, base, ignore={p.name for p in partners_of(strips, base)})
+        except LayoutError as ex:
+            return {"status": "error", "changed": [], "created": [], "removed": [], "skipped": skipped,
+                    "unchanged": unchanged, "message": "Nothing changed: {!s}".format(ex)}
+    for base_name in todo:
+        try:
+            _clean(scene, strips, base_name, backend, removed)
+            if _build(scene, strips, base_name, layout_id, backend, created):
+                track.append(base_name)
+        except LayoutError as ex:
+            return {"status": "error", "changed": done, "created": created, "removed": removed, "skipped": skipped,
+                    "unchanged": unchanged, "partial": True,
+                    "message": "{!s}. Stopped part-way: Ctrl+Z puts everything back".format(ex)}
         done.append(base_name)
         if on_step is not None:
             on_step()
@@ -335,9 +461,6 @@ def apply_layout(scene: Any, strips: Any, layout_id: str, names: list[str], back
     if track:
         try:
             status = backend.start_tracking(scene, [_by_name(strips)[n] for n in track])
-            for n in track:
-                strip = _by_name(strips)[n]
-                _write_tag(strip, "full_tracked", 0, n, "")
             note = status
         except LayoutError as ex:
             note = "Tracking did not start ({!s}): the strips stay Full Frame".format(ex)
@@ -388,6 +511,8 @@ def swap_parts(scene: Any, strips: Any, names: list[str], backend: Backend) -> d
     for base_name, partner_name in pairs:
         found = _by_name(strips)
         top, bottom = found[base_name], found[partner_name]
+        if _span(top) != _span(bottom):                         # the artist moved or trimmed one: back in step
+            backend.align(strips, top, bottom)
         layout_id = tag_of(top)["layout"]                       # type: ignore[index]
         sw, sh = backend.source_size(top)
         f_top = _framing(top, layout_id, 0, sw, sh, fw, fh)
@@ -423,8 +548,6 @@ def reset_framing(scene: Any, strips: Any, names: list[str], backend: Backend) -
             done.append(name)
         elif backend.modifier_state(strip) is not None:
             backend.reset_full(scene, strip)
-            if tag is not None and tag["layout"] == "full_tracked":
-                _write_tag(strip, "full", 0, name, "")
             done.append(name)
         else:
             skipped.append({"strip": name, "reason": "has no layout yet"})
@@ -433,3 +556,21 @@ def reset_framing(scene: Any, strips: Any, names: list[str], backend: Backend) -
                 "message": "Nothing to reset: select strips that have a layout"}
     return {"status": "ok", "changed": done, "skipped": skipped,
             "message": "Reset the framing of {:d} strip{:s}".format(len(done), "" if len(done) == 1 else "s")}
+
+
+def layouts_of(scene: Any, strips: Any, names: list[str], backend: Backend) -> dict[str, Any]:
+    """What the agent reads: for each picture strip named, its layout (``""``: none) and, in a split, which part
+    it is and its partner."""
+    found = _by_name(strips)
+    out: dict[str, Any] = {}
+    for name in names:
+        strip = found.get(name)
+        if strip is None or strip.type not in PICTURE_TYPES:
+            continue
+        row: dict[str, Any] = {"layout": current_layout(strip, backend)}
+        tag = tag_of(strip)
+        if tag is not None and _is_split(tag["layout"]):
+            partner = find_partner(strips, strip)
+            row.update(part=tag["part"], partner=partner.name if partner is not None else "")
+        out[name] = row
+    return out

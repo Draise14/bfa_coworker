@@ -5,16 +5,17 @@
 """
 Draw Reframe's layout icons (#606) as PNGs, with no dependencies beyond the standard library.
 
-Each icon is a tall 9:16 frame (the outline and yellow border of Bforartists' strip colours, as in
-Coworker's ``vertical`` icon) holding one small picture -- sky, sun, hills, in the colours of
-Bforartists' ``image`` icon -- laid out the way the layout fills the frame:
+Each icon is a simple diagram of a 9:16 frame: a dark outline and a white keyline round the inside, the
+larger part in strong blue, the smaller part pale, a white seam between them where the split is:
 
-* ``reframe_full``: the picture fills the frame;
-* ``reframe_full_blur``: the whole wide picture in the middle, a blurred, dimmed copy behind it;
-* ``reframe_full_tracked``: the picture and a target on the sun, the subject being followed;
-* ``reframe_split_half`` / ``_top`` / ``_bottom``: two parts of the same picture, one above the other
-  (1/2 + 1/2, 2/3 + 1/3, 1/3 + 2/3), the top one showing the sky and sun, the bottom one the hills;
+* ``reframe_full``: the whole frame in blue;
+* ``reframe_full_blur``: the picture in the middle, a soft border fading out above and below it;
+* ``reframe_full_tracked``: the whole frame and a target, the subject being followed;
+* ``reframe_split_half`` / ``_top`` / ``_bottom``: two parts, 1/2 + 1/2, 2/3 + 1/3, 1/3 + 2/3, the larger
+  one in strong blue;
 * ``reframe_track_all``: the half split with a target in each part.
+
+Made to read at 16 and 32 px: thick lines, two colours, no detail.
 
 Full colour, one palette for both themes: the ``dark`` and ``light`` files are the same picture
 (the scheme of ``icons/wand/``, which ``wand/icons.py`` loads).  All shapes here are drawn by us from
@@ -47,9 +48,13 @@ SUN, SUN_RIM = (0xfd, 0xfe, 0x00), (0xfe, 0xc1, 0x00)
 HILL, HILL_DARK = (0x3c, 0x98, 0x3c), (0x1e, 0x4c, 0x1e)
 WHITE, BLACK = (0xfe, 0xfe, 0xfe), (0, 0, 0)
 SEAM = (0x32, 0x00, 0x00)
+DARK = (0x1c, 0x1c, 0x1c)
+BIG = (0x32, 0x65, 0xfe)       # the part that fills most of the frame
+SMALL = (0x98, 0xcb, 0xfe)     # the smaller part (lighter, so the shares read)
+FADE = (0xcb, 0xe4, 0xfe)
 
 # The frame: 9:16, centred, in the 64 px design.
-FX0, FX1, FY0, FY1 = 15, 49, 2, 62
+FX0, FX1, FY0, FY1 = 14, 50, 2, 62
 INNER = (FX0 + 4, FY0 + 4, FX1 - 4, FY1 - 4)       # x0, y0, x1, y1 (y down)
 
 
@@ -170,80 +175,61 @@ def write_png(path: str, size: int, rgba: bytes) -> None:
                  + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
 
 
-def picture(c: Canvas, rect: tuple, v0: float = 0.0, v1: float = 1.0) -> None:
-    """The little picture (virtual 0..1 on both axes, y down) shown in *rect*: the slice *v0*..*v1* of its height."""
-    x0, y0, x1, y1 = rect
-    w, h = x1 - x0, y1 - y0
-
-    def X(u: float) -> float:
-        return x0 + u * w
-
-    def Y(v: float) -> float:
-        return y0 + (v - v0) / (v1 - v0) * h
-
-    c.rect(x0, y0, x1, y1, SKY)
-    sun = (X(0.70), Y(0.26))
-    r = 0.15 * w * 1.3 / 1.0
-    c.disc(sun[0], sun[1], r, SUN_RIM, rect)
-    c.disc(sun[0], sun[1], r * 0.72, SUN, rect)
-    ground = Y(0.80)
-    c.poly([(X(0), Y(0.70)), (X(0.30), Y(0.42)), (X(0.52), Y(0.70)), (X(0.74), Y(0.50)), (X(1.0), Y(0.76)),
-            (X(1.0), Y(1.0)), (X(0), Y(1.0))], HILL_DARK, rect)
-    c.poly([(X(0.30), Y(0.42)), (X(0.52), Y(0.70)), (X(0.62), Y(0.70)), (X(0.38), Y(0.53))], HILL_DARK, rect)
-    c.rect(x0, ground, x1, y1 + 1, HILL, rect)
-    c.poly([(X(0), Y(0.70)), (X(0.22), Y(0.52)), (X(0.42), Y(0.80)), (X(0), Y(0.80))], HILL, rect)
-
-
-def target(c: Canvas, cx: float, cy: float, r: float = 5.0) -> None:
-    c.disc(cx, cy, r + 1.0, BLACK, inner=r - 2.2)
-    c.disc(cx, cy, r, WHITE, inner=r - 1.4)
+def target(c: Canvas, cx: float, cy: float, r: float = 7.0) -> None:
+    """A small target: a white ring with a dark edge on both sides, and a cross."""
+    c.disc(cx, cy, r + 1.6, DARK, inner=r - 3.2)
+    c.disc(cx, cy, r, WHITE, inner=r - 1.8)
     for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-        c.rect(min(cx + dx * (r - 3), cx + dx * (r + 3)) - (0.8 if dx == 0 else 0),
-               min(cy + dy * (r - 3), cy + dy * (r + 3)) - (0.8 if dy == 0 else 0),
-               max(cx + dx * (r - 3), cx + dx * (r + 3)) + (0.8 if dx == 0 else 0),
-               max(cy + dy * (r - 3), cy + dy * (r + 3)) + (0.8 if dy == 0 else 0), WHITE)
-    c.disc(cx, cy, 1.2, WHITE)
+        x0, x1 = sorted((cx + dx * (r - 4.5), cx + dx * (r + 3.0)))
+        y0, y1 = sorted((cy + dy * (r - 4.5), cy + dy * (r + 3.0)))
+        c.rect(x0 - (1.0 if dy else 0), y0 - (1.0 if dx else 0), x1 + (1.0 if dy else 0), y1 + (1.0 if dx else 0), DARK)
+        c.rect(x0 - (0.5 if dy else 0), y0 - (0.5 if dx else 0), x1 + (0.5 if dy else 0), y1 + (0.5 if dx else 0), WHITE)
+    c.disc(cx, cy, 2.0, WHITE)
 
 
-def frame(c: Canvas) -> None:
-    c.rect(FX0, FY0, FX1, FY1, OUTLINE)
-    c.rect(FX0 + 1.5, FY0 + 1.5, FX1 - 1.5, FY1 - 1.5, BORDER)
-    c.rect(FX0 + 1.5, FY1 - 3.0, FX1 - 1.5, FY1 - 1.5, BORDER_SHADE)
-    c.rect(INNER[0] - 1, INNER[1] - 1, INNER[2] + 1, INNER[3] + 1, OUTLINE)
+def frame(c: Canvas) -> tuple:
+    """The 9:16 frame: a dark outline, a white keyline, the inside; returns the inside's rectangle."""
+    c.rect(FX0, FY0, FX1, FY1, DARK)
+    c.rect(FX0 + 2.5, FY0 + 2.5, FX1 - 2.5, FY1 - 2.5, WHITE)
+    return (FX0 + 4.5, FY0 + 4.5, FX1 - 4.5, FY1 - 4.5)
+
+
+def seam(c: Canvas, x0: float, x1: float, y: float) -> None:
+    c.rect(x0, y - 2.6, x1, y + 2.6, DARK)
+    c.rect(x0, y - 1.2, x1, y + 1.2, WHITE)
 
 
 def draw(name: str) -> Canvas:
     c = Canvas(BASE)
-    frame(c)
-    x0, y0, x1, y1 = INNER
-    full = (x0, y0, x1, y1)
+    x0, y0, x1, y1 = frame(c)
     height = y1 - y0
     if name in ("reframe_full", "reframe_full_tracked"):
-        picture(c, full, 0.0, 1.0)
+        c.rect(x0, y0, x1, y1, BIG)
         if name.endswith("tracked"):
-            target(c, x0 + 0.70 * (x1 - x0), y0 + 0.26 * height, 5.5)
+            target(c, (x0 + x1) / 2 + 2, y0 + height * 0.36, 8.5)
     elif name == "reframe_full_blur":
-        picture(c, full, 0.0, 1.0)
-        c.blur(full, 3)
-        c.dim(full, 0.62)
-        mw = x1 - x0
-        mh = mw * 9 / 16
-        my0 = y0 + (height - mh) / 2
-        c.rect(x0, my0 - 1, x1, my0 + mh + 1, WHITE)
-        picture(c, (x0, my0, x1, my0 + mh), 0.0, 1.0)
+        # a soft border: the colour fades out above and below the whole picture in the middle
+        mid0, mid1 = y0 + height * 0.34, y0 + height * 0.66
+        for row in range(int(y0 * SS), int(y1 * SS)):
+            y = row / SS
+            d = max(0.0, mid0 - y, y - mid1) / (mid0 - y0)
+            k = min(1.0, d) ** 0.8
+            colour = tuple(int(BIG[i] + (FADE[i] - BIG[i]) * k) for i in range(3))
+            c.rect(x0, y, x1, y + 1.0 / SS, colour)
+        c.rect(x0, mid0, x1, mid1, BIG)
+        c.rect(x0, mid0 - 1.0, x1, mid0, DARK)
+        c.rect(x0, mid1, x1, mid1 + 1.0, DARK)
     else:
         share = {"reframe_split_half": 0.5, "reframe_split_top": 2 / 3, "reframe_split_bottom": 1 / 3,
                  "reframe_track_all": 0.5}[name]
-        seam = y0 + height * share
-        # Two parts of the one picture, drawn so the shares read at 16 px: the top part shows the sky and
-        # sun, the bottom part the hills, a dark seam between them.
-        picture(c, (x0, y0, x1, seam), 0.0, 0.5)
-        picture(c, (x0, seam, x1, y1), 0.5, 1.0)
-        c.rect(x0, seam - 1.6, x1, seam + 1.6, SEAM)
-        c.rect(x0, seam - 0.5, x1, seam + 0.5, WHITE)
+        edge = y0 + height * share
+        top_big = share >= 0.5
+        c.rect(x0, y0, x1, edge, BIG if top_big else SMALL)
+        c.rect(x0, edge, x1, y1, SMALL if top_big else BIG)
+        seam(c, x0, x1, edge)
         if name == "reframe_track_all":
-            target(c, x0 + 0.70 * (x1 - x0), y0 + (seam - y0) * 0.5, 4.6)
-            target(c, x0 + 0.40 * (x1 - x0), seam + (y1 - seam) * 0.5, 4.6)
+            target(c, (x0 + x1) / 2 + 3, y0 + (edge - y0) * 0.5, 6.0)
+            target(c, (x0 + x1) / 2 - 3, edge + (y1 - edge) * 0.5, 6.0)
     return c
 
 

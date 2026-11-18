@@ -78,6 +78,7 @@ class Layout:
     icon: str = ""
     fallback: str = "NONE"
     ready: bool = True
+    short: str = ""                            # the button's own text
 
 
 _WORKS = "Works without the agent started."
@@ -92,8 +93,8 @@ LAYOUTS: tuple[Layout, ...] = (
            ((1, 1),), "BLUR_FILL", False, "reframe_full_blur", "IMAGE_BACKGROUND"),
     Layout("full_tracked", "Full Frame, Tracked",
            "One picture filling the frame that follows the subject: it samples a few frames and keys the pan "
-           "from where a vision model sees the subject.\nThe layout works without the agent started; "
-           "the tracking needs a connected vision-capable model.",
+           "from where a vision model sees the subject.\nWorks without the agent started, except the tracking, "
+           "which needs a connected vision-capable model.",
            ((1, 1),), "CROP", True, "reframe_full_tracked", "TRACKER"),
     Layout("split_half", "Split, Half and Half",
            "Two crops of the same footage, one above the other, 50 / 50. Each is an ordinary strip you can move "
@@ -108,10 +109,12 @@ LAYOUTS: tuple[Layout, ...] = (
            "move in the preview.\n" + _WORKS,
            ((1, 3), (2, 3)), "", False, "reframe_split_bottom", "ALIGN_BOTTOM"),
     Layout("track_all", "Track All",
-           "In a split, every part follows its own subject: needs subject finding (coming). Until then the parts "
-           "keep a fixed crop you can move.",
+           "In a split, every part follows its own subject. Until then the parts keep a fixed crop you can "
+           "move.\nNeeds subject finding (coming).",
            ((1, 2), (1, 2)), "", True, "reframe_track_all", "TRACKING", False),
 )
+_SHORT = {'full': 'Full Frame', 'full_blur': 'Blur Fill', 'full_tracked': 'Tracked', 'split_half': 'Half and Half', 'split_top': 'Top Bias', 'split_bottom': 'Bottom Bias', 'track_all': 'Track All'}
+LAYOUTS = tuple(Layout(**{**item.__dict__, "short": _SHORT[item.id]}) for item in LAYOUTS)
 _BY_ID = {item.id: item for item in LAYOUTS}
 
 

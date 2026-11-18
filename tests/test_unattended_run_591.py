@@ -236,7 +236,10 @@ class TestBridgeChecksTwice(unittest.TestCase):
     def test_the_check_is_in_the_handler_and_in_execute(self):
         text = (_ADDON / "mcp_to_blender_server.py").read_text(encoding="utf-8")
         start = text.index("def _execute(c: str, s: bool)")
-        self.assertIn("_busy_refusal(", text[start:start + 400], "repeated when the delayed run starts")
+        # #576: the late check is the unified gate (render and bake refused at once, a drag or modal waited for)
+        self.assertIn("_busy_gate(", text[start:start + 500], "repeated when the delayed run starts")
+        gate = text[text.index("def _busy_gate("):text.index("def _claim_gate(")]
+        self.assertIn("scene_busy.status(", gate)
         self.assertIn("_early = _busy_refusal(", text)
         self.assertLess(text.index("_early = _busy_refusal("), text.index("# Runtime 1 (#310): the same call again"),
                         "before any card or claim wait")

@@ -365,7 +365,7 @@ class TestChat(unittest.TestCase):
             _attach_to_socket=lambda context, op, img, thread=None: test.attached.append((img, thread, op)))
         pkg = types.ModuleType("bfacw_paste_pkg")
         pkg.__path__ = []
-        pkg.ui_chat, pkg.chat_attachments = ui, types.SimpleNamespace(clipboard_image=clipboard_image)
+        pkg.ui_chat, pkg.chat_attachments = ui, types.SimpleNamespace(clipboard_image=clipboard_image, take_refusal=lambda: "")
         self.saved = sys.modules.get("bfacw_paste_pkg")
         sys.modules["bfacw_paste_pkg"] = pkg
         props = types.SimpleNamespace(StringProperty=lambda **_kw: "", EnumProperty=lambda **_kw: "")

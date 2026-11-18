@@ -273,6 +273,8 @@ def own_change() -> None:
     edit of yours (#359)."""
     import time
     _own_until[0] = time.monotonic() + _OWN_WINDOW
+    from . import ui_activity
+    ui_activity.own(_OWN_WINDOW)          # #576: no drag either
 
 
 def _count_edit(*_args: Any) -> None:
@@ -333,7 +335,7 @@ def _push(name: str) -> bool:
         try:
             import bpy  # pylint: disable=import-error
             if not bpy.app.timers.is_registered(_push_when_idle):
-                bpy.app.timers.register(_push_when_idle, first_interval=1.0, persistent=True)
+                bpy.app.timers.register(_push_when_idle, first_interval=0.25, persistent=True)
         except (ImportError, AttributeError, ValueError):
             pass
         return False
@@ -526,7 +528,8 @@ _save_lifted: list[Any] = [None]
 
 def _on_save_pre(*_args: Any) -> None:
     import bpy  # pylint: disable=import-error
-    from . import co_work_guard
+    from . import co_work_guard, ui_activity
+    ui_activity.own(1.0)
     _save_lifted[0] = co_work_guard.lift(bpy.data)
 
 
@@ -535,19 +538,33 @@ def _on_save_post(*_args: Any) -> None:
     from . import co_work_guard
     held, _save_lifted[0] = _save_lifted[0], None
     co_work_guard.relock(bpy.data, held)
+    from . import ui_activity
+    ui_activity.own(1.0)
 
 
 def _handlers() -> list[tuple[Any, Any]]:
     import bpy  # pylint: disable=import-error
     h = bpy.app.handlers
-    return [(h.depsgraph_update_post, _count_edit), (h.render_stats, _on_render_stats),
+    from . import ui_activity
+    return [(h.depsgraph_update_post, _count_edit), (h.depsgraph_update_post, ui_activity.note_update),
+            (h.render_stats, _on_render_stats),
             (h.render_cancel, _on_render_cancel), (h.object_bake_cancel, _on_bake_cancel),
             (h.load_pre, _on_load_pre), (h.save_pre, _on_save_pre), (h.save_post, _on_save_post),
             (h.save_post_fail, _on_save_post)]
 
 
+def _sample_modals() -> float:
+    """Timer (#576): note when each modal operator was first seen, so a long-lived one is no drag."""
+    import bpy  # pylint: disable=import-error
+    from . import ui_activity
+    ui_activity.sample(bpy.context.window_manager)
+    return 0.25
+
+
 def register() -> None:
     import bpy  # pylint: disable=import-error
+    if not bpy.app.timers.is_registered(_sample_modals):
+        bpy.app.timers.register(_sample_modals, first_interval=0.25, persistent=True)
     for handlers, fn in _handlers():
         if fn is not _count_edit:
             bpy.app.handlers.persistent(fn)     # jobs outlive a file load
@@ -556,6 +573,9 @@ def register() -> None:
 
 
 def unregister() -> None:
+    import bpy  # pylint: disable=import-error
+    if bpy.app.timers.is_registered(_sample_modals):
+        bpy.app.timers.unregister(_sample_modals)
     from . import long_jobs
     for handlers, fn in _handlers():
         if fn in handlers:

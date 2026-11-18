@@ -1311,15 +1311,13 @@ def _execute_code(
 
 
 def _busy_refusal(tool: str, code: str, internal: bool) -> "_ExecResult | None":
-    """#591: the answer for a step that must not run while a render or bake job runs, else None."""
-    try:
-        from . import long_jobs
-        message = long_jobs.scene_busy_message(tool, code, internal=internal)
-    except Exception:  # pylint: disable=broad-exception-caught
+    """#591: the answer for a step that must not run while a render or bake job runs, else None.
+    (A drag or modal tool is waited for instead: :func:`_busy_gate`.)"""
+    from . import scene_busy
+    kind, message = scene_busy.status(tool, code, internal)
+    if kind not in ("render", "bake"):
         return None
-    if not message:
-        return None
-    print("[Coworker] bridge: refused {:s} -- a render or bake is running (#591)".format(tool or "a step"))
+    print("[Coworker] bridge: refused {:s} -- a {:s} is running (#591)".format(tool or "a step", kind))
     return _ExecResult({"status": "error", "message": message})
 
 
@@ -1434,10 +1432,24 @@ def _execute_code_from_request(
         return run
 
     def _execute(c: str, s: bool) -> _ExecResult:
-        _late = _busy_refusal(_tool, str(c), _internal)     # #591: a render may have started meanwhile
-        if _late is not None:
-            return _late
-        result = _for_thread(_execute_code)(c, strict_json=s, **_data_kw)
+        # #576 / #591: every path to running code ends here (after an approval card or a claim wait
+        # too), so the render / bake / drag / modal check sits here, once.
+        return _busy_gate(_thread, _tool, c, _internal, lambda: _run_code_step(c, s))
+
+    def _run_code_step(c: str, s: bool) -> _ExecResult:
+        # The agent's code is on disk (redacted) before it runs, so a crash leaves it to read.
+        from . import scene_busy, step_code_log, ui_activity
+        from .risky_steps import is_toolcode
+        _logged = None
+        if not _internal and (not is_toolcode(c) or scene_busy.changes_scene(_tool, c)):
+            _logged = step_code_log.begin(_tool, c, _thread)
+        try:
+            with ui_activity.stepping():
+                result = _for_thread(_execute_code)(c, strict_json=s, **_data_kw)
+        except BaseException:
+            step_code_log.end(_logged, "raised")
+            raise
+        step_code_log.end(_logged, "error" if result.response.get("status") == "error" else "finished")
         return result if result.check_fn is None else _ExecResult(result.response, _for_thread(result.check_fn))
 
     def _run() -> _ExecResult:
@@ -1517,6 +1529,53 @@ def _execute_code_from_request(
             print("response: {:s}".format(json.dumps(exec_result.response, indent=2)), file=sys.stderr)
 
     return exec_result, strict_json
+
+
+def _busy_gate(thread: str, tool: str, code: str, internal: bool, run: Callable[[], _ExecResult]) -> _ExecResult:
+    """A scene-changing step does not run while a render or bake job, a modal tool or a value drag
+    is going (#576, #591).  One test (:func:`scene_busy.status`), one place.
+
+    A render or bake: refused at once, with the job's wording.  A modal tool or a drag: the step
+    waits (deferred, polled each tick) until :mod:`ui_activity` says the mouse work is over, at
+    most :data:`ui_activity.WAIT_LIMIT` seconds, then answers "Not run: ... Nothing was changed"
+    (the step's own answer, so the Workshop shows it).  Every refusal starts with "Not run:", so
+    the loop's ``_step_refused`` counts it as no failure and runs no undo.  Reads and plans run at
+    once; Coworker's own code is held only for the risky markers :mod:`long_jobs` lists."""
+    from . import scene_busy, ui_activity
+    try:
+        import bpy  # pylint: disable=import-error
+        wm = bpy.context.window_manager
+    except Exception:  # pylint: disable=broad-exception-caught
+        wm = None
+    kind, text = scene_busy.status(tool, code, internal, wm)
+    if not kind:
+        return run()
+    if kind not in scene_busy.WAITABLE:
+        print("[Coworker] bridge: refused {:s} -- a {:s} is running (#591)".format(tool or "a step", kind))
+        return _ExecResult({"status": "error", "message": text})
+    print("[Coworker] bridge: {:s}'s {:s} waits, {:s}".format(thread or "main", tool, text))
+    state: dict[str, Any] = {"since": time.monotonic(), "inner": None}
+
+    def check() -> dict[str, object] | None:
+        if state["inner"] is not None:          # it ran, and its own answer is deferred
+            return state["inner"]()
+        if _stop_pressed(thread):
+            return {"status": "error", "message": "Stopped by the user while the step waited for Blender's "
+                                                  "tool or mouse work to end. Nothing was changed."}
+        now_kind, now_text = scene_busy.status(tool, code, internal, wm)
+        if now_kind in ("render", "bake"):      # a job started meanwhile
+            return {"status": "error", "message": now_text}
+        if now_kind:
+            waited = time.monotonic() - state["since"]
+            if waited > ui_activity.WAIT_LIMIT:
+                return {"status": "error", "message": ui_activity.refusal(now_text, waited, now_kind)}
+            return None
+        result = run()
+        if result.check_fn is not None:
+            state["inner"] = result.check_fn
+            return None
+        return result.response
+    return _ExecResult({}, check)
 
 
 def _claim_gate(thread: str, tool: str, args: Any, code: str, run: Callable[[], _ExecResult]) -> _ExecResult:

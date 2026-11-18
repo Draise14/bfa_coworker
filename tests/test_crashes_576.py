@@ -318,7 +318,7 @@ class LongModalsAndOwnChanges(unittest.TestCase):
         ua.check(wm, now=100.0)
         wm.windows[0].modal_operators = []
         self.assertEqual(ua.check(wm, now=200.0), ("", ""))          # it ended: forgotten
-        wm.windows[0].modal_operators = [_op("TRANSFORM_OT_translate", 9)]
+        wm.windows[0].modal_operators = [_op("TRANSFORM_OT_translate")]
         self.assertEqual(ua.check(wm, now=201.0)[0], "modal")
 
     def test_the_sampler_stamps_a_modal_before_any_step_asks(self):

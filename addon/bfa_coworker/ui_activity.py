@@ -27,8 +27,8 @@ Bforartists; nothing Bforartists-only):
   hold every step back for as long as it plays).
 * A modal operator that has run longer than :data:`LONG_MODAL` seconds (an open file browser,
   Walk / Fly navigation, another add-on's modal timer that never ends) is not waited for:
-  it is no drag.  Each modal is stamped when first seen (:func:`sample`, run by a one second
-  timer and by every check), keyed by its type name and pointer.
+  it is no drag.  Each modal is stamped when first seen (:func:`sample`, run by a quarter-second
+  timer and by every check), keyed by its type name and window.
 
 What is NOT caught (Blender's own, nothing in Python shows it): a pause of more than
 :data:`QUIET` seconds in the middle of a drag, typing in a text field, open popups and redo
@@ -130,8 +130,8 @@ def _modals(window_manager: Any) -> list[tuple[tuple, str]]:
                 ident = str(getattr(op, "bl_idname", "") or "")
                 if not ident or ident.startswith(_IGNORED_PREFIXES) or ident in _IGNORED_IDS:
                     continue
-                try:
-                    pointer = int(op.as_pointer())
+                try:                # the operator's own pointer is not stable for every modal (a file
+                    pointer = int(window.as_pointer())      # browser's): its window's is
                 except Exception:  # pylint: disable=broad-exception-caught
                     pointer = 0
                 found.append(((ident, pointer), ident))

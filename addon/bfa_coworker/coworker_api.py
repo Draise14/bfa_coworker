@@ -335,7 +335,7 @@ def _push(name: str) -> bool:
         try:
             import bpy  # pylint: disable=import-error
             if not bpy.app.timers.is_registered(_push_when_idle):
-                bpy.app.timers.register(_push_when_idle, first_interval=1.0, persistent=True)
+                bpy.app.timers.register(_push_when_idle, first_interval=0.25, persistent=True)
         except (ImportError, AttributeError, ValueError):
             pass
         return False
@@ -558,13 +558,13 @@ def _sample_modals() -> float:
     import bpy  # pylint: disable=import-error
     from . import ui_activity
     ui_activity.sample(bpy.context.window_manager)
-    return 1.0
+    return 0.25
 
 
 def register() -> None:
     import bpy  # pylint: disable=import-error
     if not bpy.app.timers.is_registered(_sample_modals):
-        bpy.app.timers.register(_sample_modals, first_interval=1.0, persistent=True)
+        bpy.app.timers.register(_sample_modals, first_interval=0.25, persistent=True)
     for handlers, fn in _handlers():
         if fn is not _count_edit:
             bpy.app.handlers.persistent(fn)     # jobs outlive a file load

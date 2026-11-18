@@ -1310,6 +1310,19 @@ def _execute_code(
     return _ExecResult(response)
 
 
+def _busy_refusal(tool: str, code: str, internal: bool) -> "_ExecResult | None":
+    """#591: the answer for a step that must not run while a render or bake job runs, else None."""
+    try:
+        from . import long_jobs
+        message = long_jobs.scene_busy_message(tool, code, internal=internal)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return None
+    if not message:
+        return None
+    print("[Coworker] bridge: refused {:s} -- a render or bake is running (#591)".format(tool or "a step"))
+    return _ExecResult({"status": "error", "message": message})
+
+
 def _execute_code_from_request(
         data: bytes,
 ) -> tuple[_ExecResult, bool]:
@@ -1421,6 +1434,9 @@ def _execute_code_from_request(
         return run
 
     def _execute(c: str, s: bool) -> _ExecResult:
+        _late = _busy_refusal(_tool, str(c), _internal)     # #591: a render may have started meanwhile
+        if _late is not None:
+            return _late
         result = _for_thread(_execute_code)(c, strict_json=s, **_data_kw)
         return result if result.check_fn is None else _ExecResult(result.response, _for_thread(result.check_fn))
 
@@ -1439,6 +1455,11 @@ def _execute_code_from_request(
         return _claim_gate(_thread, _tool, request.get("args"), str(code), _run)
 
     exec_result = None
+    # #591: refused at once (no card is shown for a step that cannot run); checked again in
+    # ``_execute`` for a step that waited for an approval card or another chat's claim.
+    _early = _busy_refusal(_tool, str(code), _internal)
+    if _early is not None:
+        return _early, strict_json
     # Runtime 1 (#310): the same call again and again asks, then is refused.  The local
     # loop counts its own calls (its bookkeeping code repeats here on purpose).
     if _tool and not _internal and _engine in ("EXTERNAL_AGENT", "EXTERNAL_HARNESS"):

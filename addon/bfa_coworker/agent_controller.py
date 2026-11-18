@@ -5437,6 +5437,27 @@ def _trim_tool_result(result_text: str, max_chars: int = _MAX_TOOL_RESULT_CHARS)
         status, result_text[:max_chars - 40] + "...")
 
 
+def _step_may_still_run(error_text: str) -> bool:
+    """#591: the step ended by a time limit, so we never saw how it ended and its code may still be
+    running on Blender's main thread (the bridge serves one step at a time, so the next call only
+    queues behind it).  Undo and cleanup would then act on a scene it is still changing, and
+    discard whatever it did finish.  Only the two shapes Coworker itself produces count: the client
+    timeout ("Error executing tool ... timed out ... may still be busy") and the 30 s pure-Python
+    limit.  A script that raises TimeoutError itself is an ordinary failure."""
+    text = str(error_text or "")
+    if text.startswith("Error executing tool"):
+        low = text.lower()
+        return "timed out" in low or "may still be busy" in low
+    return "[Preflight] Code execution timed out after" in text
+
+
+def _step_refused(result_text: str) -> bool:
+    """#591: the bridge refused the step before running it ("Not run: ...": a render is running, another
+    chat's claim).  Nothing ran, so nothing needs undoing and the step does not count as a failure."""
+    text = str(result_text or "")
+    return '"status": "error"' in text[:200] and '"message": "Not run:' in text[:400]
+
+
 def _error_is_code_bug(error_text: str) -> bool:
     """Return ``True`` if *error_text* is a pure code bug with no side effects.
 
@@ -6588,8 +6609,14 @@ def _release_scene_lock() -> None:
             co_work_guard.clear()
             _active_lock_mcp_port = 0
         else:
-            print("[Coworker] _release_scene_lock: unlock reported an error -- "
-                  "keeping priors for a later retry (scene may stay protected)")
+            # #591: say why.  The usual cause is no Blender behind the port (it crashed, closed or
+            # the bridge stopped: "connection refused"), so there is no scene left to unlock; else the
+            # answer is the bridge's own error text.
+            _why = str(raw or "").strip().replace(chr(10), " ")[:160] or "no answer"
+            if "10061" in _why or "refused" in _why.lower() or "Cannot connect" in _why:
+                _why = "the bridge cannot be reached (Blender closed or its server stopped): " + _why
+            print("[Coworker] _release_scene_lock: unlock was not confirmed ({:s}) -- keeping the priors "
+                  "for a later retry (the scene may stay protected until then)".format(_why))
     except Exception as _ex:  # pylint: disable=broad-exception-caught
         print("[Coworker] _release_scene_lock: unlock failed, keeping priors "
               "for a later retry -- {:s}".format(str(_ex)))
@@ -8731,7 +8758,16 @@ def _run_conversation_turn_inner(
                     should_undo = False
                     reason = ""
                     if _prev_code_errored:
-                        if _error_is_code_bug(_prev_code_error):
+                        if _step_may_still_run(_prev_code_error):
+                            print("[Coworker] run_conversation_turn: smart undo SKIPPED -- the step timed out and may "
+                                  "still be running (#591)")
+                            _deferred_notes.append(session_memory.make_system_note(
+                                "Your last script hit the time limit, so Coworker does not know how far it got and "
+                                "did not undo or clean up anything (it may still be running in Blender). Check the "
+                                "scene with get_scene_digest first, and keep scripts short.", kind="scene_change"))
+                            if on_status:
+                                on_status("The last step timed out: nothing was undone")
+                        elif _error_is_code_bug(_prev_code_error):
                             print("[Coworker] run_conversation_turn: smart undo SKIPPED -- code-bug error, no side effects")
                         else:
                             should_undo = True
@@ -8797,28 +8833,17 @@ def _run_conversation_turn_inner(
                         _reloaded = False
                         _others_working = [c for c in _side_by_side.working_chats() if c != _my_tag]
                         _first_change = _writes_before_code == 0 and _turn_writes == _writes_after_code
-                        if _undo_pushed and turn_undo.reload_allowed(_first_change, _undo_safe_here,
-                                                                    _others, _others_working):
-                            # The failed script was the turn's first change: Blender's newest
-                            # undo step is still the scene from before it.  Load it again (undo,
-                            # then redo, in a window's context): no step is added (#501).
-                            _undo_result = _call_internal(_undo_code("reload"))
-                            try:
-                                _reloaded = bool(json.loads(_undo_result).get("result", {}).get("reloaded"))
-                            except (json.JSONDecodeError, TypeError, AttributeError):
-                                _reloaded = False
-                            if _reloaded:
-                                _turn_writes = _writes_after_code = 0       # back to the scene before the turn
-                            else:
-                                print("[Coworker] run_conversation_turn: reload FAILED -- falling back to entity cleanup")
-                        elif not _undo_safe_here:
-                            print("[Coworker] run_conversation_turn: global undo SKIPPED -- "
-                                  "user edited the scene mid-turn; scoped cleanup only (D8)")
-                        else:
-                            print("[Coworker] run_conversation_turn: reload SKIPPED -- the turn changed the "
-                                  "scene before the failed step{:s}; scoped cleanup only (#501)".format(
-                                      " (other chats working: {:s})".format(", ".join(_others_working))
-                                      if _others_working else ""))
+                        # #591: never ``ed.undo()`` + ``ed.redo()`` after a failed model script.  Its
+                        # data-API changes (a collection linked to the scene, objects, meshes) and the
+                        # co-work lock's ``hide_select`` are on no undo step (#501), and loading the
+                        # memfile again from this timer crashed Blender in the redo's decode (night
+                        # run A2).  The scoped cleanup below removes what the step made.
+                        print("[Coworker] run_conversation_turn: reload skipped (#591) -- scoped cleanup only")
+                        _deferred_notes.append(session_memory.make_system_note(
+                            "Your last script failed part-way. Coworker removed the objects and data it had created, "
+                            "but did NOT undo changes it made to things that already existed (moves, modifiers, "
+                            "materials, selection, visibility). Check the scene with get_scene_digest before you "
+                            "build on it.", kind="scene_change"))
                         # Idempotent cleanup of the failed step's OWN datablocks
                         # (after the reload: anything it already reverted is simply
                         # not found).  Whole-turn diff only as a legacy fallback
@@ -8926,17 +8951,19 @@ def _run_conversation_turn_inner(
                 _repeat_guard.note_result(tool_name, args, result_text)
                 _agent_state.bump_turn_cost("tools")
                 from .engine import PLAN_SAFE_TOOLS as _plan_safe
+                _refused = _step_refused(result_text)     # #591: it never ran: no change, no failure
                 if tool_name == "execute_blender_code":
                     _writes_before_code = _turn_writes
-                if turn_undo.call_changes(tool_name, str(args.get("code", "") or ""), _plan_safe):
+                if not _refused and turn_undo.call_changes(tool_name, str(args.get("code", "") or ""), _plan_safe):
                     _turn_writes += 1           # #501: a change of this turn so far
                 if tool_name == "execute_blender_code":
                     _writes_after_code = _turn_writes
 
                 # -- Track code execution for smart undo ----------------
-                if tool_name == "execute_blender_code":
+                if tool_name == "execute_blender_code" and not _refused:
                     _prev_code = args.get("code", "")
-                    _prev_code_errored = '"status": "error"' in result_text
+                    _prev_code_errored = '"status": "error"' in result_text or (
+                        result_text.startswith("Error executing tool") and _step_may_still_run(result_text))
                     _prev_code_error = result_text if _prev_code_errored else ""
 
                     # -- The step's entity snapshot (no undo step, #501) -

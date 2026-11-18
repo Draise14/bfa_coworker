@@ -307,8 +307,36 @@ def _undo(push_message: str = "", to_item: int = -1) -> bool:
         return False
 
 
+_deferred_pushes: list[str] = []
+
+
+def _push_when_idle() -> float | None:
+    """Timer (main thread): the undo steps held back by a running render / bake (#591), pushed
+    one by one once no job runs."""
+    from . import long_jobs
+    if long_jobs.busy_kind():
+        return 1.0
+    while _deferred_pushes:
+        _push(_deferred_pushes.pop(0))
+    return None
+
+
 def _push(name: str) -> bool:
-    """One undo step of Coworker's own, counted (#501: Revert goes back by the count)."""
+    """One undo step of Coworker's own, counted (#501: Revert goes back by the count).
+
+    #591: not while a render or bake runs (its thread reads the scene, an undo push stores it):
+    the step is pushed once the job is over, and this answers False now (the turn then offers no
+    Revert for it)."""
+    from . import long_jobs
+    if long_jobs.busy_kind():
+        _deferred_pushes.append(name)
+        try:
+            import bpy  # pylint: disable=import-error
+            if not bpy.app.timers.is_registered(_push_when_idle):
+                bpy.app.timers.register(_push_when_idle, first_interval=1.0, persistent=True)
+        except (ImportError, AttributeError, ValueError):
+            pass
+        return False
     if not _undo(name):
         return False
     _pushes[0] += 1

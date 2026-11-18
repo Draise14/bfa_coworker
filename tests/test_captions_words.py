@@ -594,6 +594,51 @@ class TestMotionFollowsTheAnchor(_MotionCase):
         self.assertTrue(self.ops._edited(line))
 
 
+class TestDialog(_OpsCase):
+
+    def test_the_dialog_has_animate_with_its_two_lists_in_the_motion_group(self):
+        op = test_captions.TestCaptionStrips._operator(self)[0]
+        _clip(self.scene)
+        for animate, want in (("STYLE", []), ("NONE", []), ("LINE", ["line_animation"]),
+                              ("WORD", ["word_animation"]), ("BOTH", ["line_animation", "word_animation"])):
+            op.animate = animate
+            layout = test_captions._Layout()
+            op.layout = layout
+            op.draw(SimpleNamespace(scene=self.scene))
+            props = [e[1] for e in layout.log if e[0] == "prop"]
+            self.assertEqual([p for p in props if p in ("line_animation", "word_animation")], want, animate)
+            self.assertLess(props.index("size"), props.index("animate"))            # style group first
+            self.assertLess(props.index("animate"), props.index("language"))
+
+    def test_what_the_dialog_passes_on(self):
+        op = test_captions.TestCaptionStrips._operator(self)[0]
+        op.animate, op.line_animation, op.word_animation = "BOTH", "SLIDE_DOWN", "HIGHLIGHT_RISE"
+        look = op._look(self.scene, [])
+        self.assertEqual((look["animate"], look["line_animation"], look["word_animation"]),
+                         ("BOTH", "SLIDE_DOWN", "HIGHLIGHT_RISE"))
+        op.animate, op.animation = "STYLE", "FADE"                 # the old single list still counts
+        look = op._look(self.scene, [])
+        self.assertEqual((look["animate"], look["line_animation"], look["word_animation"], look["animation"]),
+                         ("STYLE", None, None, "FADE"))
+
+    def test_lines_count_one_for_a_typewriter_of_the_visible_line_only(self):
+        lines = lambda **kw: self.ops._lines_items(SimpleNamespace(**dict(dict(style="CLEAN", animate="STYLE"), **kw)),
+                                                   None)[0][1]
+        self.assertEqual(lines(), "As the Style (2 Lines)")
+        self.assertEqual(lines(animate="LINE", line_animation="TYPEWRITER"), "As the Style (1 Line)")
+        self.assertEqual(lines(animate="BOTH", line_animation="TYPEWRITER", word_animation="POP"),
+                         "As the Style (2 Lines)")
+        self.assertEqual(lines(style="WORD_HIGHLIGHT"), "As the Style (1 Line)")
+        self.assertEqual(lines(style="WORD_HIGHLIGHT", animate="LINE", line_animation="FADE"), "As the Style (1 Line)")
+        self.assertEqual(lines(style="BOXED", animate="NONE"), "As the Style (2 Lines)")
+
+    def test_every_entry_has_an_icon_and_a_description(self):
+        for items in (self.ops._ANIMATE_ITEMS, self.ops._WORD_ITEMS, self.ops._ANIM_ITEMS):
+            for item in items:
+                self.assertTrue(item[1] and item[2], item)
+                self.assertEqual(len(item), 5)
+
+
 class TestOldTags(_OpsCase):
     """Captions made before this change: their tags have no word animation."""
 

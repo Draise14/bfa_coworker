@@ -39,6 +39,7 @@ from typing import Any, Callable
 import bpy  # pylint: disable=import-error
 from bpy.props import BoolProperty, StringProperty  # pylint: disable=import-error
 from bpy.types import Operator  # pylint: disable=import-error
+from .wand.spec import needs_agent_line
 
 _VALUE_CHARS = 200
 
@@ -181,6 +182,7 @@ class BFACW_OT_explain(Operator):  # type: ignore[misc]
     """Ask Coworker to explain what you right-clicked, in Ask mode (it changes nothing)"""
     bl_idname = "bfacw.explain"
     bl_label = "Explain This"
+    bl_description = needs_agent_line(__doc__, "it writes the answer")
     bl_options = {'INTERNAL'}
 
     text: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
@@ -215,6 +217,7 @@ class BFACW_OT_explain_spot(Operator):  # type: ignore[misc]
     """Ask Coworker what the button you right-clicked is, with a picture of it (Ask mode)"""
     bl_idname = "bfacw.explain_spot"
     bl_label = "Explain This"
+    bl_description = needs_agent_line(__doc__, "it writes the answer")
     bl_options = {'INTERNAL'}
 
     @classmethod
@@ -336,6 +339,7 @@ class BFACW_OT_translate(Operator):  # type: ignore[misc]
     """Translate this text with Coworker: pick the language (remembered), and it sets the text for you"""
     bl_idname = "bfacw.translate"
     bl_label = "Translate"
+    bl_description = needs_agent_line(__doc__, "it does the translating")
     bl_options = {'INTERNAL'}
 
     path: StringProperty(options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]

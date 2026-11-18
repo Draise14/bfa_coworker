@@ -74,7 +74,7 @@ from bpy.types import Operator, Panel  # pylint: disable=import-error
 
 from . import cut_plan, icons, silences
 from .scene import poll as _sequencer_poll, sequencer_scene
-from .spec import OperatorSpec, Param, Place
+from .spec import OperatorSpec, Param, Place, agent_line
 
 CATEGORY = "Coworker"
 PANEL = "Video"
@@ -881,7 +881,7 @@ class COWORKER_OT_sequencer_remove_silences(Operator):  # type: ignore[misc]
 
     bl_idname = SPEC.bl_idname
     bl_label = SPEC.label
-    bl_description = SPEC.description
+    bl_description = agent_line(SPEC.description)
     bl_options = {"REGISTER", "UNDO"}
 
     threshold_db: _prop("threshold_db", FloatProperty, min=-120.0, max=0.0, precision=1)  # type: ignore[valid-type]

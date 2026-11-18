@@ -56,6 +56,14 @@ chat_history = _module("chat_history")
 log = _module("log")      # the real redaction: no stand-in
 
 
+def _wand_spec():
+    spec = importlib.util.spec_from_file_location(_PKG + ".wand.spec", _ADDON / "wand" / "spec.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def _slice(src, name):
     """The top-level ``def`` / ``class`` *name* of *src*, up to the next top-level block."""
     for marker in ("\ndef {:s}(".format(name), "\nclass {:s}(".format(name)):
@@ -420,6 +428,10 @@ def _context_menus(ui_chat, agent_controller):
     saved = {k: sys.modules.get(k) for k in ("bpy", "bpy.props", "bpy.types")}
     sys.modules.update({"bpy": bpy, "bpy.props": bpy.props, "bpy.types": bpy.types})
     try:
+        _pkg.wand = types.ModuleType(_PKG + ".wand")        # the tooltip helper of the wands (#607)
+        _pkg.wand.__path__ = []
+        sys.modules[_PKG + ".wand"] = _pkg.wand
+        sys.modules[_PKG + ".wand.spec"] = _pkg.wand.spec = _wand_spec()
         _pkg.ui_chat, _pkg.agent_controller = ui_chat, agent_controller
         sys.modules[_PKG + ".ui_chat"], sys.modules[_PKG + ".agent_controller"] = ui_chat, agent_controller
         mod = _module("ui_context_menus")

@@ -109,7 +109,20 @@ def phase_text(state) -> str:
         return "Dreaming, one moment"
     if phase == "waiting":          # a Local request sent, no token yet (#544)
         return "Waiting for the model"
-    return "Thinking"
+    return _thinking_word(state)
+
+
+def _thinking_word(state) -> str:
+    """"Thinking", or with the magic wording a word about magic, picked once for the
+    thinking stretch (its start time) so it never changes between redraws (#528).  Shown
+    only: it is not stored anywhere."""
+    try:
+        from . import magic_wording
+    except ImportError:             # loaded on its own (the unit tests): plain
+        return "Thinking"
+    if not magic_wording.enabled():
+        return "Thinking"
+    return magic_wording.thinking_word(getattr(state, "thinking_start_time", 0.0))
 
 
 def fmt_duration(seconds: float) -> str:

@@ -146,7 +146,7 @@ def _mode_status(context: Any) -> TopBar:
     local = prefs is not None and prefs.operating_mode == "LOCAL_LLM"
     status = getattr(props, "chat_status", "") or ""
     if state is not services:           # an editor's thread has its own status line (#358)
-        status = ui_chat._thread_status(ui_chat._ui_thread(context))[0]
+        status = ui_chat._thread_status_shown(ui_chat._ui_thread(context))[0]
     if state.is_thinking:
         elapsed = time.time() - state.thinking_start_time if state.thinking_start_time else 0.0
         status = "{:s} {:s} ({:s})".format(ui_chat._phase_text(state), ui_chat._spinner_char(state),

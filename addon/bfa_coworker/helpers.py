@@ -146,6 +146,11 @@ def asked(history: list[dict[str, Any]] | None, text: str) -> bool:
 
 
 def waiting_text(count: int) -> str:
+    """The status line while the helpers work; worded as mages with the magic wording (#528).
+    Shown only: it never goes into a history or a prompt."""
+    from . import magic_wording
+    if magic_wording.enabled():
+        return "Waiting for {:d} {:s}".format(count, magic_wording.group_noun(count))
     return "Waiting for {:d} helper{:s}".format(count, "" if count == 1 else "s")
 
 
@@ -160,6 +165,7 @@ class Helper:
     task: str = ""
     message: str = ""            # the task as sent (framing included)
     parent_title: str = ""
+    name: str = ""               # what it is called on screen ("Wizard 2", #528): chosen once, kept
     status: str = QUEUED
     answer: str = ""
     error: str = ""
@@ -231,11 +237,16 @@ class HelperRegistry:
         self._helpers: dict[str, Helper] = {}
         self._open: dict[str, list[str]] = {}            # parent id -> helper ids not reported yet
         self._turns: dict[str, tuple[str, int]] = {}      # parent id -> (turn key, helpers started in it)
+        self._made: dict[str, int] = {}                  # parent id -> helpers ever opened (their numbers, #528)
 
     # -- who is who ---------------------------------------------------------------
     def get(self, helper_id: str) -> Helper | None:
         with self._lock:
             return self._helpers.get(helper_id)
+
+    def all(self) -> list[Helper]:
+        with self._lock:
+            return list(self._helpers.values())
 
     def is_helper(self, thread_id: str) -> bool:
         with self._lock:
@@ -275,6 +286,9 @@ class HelperRegistry:
         helper = Helper(id=helper_id, parent=parent_id, title=title or short_title(task), editor=editor,
                         task=task, message=message, parent_title=parent_title)
         with self._lock:
+            from .magic_wording import helper_name
+            self._made[parent_id] = number = self._made.get(parent_id, 0) + 1
+            helper.name = helper_name(message or task or helper_id, number)     # kept: stable on screen (#528)
             self._helpers[helper_id] = helper
             self._open.setdefault(parent_id, []).append(helper_id)
             key, count = self._turns.get(parent_id, ("", 0))
@@ -311,6 +325,7 @@ class HelperRegistry:
         with self._lock:
             self._open.pop(thread_id, None)
             self._turns.pop(thread_id, None)
+            self._made.pop(thread_id, None)
             helper = self._helpers.get(thread_id)
             if helper is None:
                 return ""
@@ -351,6 +366,7 @@ class HelperRegistry:
             self._helpers.clear()
             self._open.clear()
             self._turns.clear()
+            self._made.clear()
 
 
 HELPERS = HelperRegistry()

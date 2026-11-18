@@ -46,7 +46,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from .. import log, long_jobs
+from .. import log, long_jobs, magic_wording
 from ..answer_envelope import readable
 from ..chat_status import fmt_duration, phase_text, spinner_char
 from ..chat_turns import NOTE_TITLES, group_turns, is_system_note_msg, split_turn, turn_notices
@@ -63,6 +63,7 @@ __all__ = (
     "live_snapshot",
     "message_text",
     "transcript",
+    "user_message_text",
     "unit_texts",
 )
 
@@ -169,6 +170,18 @@ def _redacted_data(value: Any) -> Any:
     return value
 
 
+def user_message_text(msg: dict) -> str:
+    """The text of a "user" message as the chat shows and copies it.  What you typed stays as
+    typed (#418).  A message Coworker wrote itself -- a helper chat's first message (the
+    ``delegate_task`` task) and the parent's "[Helpers]" results -- is redacted like any agent
+    text (#528) and, with the magic wording, headed "Mage" / "Mages".  The history keeps the
+    original: the model gets it unchanged."""
+    raw = message_text(msg.get("content"))
+    if magic_wording.is_agent_written(raw):
+        return _redacted(magic_wording.rewrite_agent_text(raw))
+    return raw
+
+
 def _soft(color: RGBA, amount: float = 0.35) -> RGBA:
     return (color[0], color[1], color[2], color[3] * (1.0 - amount))
 
@@ -211,7 +224,7 @@ def _markdown_gaps(blocks: list[Block], pad: float) -> tuple[float, float]:
 def _copy_texts(turn: list[dict], active: bool = False) -> tuple[str, str]:
     """What a turn's two Copy buttons copy: your text and the reply ("" while it runs)."""
     user, _process, conclusion = split_turn(turn)
-    text = split_attachments(message_text(user.get("content")))[0] if user is not None else ""
+    text = split_attachments(user_message_text(user))[0] if user is not None else ""
     reply = message_text(conclusion.get("content")) if conclusion is not None and not active else ""
     return text, reply
 
@@ -243,7 +256,7 @@ def unit_texts(turn: list[dict], active: bool = False) -> list[tuple[tuple, str,
     user, _process, conclusion = split_turn(turn)
     out: list[tuple[tuple, str, str]] = []
     if user is not None:
-        text = split_attachments(message_text(user.get("content")))[0]
+        text = split_attachments(user_message_text(user))[0]
         if text:
             out.append(((USER, 0), text, "user"))
     if conclusion is not None and not active:
@@ -519,7 +532,8 @@ class ChatView:
                    idx == self._suggest_idx,
                    tuple(sorted(k for k in self.expanded if k.startswith("x{:d}:".format(idx)))),
                    # A key set or cleared changes what the Workshop shows as *** (#511), so its height (#528).
-                   log._secrets)    # pylint: disable=protected-access
+                   log._secrets,    # pylint: disable=protected-access
+                   magic_wording.enabled())     # the helper messages' heading is worded differently (#528)
             cached = self._heights.get(key)
             if cached is not None:
                 return cached
@@ -542,7 +556,7 @@ class ChatView:
         user, process, conclusion = split_turn(turn)
         if user is not None:
             indent = 0.0 if compact else style.unit * 2
-            raw = message_text(user.get("content"))
+            raw = user_message_text(user)
             text, images = split_attachments(raw)
             side, gap = canvas.icon_size(), pad * 0.6
             copy_w = style.line_height

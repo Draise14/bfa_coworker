@@ -64,6 +64,7 @@ from . import agent_controller
 from . import chat_attachments
 from . import llm_manager
 from . import log as _log
+from . import magic_wording as _magic
 from . import mcp_to_blender_server
 from .engine import EngineCaps, Prompt
 from .engine_loop import LoopConfig, LoopEngine
@@ -831,11 +832,22 @@ def _thread_status(thread) -> tuple[str, str]:
     return "Idle", "DOT"
 
 
+def _thread_status_shown(thread) -> tuple[str, str]:
+    """:func:`_thread_status` as drawn: "Thinking" is a word about magic with the magic
+    wording (#528).  Only for display: the logic keeps comparing the plain word."""
+    word, icon = _thread_status(thread)
+    if word == "Thinking":
+        from . import magic_wording
+        if magic_wording.enabled():
+            word = magic_wording.thinking_word(agent_controller.thread_state(thread).thinking_start_time)
+    return word, icon
+
+
 def _thread_title(thread) -> str:
     from . import threads
     if thread.is_default:
         return "All editors"
-    return _user_title(thread) or thread.title or threads.short_name(thread.editor) or "Thread"     # #573
+    return _user_title(thread) or _log.redact(thread.title or "") or threads.short_name(thread.editor) or "Thread"     # #573
 
 
 def _approvals_new_turn(thread=None) -> None:
@@ -1430,6 +1442,10 @@ def _humanize_memory(block: str, max_lines: int = 10) -> list[str]:
             line = "Coworker: " + line[10:].strip()
         elif line.startswith("Earlier request:"):
             line = "Earlier you asked: " + line[len("Earlier request:"):].strip()
+        for label in ("You: ", "Coworker: ", "Earlier you asked: "):     # a helper's task / results: no key (#528)
+            if line.startswith(label):
+                line = label + _magic.shown_agent_text(line[len(label):], loose=True)
+                break
         line, _imgs = _split_attachment_marker(line)
         if line:
             out.append(("  " if not line.endswith(":") else "") + _short_words(line, 110))
@@ -1460,6 +1476,7 @@ def _checkpoint_title(cp: dict, number: int) -> tuple[str, str]:
             content = " ".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
         words, _imgs = _split_attachment_marker(str(content or ""))
         if words:
+            words = _magic.shown_agent_text(words, loose=True)      # a helper's task: no key (#528)
             break
     title = "Checkpoint {:d}: {:s}".format(number, _short_words(words) if words else "(start)")
     ts = str(cp.get("timestamp", ""))
@@ -2835,7 +2852,7 @@ class BFACW_OT_queue_show(Operator):  # type: ignore[misc]
                 icon='FORWARD',
             )
             for idx, item in enumerate(queue_items):
-                msg = item.get("message", "")
+                msg = _magic.shown_agent_text(str(item.get("message", "")))     # a queued helper task: no key (#528)
                 mode = item.get("chat_mode", "AGENT")
                 preview = msg[:60] + ("..." if len(msg) > 60 else "")
                 row = layout.row()
@@ -4938,7 +4955,8 @@ def _tab_label(thread) -> str:
     helper_title = helper_chats.tab_label(thread)       # a helper chat: its title (#479)
     if helper_title:
         return threads.tab_title(thread, helper_title)
-    return threads.tab_title(thread, title_of(agent_controller.thread_state(thread).conversation_history))
+    first = title_of(agent_controller.thread_state(thread).conversation_history)
+    return threads.tab_title(thread, _magic.shown_agent_text(first, loose=True))
 
 
 # The names you gave chats (Rename, #573), by chat id; "" = its automatic title.  Read from
@@ -4983,8 +5001,9 @@ def _tab_full_title(thread) -> str:
     """The tab's title, not shortened: what Rename starts from (#573)."""
     from . import helper_chats, threads
     from .chat_history import title_of
-    return _log.redact(_user_title(thread) or helper_chats.tab_label(thread)
-                       or title_of(agent_controller.thread_state(thread).conversation_history)
+    return _log.redact(_user_title(thread) or helper_chats.tab_label(thread, named=False)
+                       or _magic.redacted_agent_text(title_of(agent_controller.thread_state(thread).conversation_history),
+                                                     loose=True)
                        or threads.tab_title(thread))
 
 
@@ -5146,7 +5165,7 @@ class BFACW_MT_chat_tabs(bpy.types.Menu):  # type: ignore[misc]
         from . import threads
         shown = _ui_thread(context)
         for thread in agent_controller.THREADS.live():
-            word, _icon = _thread_status(thread)
+            word, _icon = _thread_status_shown(thread)
             icon, _alert = _tab_icon(thread)
             text = "{:s}  --  {:s}".format(_tab_label(thread), word)
             op = self.layout.operator("bfacw.tab_show", text=("\u25cf " if thread is shown else "") + text,
@@ -5182,7 +5201,7 @@ class BFACW_OT_tab_show(Operator):  # type: ignore[misc]
         where = "All editors" if not thread.editor else _EDITOR_NAMES.get(thread.editor, thread.editor)
         from . import helper_chats
         return "{:s}{:s} ({:s}): {:s}".format(helper_chats.tab_tip(thread), _tab_label(thread), where,
-                                              _thread_status(thread)[0])
+                                              _thread_status_shown(thread)[0])
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         thread = agent_controller.THREADS.get(self.thread_id)
@@ -5548,13 +5567,13 @@ def _draw_plan_minimal(layout) -> None:
                                 "they're done.", icon='INFO')
         return
     if goal:
-        _draw_multiline(layout, goal, icon='USER')
+        _draw_multiline(layout, _magic.shown_agent_text(goal), icon='USER')  # a helper's task: no key (#528)
     icons = {"done": 'CHECKBOX_HLT', "doing": 'PLAY', "todo": 'CHECKBOX_DEHLT'}
     col = layout.column(align=True)
     for i, step in enumerate(steps, 1):
         row = col.row()
         row.label(text="", icon=icons.get(step.get("status"), 'CHECKBOX_DEHLT'))
-        _draw_multiline(row, "{:d}. {:s}".format(i, step.get("text", "")))
+        _draw_multiline(row, "{:d}. {:s}".format(i, _log.redact(step.get("text", ""))))
     row = layout.row(align=True)
     row.scale_y = 0.9
     row.operator("bfacw.plan_open", text="Edit", icon='TEXT')
@@ -5734,7 +5753,7 @@ class BFACW_PT_chat_queue(Panel):  # type: ignore[misc]
         _draw_multiline(hint, "They go one after another when the turn ends.")
         modes = {ident: (name, icon) for ident, name, _d, icon, _n in CHAT_MODE_ITEMS}
         for idx, item in enumerate(queue_items):
-            msg = " ".join(str(item.get("message", "")).split())
+            msg = " ".join(_magic.shown_agent_text(str(item.get("message", ""))).split())     # no key (#528)
             name, icon = modes.get(item.get("chat_mode", "AGENT"), ("Coworker", 'GHOST_ENABLED'))
             box = layout.box()
             head = box.row(align=True)
@@ -6597,6 +6616,11 @@ _plan_last_written: str | None = None
 _PLAN_TEXT: dict[str, str] = {"id": "main"}     # whose plan the text block shows (#417)
 
 
+# How the "Coworker Plan.md" text shows the goals and the steps: keys as *** (a helper's task is
+# written by the agent, #528).  Reading the text back keeps the stored goal when untouched.
+_PLAN_SHOWN = (lambda text: _magic.redacted_agent_text(text, loose=True), lambda text: _log.redact(text))
+
+
 def _sync_plan_text() -> None:
     """Keep the ``Coworker Plan.md`` text block and the pinned plan in sync.
 
@@ -6618,11 +6642,11 @@ def _sync_plan_text() -> None:
     with _sm.store_lock:
         if _plan_last_written is not None and current != _plan_last_written:
             # The user edited the file: adopt it.
-            if store.goal.parse_markdown(current):
+            if store.goal.parse_markdown(current, *_PLAN_SHOWN):
                 print("[Coworker] plan: applied your edits from '{:s}'".format(name))
             _plan_last_written = current
             return
-        rendered = store.goal.render_markdown()
+        rendered = store.goal.render_markdown(*_PLAN_SHOWN)
     if rendered != current:
         text.clear()
         text.write(rendered)
@@ -6647,7 +6671,7 @@ class BFACW_OT_plan_open(Operator):  # type: ignore[misc]
         text = bpy.data.texts.get(name) or bpy.data.texts.new(name)
         _PLAN_TEXT["id"] = _ui_thread(context).id        # this chat's thread's plan (#417)
         with _sm.store_lock:
-            rendered = _ui_store(context).goal.render_markdown()
+            rendered = _ui_store(context).goal.render_markdown(*_PLAN_SHOWN)
         text.clear()
         text.write(rendered)
         _plan_last_written = rendered

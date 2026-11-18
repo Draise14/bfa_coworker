@@ -868,6 +868,9 @@ def _animate_words(scene: Any, line: Any, tag: dict, style: dict) -> int:
               if anim == "TYPEWRITER" else [None] * len(words))
     base, hi = tuple(style["props"]["color"]), _hi_colour(style)
     made = 0
+    if style["props"].get("use_box"):            # the anchor's box moves with the line animation
+        _animate(scene, line, style, anim, None)
+        line = _all(ed).get(name)
     spans = _word_spans(line, tag, words)
     for w, mid, rev, (a, b) in zip(words, mids, reveal, spans):
         tracks = cap.word_tracks(anim, wanim, fs, fe, a, b, _fps(scene), res[0], res[1], mid, centre, rev, base, hi)
@@ -887,6 +890,8 @@ def _reanimate_words(scene: Any, line: Any, tag: dict) -> bool:
     if not words:
         return False
     _clear_animation(scene, words, _WORD_CLEAR, colour=st["props"]["color"])
+    if st["props"].get("use_box") and tag.get("anim") is not None:
+        _clear_animation(scene, [line], cap.animation_paths(tag["anim"], key))
     _animate_words(scene, line, tag, st)
     return True
 
@@ -904,11 +909,13 @@ def _hi_colour(style: dict) -> tuple:
 
 def _hide_anchor(line: Any) -> None:
     """The line strip of a caption with word motions draws nothing (#594): its text is clear, and its
-    outline, shadow and box are off.  It stays the caption's anchor: its text, tag, font, bold, size and
+    outline and shadow are off (so is its box, except in a boxed style: one box behind the whole line, which
+    moves with the line animation, and not one box per word).  It stays the caption's anchor: its text, tag, font, bold, size and
     place are what the words follow."""
     colour = tuple(line.color)
     line.color = (colour[0], colour[1], colour[2], 0.0)
-    for prop in ("use_outline", "use_shadow", "use_box"):
+    keep_box = bool(getattr(line, "use_box", False))       # a boxed style: its one box behind the whole line stays
+    for prop in ("use_outline", "use_shadow") + (() if keep_box else ("use_box",)):
         try:
             setattr(line, prop, False)
         except (AttributeError, TypeError, ValueError):
@@ -1069,7 +1076,12 @@ def _word_key(tag: dict) -> str:
 def _sig_paths(tag: dict) -> frozenset[str]:
     """The properties of the line strip itself that its animation keys: none for a caption with word
     motions (its words are keyed, not the anchor)."""
-    return frozenset() if cap.tag_words(tag)[0] == "motion" else _preset_paths(tag)
+    if cap.tag_words(tag)[0] != "motion":
+        return _preset_paths(tag)
+    key = cap.style_key(tag.get("style")) or "CLEAN"
+    if cap.STYLES[key]["use_box"] and tag.get("anim") is not None:     # a boxed anchor is keyed with the line
+        return frozenset(cap.animation_paths(tag["anim"], key))
+    return frozenset()
 
 
 def _label_words(tag: dict) -> int:
@@ -1176,6 +1188,8 @@ def _add_highlights(scene: Any, line: Any, framed: dict, style: dict, font: Any,
     for i, a, b in windows:         # only names and numbers from here: strips are added
         if motion:
             h = _text_strip(ed, "{:s}_w{:02d}".format(name, i + 1), channel + i, fs, fe, pos[i]["text"], style, font)
+            if style["props"].get("use_box"):
+                h.use_box = False           # the anchor's one box is behind the whole line
         else:
             h = _text_strip(ed, "{:s}_w{:02d}".format(name, i + 1), channel, a, b, pos[i]["text"], style, font)
             h.color = colour

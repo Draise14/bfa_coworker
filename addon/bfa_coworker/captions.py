@@ -32,6 +32,12 @@ Auto Captions (Tier 4, Video 2, #376): the parts that need no Blender.
   applies; :data:`POSITIONS` (Bottom, Top, Middle) and a margin (:func:`placement`).
 * **Speakers** (#542): :func:`plan_speakers` gives each speaker (one sound file each) its own
   channel name, and optionally style, position and a name label (:func:`speaker_name`).
+* **Word highlights follow the line** (#594): :func:`word_layout` places a line's word strips from
+  the line strip's current font, bold, italic, size, alignment, wrap, place and text (measured with
+  ``blf``; :func:`bold_measure` adds what bold widens a line by); :func:`layout_signature` is the small
+  fingerprint of those settings a handler compares.
+* **Style choices** (#594): :func:`check_style_params` (letter case, font, bold, italic, size, text and
+  highlight colour; each "as the style has it" unless given), :func:`apply_case`.
 * **SRT**: :func:`format_srt` and the tolerant :func:`parse_srt`.
 * **Translate**: :func:`batch_text` / :func:`parse_batch_reply` (many captions in one
   question, written back one strip each).
@@ -45,7 +51,9 @@ __all__ = (
     "ANIMATED_PATHS",
     "ANIMATIONS",
     "ANIM_STYLE",
+    "CASES",
     "CHANNEL_NAME",
+    "CHOICE_KEYS",
     "CaptionsError",
     "HIGHLIGHT_CHANNEL_NAME",
     "LANGUAGE_RE",
@@ -61,23 +69,30 @@ __all__ = (
     "SKIP_SILENT",
     "SKIP_TEXT",
     "STYLES",
+    "STYLE_CASE",
     "TAG",
     "TRANSLATE_PREFIX",
     "animation_key",
     "animation_tracks",
     "animation_window",
+    "apply_case",
     "batch_text",
+    "bold_measure",
     "build_captions",
     "caption_signature",
     "captions_for_strip",
     "captions_for_strips",
     "channel_names",
+    "case_key",
     "check_look_params",
     "check_speakers",
+    "check_style_params",
     "check_tool_params",
     "default_margin",
     "default_max_chars",
+    "effective_case",
     "even_words",
+    "font_family",
     "format_srt",
     "frame_kind",
     "hand_edits",
@@ -85,6 +100,7 @@ __all__ = (
     "highlight_windows",
     "label_chars",
     "layout_lines",
+    "layout_signature",
     "media_frame",
     "normalise_words",
     "one_line",
@@ -115,6 +131,7 @@ __all__ = (
     "transcript_words",
     "with_label",
     "without_label",
+    "word_layout",
     "words_in_strip",
 )
 
@@ -490,6 +507,144 @@ def highlight_left(x_center: float, line_width: float, prefix_width: float, fram
     return x_center - line_width / 2.0 / frame_width + prefix_width / frame_width
 
 
+# -- word strips placed from the line's current settings (#594) -------------------------------
+
+LINE_PITCH = 1.2        # line pitch as a multiple of the font size: Inter's, measured live (120 px at 100 px)
+# How much wider bold makes each glyph's advance, in em (Blender's bundled Inter, a variable font with a
+# weight axis: measured by rendering a text strip bold and regular at 200 px on Blender 5.2.4, 5.4 and
+# Bforartists 5.2.3, which agree to 0.005 em; the glyphs of one value are listed together; a glyph not
+# listed gets 0.03).
+_INTER_BOLD_GROUPS = {
+    0.0: " ()*+,-.0123456789:;<=>OQU[]{}~", 0.005: "BCG", 0.01: "DH", 0.015: "'N", 0.02: "LPRZ_", 0.025: "!#FJT^e", 0.03: "@Ecox",
+    0.035: "$&Sabdgpq", 0.04: "/?M\\hijnu", 0.045: "WYklmsvyz", 0.05: "IKVX|", 0.055: "`r", 0.06: "At",
+    0.065: '"f', 0.07: "w", 0.095: "%",
+}
+_INTER_BOLD = {ch: em for em, chars in _INTER_BOLD_GROUPS.items() for ch in chars}
+# A font with no bold face is emboldened by Blender itself: every glyph's advance grows by about this
+# much (measured on Noto Sans CJK / Hebrew: 0.044-0.045 em); a monospaced font keeps its advance.
+SYNTHETIC_BOLD_EM = 0.045
+# Italic leaves every advance as it is, but Blender anchors an italic block on a box that is this much wider
+# (the slant's overhang), so a centred line starts half of it, a right-anchored one all of it, further left
+# than the plain measure says (measured live: 5 px at 67 px, 0.08 em).
+ITALIC_OVERHANG_EM = 0.08
+
+
+def font_family(filepath: Any) -> str:
+    """``"inter"`` (the bundled variable font: bold has its own advances), ``"mono"`` or ``"other"``
+    from a font file's name."""
+    name = re.split(r"[\\/]", str(filepath or ""))[-1].lower()
+    if not name or name.startswith("<builtin") or name.startswith("inter"):
+        return "inter"
+    return "mono" if "mono" in name else "other"
+
+
+def bold_measure(measure: Callable[[str, float], float], family: str = "inter") -> Callable[[str, float], float]:
+    """*measure* (``(text, px) -> width`` of the regular face) as the text strip draws it bold: Blender's
+    bold makes a line wider, glyph by glyph (exact for the bundled Inter to about a pixel per 200 px; a
+    font without a bold face is emboldened the same way for every glyph, an approximation; kerning in
+    bold is not looked at)."""
+    def bold(text: str, px: float) -> float:
+        extra = 0.0
+        for ch in str(text):
+            if family == "inter":
+                extra += _INTER_BOLD.get(ch, 0.03)
+            elif family == "other":
+                extra += SYNTHETIC_BOLD_EM
+        return float(measure(text, px)) + extra * float(px)
+    return bold
+
+
+def wrap_words(words: Sequence[str], measure: Callable[[str, float], float], px: float,
+               wrap_px: float) -> list[list[str]]:
+    """*words* in the lines a text strip with a wrap width of *wrap_px* pixels breaks them into: at a
+    space, when the line with the next word would be wider (0: no wrap).  Measured live: Blender breaks
+    where the line is wider than ``wrap_width`` x the frame's width."""
+    words = [w for w in words if w]
+    if not words:
+        return []
+    if wrap_px <= 0:
+        return [list(words)]
+    lines: list[list[str]] = []
+    cur: list[str] = []
+    for w in words:
+        if cur and measure(" ".join(cur + [w]), px) > wrap_px:
+            lines.append(cur)
+            cur = [w]
+        else:
+            cur.append(w)
+    lines.append(cur)
+    return lines
+
+
+_ANCHOR_X = {"LEFT": 0.0, "CENTER": 0.5, "RIGHT": 1.0}
+
+
+def word_layout(text: str, measure: Callable[[str, float], float], px: float, res_x: float, res_y: float,
+                location: Sequence[float], anchor_x: str = "CENTER", anchor_y: str = "BOTTOM",
+                alignment_x: str = "CENTER", wrap_width: float = 0.0, skip: int = 0,
+                pitch: float = LINE_PITCH, italic: bool = False) -> list[dict[str, Any]]:
+    """Where each word of a caption line *text* sits, from the line strip's own settings: its font
+    (through *measure*, with bold already in it: :func:`bold_measure`) at *px* pixels in a *res_x* x
+    *res_y* frame, its *location* (0-1 of the frame), *anchor_x* / *anchor_y*, *alignment_x* and
+    *wrap_width* (0-1 of the frame's width, 0: none).
+
+    ``[{"text", "x", "y", "line"}]`` per word after the first *skip* (a speaker's label is laid out
+    but gets no strip): ``x`` is the word's left edge and ``y`` the strip's ``location[1]`` for a
+    single-line strip with the *line's* ``anchor_y`` (0-1 of the frame).  Lines break where Blender
+    breaks them (:func:`wrap_words`); the block is placed by its anchor on its widest line, each line
+    inside it by the alignment (all measured live); lines are *pitch* x *px* apart; *italic*: the
+    anchor box is :data:`ITALIC_OVERHANG_EM` wider."""
+    px, res_x, res_y = float(px), max(1.0, float(res_x)), max(1.0, float(res_y))
+    paragraphs = [p.split() for p in str(text or "").split("\n")]
+    rows: list[list[str]] = []
+    for para in paragraphs:
+        rows.extend(wrap_words(para, measure, px, float(wrap_width or 0.0) * res_x))
+    if not rows:
+        return []
+    widths = [float(measure(" ".join(r), px)) for r in rows]
+    block = max(widths)
+    box = block + (ITALIC_OVERHANG_EM * px if italic else 0.0)
+    left = float(location[0]) * res_x - box * _ANCHOR_X.get(str(anchor_x), 0.5)
+    n = len(rows)
+    out: list[dict[str, Any]] = []
+    seen = 0
+    for k, row in enumerate(rows):
+        if alignment_x == "LEFT":
+            start = 0.0
+        elif alignment_x == "RIGHT":
+            start = block - widths[k]
+        else:
+            start = (block - widths[k]) / 2.0
+        if anchor_y == "TOP":
+            shift = -k * pitch * px
+        elif anchor_y == "CENTER":
+            shift = ((n - 1) / 2.0 - k) * pitch * px
+        else:
+            shift = (n - 1 - k) * pitch * px
+        for j, word in enumerate(row):
+            if seen >= skip:
+                prefix = float(measure(" ".join(row[:j]) + " ", px)) if j else 0.0
+                out.append({"text": word, "x": (left + start + prefix) / res_x,
+                            "y": float(location[1]) + shift / res_y, "line": k})
+            seen += 1
+    return out
+
+
+def layout_signature(*settings: Any) -> str:
+    """A short fingerprint of what a Word-by-word caption's word strips depend on (text, font, bold,
+    italic, size, anchors, alignment, wrap width, place, transform, frame size, label), as the caller
+    lists them: floats are rounded, so a drag that ends where it began is no change."""
+    def norm(v: Any) -> Any:
+        if isinstance(v, float):
+            return round(v, 4)
+        if isinstance(v, (list, tuple)):
+            return tuple(norm(x) for x in v)
+        return v
+    raw = repr(tuple(norm(v) for v in settings))
+    return "{:08x}".format(zlib.crc32(raw.encode("utf-8")))
+
+
+
 def pick_channel(occupied: dict[int, list[tuple[float, float]]], names: dict[int, str], above: int,
                  span: tuple[float, float] | Sequence[tuple[float, float]], need: int = 1,
                  max_channel: int = MAX_CHANNEL, name: str = CHANNEL_NAME,
@@ -791,13 +946,154 @@ def _font_px(style: dict, res_x: float, res_y: float) -> int:
     return max(8, int(round(frac * res_y)))
 
 
-def default_max_chars(name: str, res_x: float, res_y: float) -> int:
-    """Characters per line that fit the safe width at the style's size (10-42)."""
-    style = STYLES[style_key(name) or "CLEAN"]
-    px = _font_px(style, res_x, res_y)
-    ratio = 0.64 if (style["use_bold"] or style["uppercase"]) else 0.54
+def default_max_chars(name: str, res_x: float, res_y: float, choices: dict[str, Any] | None = None) -> int:
+    """Characters per line that fit the safe width at the style's size (10-42); with the *choices* of
+    #594 at their size, bold and case."""
+    key = style_key(name) or "CLEAN"
+    style = STYLES[key]
+    ch = choices or {}
+    px = _font_px(style, res_x, res_y) * float(ch.get("size") or 1.0)
+    bold = ch["bold"] if "bold" in ch else style["use_bold"]
+    ratio = 0.64 if (bold or effective_case(key, ch.get("case")) == "UPPER") else 0.54
     chars = int(safe_area(frame_kind(res_x, res_y))["width"] * res_x / (px * ratio))
     return max(10, min(42, chars))
+
+
+# -- letter case and the other style choices (#594) ------------------------------------------------
+
+STYLE_CASE = "STYLE"
+CASES: dict[str, dict[str, str]] = {
+    STYLE_CASE: {"label": "As the Style", "description": "The style's own: capitals for Bold Pop, the words as spoken "
+                                                         "for the others"},
+    "AS_SPOKEN": {"label": "As Spoken", "description": "The words as the transcript has them"},
+    "UPPER": {"label": "UPPERCASE", "description": "Every letter a capital"},
+    "LOWER": {"label": "lowercase", "description": "Every letter small"},
+    "TITLE": {"label": "Title Case", "description": "Each word starts with a capital (a word already in "
+                                                    "capitals stays as it is)"},
+}
+_CASE_ALIASES = {"": STYLE_CASE, "DEFAULT": STYLE_CASE, "STYLES": STYLE_CASE, "SPOKEN": "AS_SPOKEN",
+                 "ORIGINAL": "AS_SPOKEN", "NORMAL": "AS_SPOKEN", "AS_IS": "AS_SPOKEN", "UPPERCASE": "UPPER",
+                 "CAPS": "UPPER", "CAPITALS": "UPPER", "ALL_CAPS": "UPPER", "LOWERCASE": "LOWER",
+                 "SMALL": "LOWER", "TITLECASE": "TITLE", "TITLE_CASE": "TITLE", "CAPITALISE": "TITLE",
+                 "CAPITALIZE": "TITLE"}
+CHOICE_KEYS = ("case", "font", "bold", "italic", "size", "color", "highlight")
+MIN_SIZE_SCALE, MAX_SIZE_SCALE = 0.25, 4.0
+
+
+def case_key(name: Any) -> str | None:
+    """``"uppercase"``, ``"Title Case"``, ``"as spoken"``... -> a :data:`CASES` key; None if unknown."""
+    key = re.sub(r"[^A-Z]+", "_", str(name or "").upper()).strip("_")
+    key = _CASE_ALIASES.get(key, key)
+    return key if key in CASES else None
+
+
+def effective_case(style: Any, case: Any = None) -> str:
+    """The case a caption in *style* is written in: *case* when it is one of the four, else the style's
+    own (Bold Pop: ``"UPPER"``)."""
+    key = case_key(case)
+    if key and key != STYLE_CASE:
+        return key
+    return "UPPER" if STYLES.get(style_key(style) or "", {}).get("uppercase") else "AS_SPOKEN"
+
+
+def _title_word(word: str) -> str:
+    letters = [ch for ch in word if ch.isalpha()]
+    if len(letters) >= 2 and all(ch.isupper() for ch in letters):
+        return word                     # NASA, OK, USB: already capitals
+    for i, ch in enumerate(word):
+        if ch.isalpha():
+            return word[:i] + ch.upper() + word[i + 1:].lower()
+    return word
+
+
+def apply_case(text: str, case: str) -> str:
+    """*text* in *case* (a :data:`CASES` key; the style's own and "as spoken" leave it as it is)."""
+    key = case_key(case)
+    if key == "UPPER":
+        return text.upper()
+    if key == "LOWER":
+        return text.lower()
+    if key == "TITLE":
+        return re.sub(r"[^\s]+", lambda m: _title_word(m.group(0)), text)
+    return text
+
+
+def _srgb_to_linear(v: float) -> float:
+    return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+
+
+def _parse_color(value: Any, what: str) -> tuple[float, float, float, float] | None:
+    """A colour argument -> linear RGBA (what a text strip's ``color`` holds), or None (as the style has
+    it): ``"#RRGGBB"`` / ``"#RRGGBBAA"`` as seen on screen (sRGB), or a list of 3-4 numbers 0-1 in
+    Blender's own (linear) values."""
+    if value is None or value == "" or value == ():
+        return None
+    if isinstance(value, str):
+        text = value.strip().lstrip("#")
+        if not re.fullmatch(r"(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})", text):
+            raise CaptionsError("{:s} is a colour like \"#FFD21A\" or a list of 3-4 numbers 0-1, not {!r}".format(
+                what, value))
+        vals = [int(text[i:i + 2], 16) / 255.0 for i in range(0, len(text), 2)]
+        rgb = [_srgb_to_linear(v) for v in vals[:3]]
+        return (rgb[0], rgb[1], rgb[2], vals[3] if len(vals) == 4 else 1.0)
+    try:
+        nums = [float(v) for v in value]
+    except (TypeError, ValueError):
+        raise CaptionsError("{:s} is a colour like \"#FFD21A\" or a list of 3-4 numbers 0-1, not {!r}".format(
+            what, value)) from None
+    if len(nums) not in (3, 4) or any(math.isnan(v) or v < 0.0 or v > 1.0 for v in nums):
+        raise CaptionsError("{:s} needs 3 or 4 numbers between 0 and 1, not {!r}".format(what, value))
+    return (nums[0], nums[1], nums[2], nums[3] if len(nums) == 4 else 1.0)
+
+
+def _tri(value: Any, what: str) -> bool | None:
+    """True / False, or None (as the style has it): also ``"on"`` / ``"off"`` / ``"style"``."""
+    if value is None or isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("", "style", "default", "auto", "as the style", "none"):
+        return None
+    if text in ("on", "true", "yes", "1"):
+        return True
+    if text in ("off", "false", "no", "0"):
+        return False
+    raise CaptionsError("{:s} is true, false or left out (as the style has it), not {!r}".format(what, value))
+
+
+def check_style_params(case: Any = None, font: Any = None, bold: Any = None, italic: Any = None,
+                       size: Any = None, text_color: Any = None, highlight_color: Any = None) -> dict[str, Any]:
+    """``add_captions``' style choices (#594) checked: only what differs from "as the style has it",
+    ``{"case", "font", "bold", "italic", "size" (a scale of the style's), "color", "highlight"}``
+    (colours as linear RGBA tuples); raises :class:`CaptionsError` with what's wrong."""
+    out: dict[str, Any] = {}
+    key = case_key(case)
+    if key is None:
+        raise CaptionsError("Unknown case {!r}: use one of {:s}.".format(
+            case, ", ".join("{:s} ({:s})".format(k, c["label"]) for k, c in CASES.items())))
+    if key != STYLE_CASE:
+        out["case"] = key
+    if font is not None and str(font).strip():
+        out["font"] = str(font).strip()
+    for name, value in (("bold", bold), ("italic", italic)):
+        flag = _tri(value, name)
+        if flag is not None:
+            out[name] = flag
+    if size not in (None, "", 0, 0.0):
+        try:
+            scale = float(size)
+        except (TypeError, ValueError):
+            raise CaptionsError("size is a scale of the style's size (1 = as the style has it), not {!r}".format(
+                size)) from None
+        if math.isnan(scale) or not MIN_SIZE_SCALE <= scale <= MAX_SIZE_SCALE:
+            raise CaptionsError("size is a scale of the style's size between {:g} and {:g} (1 = as the style "
+                                "has it), not {!r}".format(MIN_SIZE_SCALE, MAX_SIZE_SCALE, size))
+        if abs(scale - 1.0) > 1e-6:
+            out["size"] = round(scale, 4)
+    for name, value, what in (("color", text_color, "text_color"), ("highlight", highlight_color, "highlight_color")):
+        rgba = _parse_color(value, what)
+        if rgba is not None:
+            out[name] = tuple(round(v, 5) for v in rgba)
+    return out
 
 
 # -- position (#542) ---------------------------------------------------------------------
@@ -849,10 +1145,12 @@ def placement(position: str, margin: float, res_x: float, res_y: float) -> tuple
 
 
 def resolve_style(name: str, res_x: float, res_y: float, position: str = "BOTTOM",
-                  margin: float = 0.0) -> dict[str, Any]:
+                  margin: float = 0.0, choices: dict[str, Any] | None = None) -> dict[str, Any]:
     """The text-strip properties for style *name* at *res_x* x *res_y* (``"props"``), and how
-    captions are made with it (``"uppercase"``, ``"max_lines"``, ``"pop"``, ``"highlight"``,
-    ``"font_file"``, ``"kind"``); placed at *position* with *margin* (:func:`placement`)."""
+    captions are made with it (``"case"`` / ``"uppercase"``, ``"max_lines"``, ``"pop"``, ``"highlight"``,
+    ``"font_file"``, ``"kind"``); placed at *position* with *margin* (:func:`placement`).  *choices*
+    (:func:`check_style_params`, #594): the artist's own case, bold, italic, size, text and highlight
+    colour over the style's (the font is the caller's: ``choices["font"]``)."""
     key = style_key(name)
     if key is None:
         raise CaptionsError("Unknown caption style {!r}: pick one of {:s}.".format(
@@ -862,9 +1160,11 @@ def resolve_style(name: str, res_x: float, res_y: float, position: str = "BOTTOM
     safe = safe_area(kind)
     pos = position_key(position) or "BOTTOM"
     anchor_y, location = placement(pos, margin, res_x, res_y)
+    ch = dict(choices or {})
     props = {
-        "font_size": _font_px(s, res_x, res_y), "color": tuple(s["color"]), "use_bold": s["use_bold"],
-        "use_italic": False, "use_outline": s["use_outline"], "outline_color": tuple(s["outline_color"]),
+        "font_size": max(8, int(round(_font_px(s, res_x, res_y) * float(ch.get("size") or 1.0)))),
+        "color": tuple(ch.get("color") or s["color"]), "use_bold": bool(ch["bold"]) if "bold" in ch else s["use_bold"],
+        "use_italic": bool(ch.get("italic", False)), "use_outline": s["use_outline"], "outline_color": tuple(s["outline_color"]),
         "outline_width": s["outline_width"], "use_shadow": s["use_shadow"], "shadow_color": tuple(s["shadow_color"]),
         "shadow_offset": s["shadow_offset"], "shadow_blur": s["shadow_blur"], "use_box": s["use_box"],
         "anchor_x": "CENTER", "anchor_y": anchor_y, "alignment_x": "CENTER",
@@ -872,16 +1172,19 @@ def resolve_style(name: str, res_x: float, res_y: float, position: str = "BOTTOM
     }
     if s["use_box"]:
         props.update(box_color=tuple(s["box_color"]), box_margin=s["box_margin"], box_roundness=s["box_roundness"])
-    return {"key": key, "label": s["label"], "kind": kind, "props": props, "uppercase": s["uppercase"],
-            "max_lines": s["max_lines"], "pop": s["pop"], "highlight": s["highlight"], "font_file": FONT_FILE,
-            "position": pos, "margin": max(0.0, min(float(margin or 0.0), MAX_MARGIN))}
+    case = effective_case(key, ch.get("case"))
+    highlight = (tuple(ch["highlight"]) if ch.get("highlight") else s["highlight"]) if s["highlight"] else None
+    return {"key": key, "label": s["label"], "kind": kind, "props": props, "uppercase": case == "UPPER",
+            "case": case, "max_lines": s["max_lines"], "pop": s["pop"], "highlight": highlight,
+            "font_file": FONT_FILE, "position": pos, "choices": ch,
+            "margin": max(0.0, min(float(margin or 0.0), MAX_MARGIN))}
 
 
 # -- animation presets (#542) -----------------------------------------------------------------
 
 ANIM_STYLE = "STYLE"        # the style's own: Bold Pop pops its font size, the others don't move
 ANIMATIONS: dict[str, dict[str, str]] = {
-    ANIM_STYLE: {"label": "Style's", "description": "The style's own: Bold Pop pops in, the others don't move"},
+    ANIM_STYLE: {"label": "As the Style", "description": "The style's own: Bold Pop pops in, the others don't move"},
     "NONE": {"label": "None", "description": "No animation: each caption is just there"},
     "FADE": {"label": "Fade", "description": "Each caption fades in and out"},
     "SLIDE_UP": {"label": "Slide Up", "description": "Each caption rises into place as it fades in, and fades out"},
@@ -1333,15 +1636,15 @@ def text_box(lines: Sequence[str], font_px: float, measure: Callable[[str, float
 # -- a caption laid out again for another frame (Make Vertical, #497) ---------------------
 
 def relayout_limits(name: str, chars: int, lines: int, old_res: Sequence[float] | None,
-                    new_res: Sequence[float]) -> tuple[int, int]:
+                    new_res: Sequence[float], choices: dict[str, Any] | None = None) -> tuple[int, int]:
     """Characters per line and lines for a caption moving from *old_res* to *new_res*: the
     style's own number for the new frame when the caption used the style's number for the old
     one (or none is known), else the caption's own number, at most what fits the new frame."""
     key = style_key(name) or "CLEAN"
     style = STYLES[key]
-    fit = default_max_chars(key, *new_res)
+    fit = default_max_chars(key, *new_res, choices)
     chars = int(chars or 0)
-    if chars <= 0 or old_res is None or chars == default_max_chars(key, *old_res):
+    if chars <= 0 or old_res is None or chars == default_max_chars(key, *old_res, choices):
         new_chars = fit
     else:
         new_chars = min(chars, fit)
@@ -1353,7 +1656,7 @@ def relayout_limits(name: str, chars: int, lines: int, old_res: Sequence[float] 
 
 
 def hand_edits(look: dict[str, Any], name: str, res_x: float, res_y: float, position: str = "BOTTOM",
-               margin: float = 0.0) -> list[str]:
+               margin: float = 0.0, choices: dict[str, Any] | None = None) -> list[str]:
     """What of a caption line's layout differs from what style *name* gives at *res_x* x *res_y*
     (the frame it was made for) at *position* / *margin* (#542); empty when it is as the style
     made it.
@@ -1366,7 +1669,7 @@ def hand_edits(look: dict[str, Any], name: str, res_x: float, res_y: float, posi
     key = style_key(name)
     if key is None:
         return ["style"]
-    props = resolve_style(key, res_x, res_y, position, margin)["props"]
+    props = resolve_style(key, res_x, res_y, position, margin, choices)["props"]
     out = []
     loc = tuple(look.get("location") or (0.0, 0.0))
     if len(loc) < 2 or abs(loc[0] - props["location"][0]) > 1e-3 or abs(loc[1] - props["location"][1]) > 1e-3:
@@ -1389,7 +1692,7 @@ def hand_edits(look: dict[str, Any], name: str, res_x: float, res_y: float, posi
 def relayout(text: str, name: str, res_x: float, res_y: float, frame_start: int, frame_end: int,
              chars: int = 0, lines: int = 0, old_res: Sequence[float] | None = None,
              word_frames: Sequence[float] | None = None, position: str = "BOTTOM", margin: float = 0.0,
-             label: str = "") -> dict[str, Any]:
+             label: str = "", choices: dict[str, Any] | None = None) -> dict[str, Any]:
     """A caption (its *text* as shown, from *frame_start* to *frame_end*, end exclusive) laid
     out again in style *name* for a *res_x* x *res_y* frame, by the same rules Auto Captions
     uses there: the style's size and place (:func:`resolve_style`, at the caption's own
@@ -1403,8 +1706,8 @@ def relayout(text: str, name: str, res_x: float, res_y: float, frame_start: int,
 
     Returns ``{"style": resolve_style(...), "chars", "lines", "pieces": [{"text", "lines",
     "frame_start", "frame_end", "words": [{"w", "frame"}]}]}`` (one piece when it fits)."""
-    st = resolve_style(name, res_x, res_y, position, margin)
-    chars, lines = relayout_limits(st["key"], chars, lines, old_res, (res_x, res_y))
+    st = resolve_style(name, res_x, res_y, position, margin, choices)
+    chars, lines = relayout_limits(st["key"], chars, lines, old_res, (res_x, res_y), choices)
     frame_start, frame_end = int(frame_start), int(max(frame_end, frame_start + 1))
     text = without_label(" ".join(str(text or "").split()), label) if label else text
     words = str(text or "").split()
@@ -1424,9 +1727,7 @@ def relayout(text: str, name: str, res_x: float, res_y: float, frame_start: int,
     def piece(group: list[dict], fs: int, fe: int) -> dict[str, Any]:
         ln = layout_lines([w["w"] for w in group], fit, lines, force=True) or []
         if label and ln:
-            ln[0] = with_label(ln[0], label)
-            if st["uppercase"]:
-                ln[0] = ln[0].upper()           # the label in the style's case, as _place writes it
+            ln[0] = with_label(ln[0], apply_case(label, st["case"]))     # the label in the caption's case, as _place writes it
         return {"text": "\n".join(ln), "lines": ln, "frame_start": fs, "frame_end": fe,
                 "words": [{"w": w["w"], "frame": int(round(w["start"]))} for w in group], "label": label}
 

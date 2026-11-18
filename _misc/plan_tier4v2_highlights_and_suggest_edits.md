@@ -1,8 +1,7 @@
 # Tier 4v, part 2 — Highlights and Suggest Edits (design)
 
-**Status**: 📝 Proposal (2026-11-18), for the maintainer to accept or change. No code yet.
-**Covers**: Video 8, Highlights (#571) and Video 5, Suggest Edits (#378). They share one
-pipeline, so they are designed together.
+**Status**: ✅ Accepted by the maintainer on 2026-11-18, with the decisions in section 6. Highlights is planned for **1.1.45**; 1.1.44 is frozen for hand testing. Suggest Edits is shelved to Tier 5 (section 4). No code yet.
+**Covers**: Video 8, Highlights (#571). Video 5, Suggest Edits (#378), was designed with it and is now shelved (section 4).
 **Builds on**: local transcription (#375), Remove Silences (#331, #539), Make Vertical
 (#333) and Reframe layouts (#606), Auto Captions (#376, #594), Edit by Transcript (#498).
 **Clean room**: our own design. No prompt, text or scoring rule is taken from another
@@ -156,16 +155,18 @@ the rank request from the first minutes):
 The criteria, the weights and the two prompts live in one editable skill chapter
 (`skills/video_highlights.md`), so a channel can tune them without touching code.
 
-### 3.6 The picks list: one store, three views
+### 3.6 The picks list: one store, a panel of its own
 - The picks are stored on the scene as one custom property holding JSON. Per pick: the
   media file's key and the first and last word position in its transcript (this is the
   identity, it does not change when the edit is cut), the frames it had when found, a
   signature of the timeline at that moment (as Edit by Transcript keeps), title, hook,
   reason, scores, state. They survive saving and reopening.
-- **Chat card**: a new card kind with one row per pick (title, length, reason) and the
-  buttons Preview, Make Short, Dismiss. Today a new card needs its own branch in the chat
-  code; this adds a small general "list card" that Suggest Edits uses too.
-- **Coworker tab**: the same list as a panel, so it is there after the chat has moved on.
+- **A Highlights panel** in the Sequencer's Coworker tab is the home of the list, built like
+  the transcript tools: one row per pick with its title, length and reason, and the buttons
+  Preview, Make Short and Dismiss, each with an icon. It works the same in Blender and in
+  Bforartists.
+- The chat gets a short text summary of the picks with a pointer to the panel. A list card
+  with buttons in the chat is not part of the first version.
 - **Timeline markers** (a switch, off by default): one marker pair per pick on the long
   edit, removable in one click. Markers are the only thing Highlights ever adds to the long edit.
 - **Preview** sets the preview range to the pick, plays, and puts the range back afterwards.
@@ -173,37 +174,41 @@ The criteria, the weights and the two prompts live in one editable skill chapter
   picks are then placed again from their words: still whole and in order means new frames;
   partly cut away means "changed, check it"; gone means "no longer in the edit". Preview and
   Make Short always check this first, the way Apply in Edit by Transcript refuses stale text.
+- **One look for every wand panel.** Highlights adds a third kind of wand panel after the
+  transcript and caption tools. Before it is built, a short rule set is written and applied
+  to the existing ones: where options go, where results go, the order and wording of
+  buttons, icons on every choice, the tooltip line. It is its own small issue (W0 in section 7).
 
-### 3.7 Make Short
-- A copy of the scene (the method Make Vertical uses, with the fix that keeps a copy on
-  save; that function gets a name and tag of its own instead of the fixed " Vertical"),
-  then a **trim made for this job**. Remove Silences' cutter cannot be used: it refuses the
-  whole edit when any strip it cannot cut lies in a removed stretch, and here nearly the
-  whole edit is removed. The trim:
-  - deletes strips wholly outside the range, whatever their kind, with their keys;
-  - trims strips that cross a border, and refuses, naming the strip, only when such a strip
-    cannot be trimmed (a locked strip, a transition whose inputs fall outside);
-  - puts the borders in the pause before the first and after the last word, not on the word;
-  - moves the rest to frame 1, sets the frame range, moves or drops markers, and moves the
-    captions' stored word times with them;
-  - clears what the copy must not inherit (the picks list, a vertical tag).
-- Named `Short 01: <title>`, tagged with the scene and words it came from.
-- A copy and trim, not "a new scene with only some strips": effects, channels, colour and
-  audio settings come along for free, and strips only point at media, so the file barely
-  grows. The build issue measures it on an edit of 500 strips before settling this.
+### 3.7 Make Short (the result is ready to render)
+- **Not destructive.** A short is a copy of the scene (the method Make Vertical uses, with
+  the fix that keeps a copy on save; that function gets a name and tag of its own instead
+  of the fixed " Vertical") whose **frame range is set to the pick**. Nothing is deleted:
+  the rest of the edit is still there outside the range, so the artist can widen or move
+  the short by dragging the range. The borders sit in the pause before the first and after
+  the last word, not on the word.
+- **Trim to Range** is a separate button in the panel for when a clean scene is wanted: it
+  removes what lies outside the range and moves the rest to frame 1. It deletes strips
+  wholly outside, trims those crossing a border, and refuses, naming the strip, only when
+  such a strip cannot be trimmed. It is optional and can come after the first version.
+- Named `Short 01: <title>`, tagged with the scene and words it came from. The picks list
+  and a vertical tag are not inherited by the copy.
 - The transcript comes along by itself, because it is stored per media file, not per scene.
-- **Polish chain**, each step optional and each an existing wand:
-  1. Remove Silences, with a tighter setting than for a long edit.
-  2. Make Vertical inside the short (not a second copy), in the aspect chosen (9:16, 1:1 or
-     keep), with the layout the kind of video suggests (Reframe, #606, to change it).
+- **Polish chain**, each step optional, each an existing wand, each limited to the range:
+  1. Remove Silences, with a tighter setting than for a long edit. It needs a "this frame
+     range only" mode, which it does not have today.
+  2. Make Vertical inside the short (not a second copy), 9:16, with the layout the kind of
+     video suggests. Reframe (#606) changes it afterwards. Square is left for later.
   3. Auto Captions, in the style last used.
-  4. A hook title over the first three seconds, from the pick's hook line.
-- One undo removes the whole short. That holds because the three wands push no undo of
-  their own when called from one operator, with two conditions: the transcript must exist
-  before (transcribing runs as its own job with its own undo), and a tracked layout is not
-  part of the chain (Follow Subject works in the background and pushes its own). The steps
-  are reported in one line each.
-- Rendering is left to the artist in the first version (see section 6).
+  4. A hook title over the first three seconds, from the pick's hook line (a small new tool).
+- **Output set for the common case**: the short's render settings are set to an MP4 file
+  with H.264 video and AAC sound, named after the short, next to the .blend. Pressing
+  Render Animation gives a file ready to upload. Rendering itself stays the artist's click
+  in the first version.
+- One undo removes the whole short. That holds because the wands push no undo of their own
+  when called from one operator, with two conditions: the transcript must exist before
+  (transcribing runs as its own job with its own undo), and a tracked layout is not part of
+  the chain (Follow Subject works in the background and pushes its own). The steps are
+  reported in one line each.
 
 ### 3.8 Chat tools
 - `suggest_highlights(kind, max_seconds, count)`: starts the pipeline as a background job,
@@ -215,44 +220,46 @@ The criteria, the weights and the two prompts live in one editable skill chapter
 - `make_short(pick, steps)`.
 - So *"find me three shorts in this podcast and build the best one"* works in the chat.
 
-### 3.9 Without speech
-Films, music videos and showcases say little, so the transcript cannot find their moments.
-The first version says so and stops ("not enough speech to pick from"). A later version
-looks at the footage with the vision model through contact sheets; it is listed in section 6.
+### 3.9 Without speech (timelapses, showcases, music videos)
+The transcript cannot find the moments of footage that says nothing, so this needs its own
+way of looking. It would not be random, but it would be a weaker judge than the transcript
+path, and it is honest to say so in the dialog.
 
-## 4. Suggest Edits on the same pipeline (#378)
+- **What the code can measure without any model**, from small sampled frames: how much the
+  picture changes (motion, and for a timelapse the stretch where the most happens), cuts,
+  sharpness, brightness and colour range, and from the sound the loud and quiet parts and
+  the beat. This already gives sensible candidates: the busiest continuous stretch, the
+  stretch between two cuts with the most change, the part where the music lifts.
+- **What a vision model adds**: it looks at a contact sheet per candidate and says which
+  look best and what they show (a finished piece, a reveal, a face), with a reason. This
+  is the "pretty shots" judgement. On Local it needs a model that can see; on a Remote
+  engine the frames would leave the machine, which the dialog must say.
+- **Timelapse preset**: the usual short from a timelapse is not a cut-out but the whole
+  thing, or its best stretch, sped up to fit the length, ending on the finished result.
+  So the kind "Timelapse" offers that: pick the stretch, set the speed to land on 15, 30 or
+  60 seconds, and hold the last frame for a moment.
+- **Order of work**: the first version of Highlights is the speech path and stops with a
+  clear message on footage without speech. The measured signals and the Timelapse preset
+  are the next step (V1 in section 7). The vision ranking comes after that (V2).
 
-Suggest Edits is the same machine pointed at a different question. It uses the reader, the
-checked answer, the list card and "apply as one undo".
+## 4. Suggest Edits (#378): shelved to Tier 5, as a wizard
 
-- The model chooses from a **fixed menu of edit kinds**, and points at sentences or words by
-  number. It never writes code or frame numbers. Each kind maps to one existing tool.
+Decided on 2026-11-18: not built with Highlights. An editor usually knows what they want;
+what they need is the slog taken away. So Suggest Edits should not guess five edits, it
+should ask, then do. The maintainer will first look at how other editors offer this.
 
-| Edit kind | What the model gives | What applies it | Exists today? |
-|---|---|---|---|
-| Tighten pauses | Nothing | Remove Silences on the edit | Yes |
-| Tighten one stretch | A stretch of sentences | Remove Silences limited to a frame range | No: it takes strips, not a range |
-| Drop a retake, a false start or filler | The sentences or words to drop | Edit by Transcript | Yes |
-| Caption style and motion | A style and animation from the list | Auto Captions | Yes |
-| Vertical layout | A layout from the list | Reframe | In work (#606) |
-| Punch in for emphasis | One sentence | A short scale key on the picture strip | No tool yet |
-| Hook title | The line | A text strip over the first seconds | No tool yet (also needed by Make Short) |
-| Chapters | A sentence and a title per chapter | Timeline markers | No (the open box of #542) |
+The shape to design later:
 
-The first version of Suggest Edits ships the kinds marked Yes plus the hook title, which
-Make Short needs anyway. The others join the menu as their tools arrive.
+1. **Suggest Edits** opens a wizard.
+2. **What do you want to do?** Remove fluff, tighten, balance the colour of the shots to a
+   reference frame, organise and pick takes, order the shots to a script, insert B-roll.
+3. **How?** Long shots or short and punchy, with or without transitions, and so on,
+   depending on the answer to 2.
+4. **Confirm**, and Coworker does the edit in context, as one piece of work that can be undone.
 
-#378 also planned a contact sheet of the footage for the model. That is left out of the
-first version on purpose: text only, so nothing but the transcript leaves the machine on a
-Remote engine and a Local model without vision can do it. It returns with the vision path.
-
-- Up to five suggestions, the recommended ones marked. Each row: what, why, Preview where
-  it makes sense, Apply. "Apply the recommended ones" applies them in a safe order (cuts
-  first, then layout, then captions), still one undo each.
-- A suggestion that no longer fits after an earlier one was applied is checked again before
-  it runs, and greyed out if its sentences are gone.
-- On a fresh short from Make Short this is the natural next click: the short is built, and
-  Suggest Edits proposes how to make it better.
+Ideas noted for it: finding retakes and similar shots and grouping the strips by colour, so
+the editor picks the take. The pieces Highlights builds are what such a wizard would stand
+on: the scene reader, the checked answers, the wand panel rules and the range-limited wands.
 
 ## 5. How we know the picks are good, without private footage
 
@@ -268,39 +275,47 @@ Remote engine and a Local model without vision can do it. It returns with the vi
   the second). This is run when the prompts or criteria change, and its numbers go into the PR.
 - **Hand test** on real footage by the maintainer, as with the other video tools.
 
-## 6. Decisions asked of the maintainer
+## 6. Decisions (maintainer, 2026-11-18)
 
-| # | Question | Proposal |
+| # | Question | Decided |
 |---|---|---|
 | 1 | One pass or two? | Two: find per window, then rank once. |
-| 2 | Where do picks show? | Stored on the scene; shown as a chat card and in the Coworker tab; timeline markers as a switch. |
-| 3 | How is the short's scene made? | Copy the scene and trim. |
-| 4 | Can a short join two places (setup at 12:10, payoff at 14:30)? | Not in the first version. The stored pick already allows a list of ranges, so it can come later without a new format. |
-| 5 | Presets | Length 15 / 30 / 60 s (default 60), count 3 to 10 (default 5), kind of video (Auto), aspect 9:16 / 1:1 / keep (default 9:16), polish steps on by default. |
-| 6 | Video without speech | First version stops with a clear message. Vision path later. |
-| 7 | Rendering the shorts | Left to the artist first. A "Render all shorts" queue later. |
-| 8 | What a Remote engine receives | Transcript text only, said in the dialog. |
-| 9 | Which release | Not 1.1.44, which is in hand testing. Proposed as the main feature of 1.1.45. |
+| 2 | Where do picks show? | A dedicated Highlights panel in the Coworker tab, like the transcript tools; markers as a switch. Wand panels get one clear set of presentation rules. |
+| 3 | How is the short's scene made? | A copy of the scene with its frame range set to the pick, not destructive; cutting away the rest is a separate, optional step. The result is ready to render. |
+| 4 | A short joined from two places | Out of scope for now. |
+| 5 | Presets | Length 15 / 30 / 60 s (default 60), count 3 to 10 (default 5), kind of video (Auto), polish steps on by default. |
+| 6 | Video without speech | Not in the first version; planned as its own steps (3.9): measured signals and a Timelapse preset first, vision ranking after. |
+| 7 | Rendering | Left to the artist; the short's output is preset to MP4 (H.264, AAC). |
+| 8 | What leaves the machine | Whatever engine Coworker is set to receives the transcript text: nothing with Local, the chosen provider with Remote or an external agent. The dialog says which. |
+| 9 | Which release | 1.1.45. 1.1.44 is frozen after the work already running, for hand testing. |
+| 10 | Aspect | Vertical (9:16). Square later. |
+| 11 | Suggest Edits | Shelved to Tier 5 as a wizard (section 4). |
 
-## 7. Build plan (issues to file once this is accepted)
+## 7. Build plan (1.1.45)
 
-| Step | Issue to file | Size | Needs | Done when |
+| Step | Issue | Size | Needs | Done when |
 |---|---|---|---|---|
+| W0 | Wand panels: one set of presentation rules, applied to the existing panels | S | — | The rules are written down and the transcript, caption and reframe panels follow them. |
 | H1 | Scene reader: every speaking strip, merged, numbered sentences, windows; `read_edit_sentences` | L | — | On made-up edits (two media files, two microphones, a clip used twice, a muted and a retimed strip) the sentences are in playing order, none doubled, and the skipped parts are reported. |
 | H2 | `ask_json`: schema-checked answers on Local and Remote, one retry; request function passes extra fields; schema support of the shipped llama.cpp probed | M | — | A fake server and the real Local server both return checked answers; a wrong answer is retried once and then reported. |
 | H3 | Find and rank, the criteria chapter, the written test transcripts (with made-up word times) and the model check; time measured on the reference card | M | H1, H2 | At least four of six planted moments in the top five on the written transcripts; time per hour of talk stated. |
-| H4a | Picks store on the scene, re-placing after cuts, Preview, markers, Coworker tab panel | M | H1 | Picks survive save and reopen; after a cut they are placed again or marked changed or gone. |
-| H4b | List card in the chat (rows with their own buttons), used by Highlights and Suggest Edits | M | H4a | The card shows the stored picks and its buttons act on the right pick in every chat layout. |
-| H5 | Make Short: named scene copy, the trim, the hook title tool, the polish chain, one undo | L | H4a | A pick becomes a short scene on edits with metas, effects, keys and word-motion captions; one undo removes it; the long edit is byte-for-byte unchanged. |
+| H4 | Picks store on the scene, re-placing after cuts, the Highlights panel, Preview, markers | M | H1, W0 | Picks survive save and reopen; after a cut they are placed again or marked changed or gone; the panel works in Blender and Bforartists. |
+| H5 | Make Short: named scene copy with its range set, range-limited Remove Silences, the hook title tool, the polish chain, MP4 output preset, one undo | M | H4 | A pick becomes a short scene that renders to an MP4 as it is; one undo removes it; the long edit is unchanged. |
 | H6 | Chat tools as a background job, and the External Agent and Harness path | M | H3, H5 | *"Find three shorts and build the best one"* works on Local, Remote and External Agent. |
-| S1 | Suggest Edits (#378, rescoped onto H1, H2, H4b): the menu, checks, Apply | M | H1, H2, H4b; #606 for layouts | On a made-up clip it proposes at least three edits that apply cleanly, each one undo. |
 
-H1 and H2 can start together; H3 and H4a follow in parallel; then H4b and H5; then H6 and S1.
+W0, H1 and H2 can start together; H3 and H4 follow in parallel; then H5; then H6.
 
-Later, Tier 5: a short joined from two places; the vision path for footage without speech;
-energy from the sound (laughter, loudness); words through speed changes and inside metas;
-a render queue for all shorts; picks tuned per platform (length and safe areas); punch-in
-and chapters in the Suggest Edits menu.
+After that:
+
+| Step | What | Needs |
+|---|---|---|
+| H7 | Trim to Range: cut a short's scene down to its range | H5 |
+| V1 | Footage without speech: measured signals (change, cuts, sound), the Timelapse preset | H4, H5 |
+| V2 | Vision ranking of candidates from contact sheets | V1 |
+
+Later, Tier 5: a short joined from two places; energy from the sound (laughter); words
+through speed changes and inside metas; a render queue for all shorts; picks tuned per
+platform; square output; the Suggest Edits wizard (section 4).
 
 ## 7a. The two answers the model gives (sketch; the wording of the prompts is settled in H3)
 

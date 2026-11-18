@@ -151,6 +151,16 @@ and **transitions**. Each carries agent metadata (description, tags,
 inputs with ranges) so Coworker can pick and drive them (procedural first, master §0).
 Browse from the Asset Browser and the toolshelf's *Titles ▾ / Transitions ▾ / Looks ▾*.
 
+### Video 7 — Edit by Transcript (#498, done in 1.1.44)
+Edit the video by editing its text in the Text Editor: delete or move lines, Apply cuts the
+strips. Merged with #587 and #596.
+
+### Video 8 — Highlights (#571, L, 1.1.45)
+Find pieces under 60 seconds in a long edit from its transcript and build each as its own
+vertical, captioned scene that is ready to render. Design and build plan:
+`plan_tier4v2_highlights_and_suggest_edits.md`. Suggest Edits (Video 5, #378) is shelved to
+Tier 5 as a wizard; see section 4 of that note.
+
 ## 5. The week
 
 | Day | Work | Test |

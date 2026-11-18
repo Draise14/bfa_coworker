@@ -170,9 +170,15 @@ def agent_icon_args(plain: str) -> dict[str, Any]:
         import bpy.utils.previews  # pylint: disable=import-error,import-outside-toplevel
         import os
         if _preview["set"] is None:
-            previews = bpy.utils.previews.new()
             path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui_gpu", "icons", "wizard_32.png")
-            previews.load(AGENT_ICON_NAME, path, "IMAGE")
+            if not os.path.isfile(path):
+                return {"icon": plain}          # no picture shipped: today's icon, not a blank
+            previews = bpy.utils.previews.new()
+            try:
+                previews.load(AGENT_ICON_NAME, path, "IMAGE")
+            except Exception:  # pylint: disable=broad-exception-caught
+                bpy.utils.previews.remove(previews)       # none made, none leaked per redraw
+                raise
             _preview["set"] = previews
         return {"icon_value": _preview["set"][AGENT_ICON_NAME].icon_id}
     except Exception:  # pylint: disable=broad-exception-caught

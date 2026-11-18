@@ -133,13 +133,34 @@ class TestAgentLabel(_Case):
         self.assertIn("Coworker", off)
         self.assertNotIn("Wizard", off)
 
-    def test_copy_whole_chat_stays_plain(self):
+    def test_copy_whole_chat_and_copy_message_stay_plain(self):
         hist = [{"role": "user", "content": "go", "turn_start": True},
                 {"role": "assistant", "content": "Done."}]
-        for flag in (True, False):
-            mw.set_enabled_for_tests(flag)
-            text = cv.chat_text(hist) if hasattr(cv, "chat_text") else "Coworker:\n"
-            self.assertNotIn("Wizard", text)
+        mw.set_enabled_for_tests(True)
+        whole = cv.transcript(hist)                   # the real Copy Whole Chat text
+        self.assertIn("Coworker:"+chr(10)+"Done.", whole)
+        self.assertNotIn("Wizard", whole)
+        shown, canvas = self.draw(hist)
+        self.assertIn("Wizard", shown)                # drawn as the Wizard ...
+        copies = []
+        for widget in {w for _r, w in canvas.hit_areas if w.startswith("copymsg:")}:     # ... Copy Message
+            clicked = lay.Canvas(st.Style(), lay.fixed_measure(0.55), lay.InteractionState(clicked=widget))
+            copies += [text for kind, text in cv.ChatView().draw(
+                clicked, lay.Rect(0, 0, 900, 5000), hist, live=None, compact=False) if kind == "copy"]
+        self.assertEqual(copies, ["Done."])
+        self.assertNotIn("Wizard", "".join(copies))
+
+    def test_the_start_button_tooltip_says_what_the_button_says(self):
+        cases = (("Start", False, "Start Wizard", "Start Coworker"), ("Start", True, "Stop Wizard", "Stop Coworker"),
+                 ("Connect", False, "Connect to the agent app", "Connect to the agent app"),
+                 ("Start Bridge", False, "Start Bridge", "Start Bridge"),
+                 ("Start Bridge", True, "Stop Bridge", "Stop Bridge"))
+        for label, running, magic, plain in cases:
+            mw.set_enabled_for_tests(True)
+            self.assertEqual(sf.start_tip(label, running), magic)
+            mw.set_enabled_for_tests(False)
+            self.assertEqual(sf.start_tip(label, running), plain)
+        self.assertEqual(sf.ChatSurface().top_start_label, "Start")
 
 
 class TestWizardIcon(_Case):
@@ -229,6 +250,42 @@ class TestWizardIcon(_Case):
         self._with({"GHOST_ENABLED"}, bfa=False)
         sys.modules["bpy.utils.previews"].new = lambda: (_ for _ in ()).throw(RuntimeError("background"))
         self.assertEqual(mw.agent_icon_args("GHOST_ENABLED"), {"icon": "GHOST_ENABLED"})
+
+
+class TestWizardPngRobust(_Case):
+    """The shipped PNG is missing, or loading it raises (Blender, Magic Wording on)."""
+
+    _with = TestWizardIcon._with
+    _fake_bpy = TestWizardIcon._fake_bpy
+
+    def test_a_missing_png_falls_back_to_the_plain_icon(self):
+        blender = {"GHOST_ENABLED", "ERROR"}
+        self._with(blender, bfa=False)
+        made = []
+        sys.modules["bpy.utils.previews"].new = lambda: made.append(1)
+        real = mw.os.path.isfile if hasattr(mw, "os") else None
+        import os
+        orig = os.path.isfile
+        os.path.isfile = lambda p: False if str(p).endswith("wizard_32.png") else orig(p)
+        self.addCleanup(setattr, os.path, "isfile", orig)
+        self.assertEqual(mw.agent_icon_args("GHOST_ENABLED"), {"icon": "GHOST_ENABLED"})
+        self.assertEqual(made, [], "no collection made when there is no picture")
+        del real
+
+    def test_a_failing_load_removes_the_new_collection(self):
+        self._with({"GHOST_ENABLED"}, bfa=False)
+        previews = sys.modules["bpy.utils.previews"]
+        removed, made = [], []
+
+        class Set(dict):
+            def load(self, *a):
+                raise RuntimeError("bad picture")
+        previews.new = lambda: made.append(Set()) or made[-1]
+        previews.remove = removed.append
+        for _ in range(3):                                    # three redraws
+            self.assertEqual(mw.agent_icon_args("GHOST_ENABLED"), {"icon": "GHOST_ENABLED"})
+        self.assertEqual(len(made), 3)
+        self.assertEqual(removed, made, "every collection made is removed again")
 
 
 class TestWiring(_Case):

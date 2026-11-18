@@ -127,6 +127,17 @@ TYPING_QUIET = 2.0   # no tooltips this long after a key in the input (#388)
 AGENT_TIPS = frozenset({"start", "stop_agent", "jobs"})
 
 
+def start_tip(label: str, running: bool) -> str:
+    """The Start / Stop button's tooltip in the words on the button: "Start" (Local, Remote)
+    names the agent, so it is the Wizard with Magic Wording; "Connect" and "Start Bridge"
+    name the agent app and the bridge, which stay as they are."""
+    if label == "Start Bridge":
+        return "Stop Bridge" if running else "Start Bridge"
+    if label == "Connect":
+        return "Stop: disconnect the agent app" if running else "Connect to the agent app"
+    return magic_wording.agent_label("Stop Coworker" if running else "Start Coworker")
+
+
 def tip_for(widget_id: str | None) -> str:
     """The tooltip for a chat widget, or "" (#237)."""
     if not widget_id:
@@ -251,6 +262,7 @@ class ChatSurface:
     # *show_tips*), only after the mouse *rests*, gone on any move or click, and none while
     # you type or a reply streams.
     show_tips: bool = True
+    top_start_label: str = "Start"      # the top bar's Start button, for its tooltip (#608)
     _rest: float = 0.0           # when the mouse last moved
     _tip_shown: bool = False     # a tooltip is on screen now (a move must redraw to hide it)
     _tip_blocked: bool = False   # clicked: no tooltip until the mouse moves again
@@ -543,6 +555,8 @@ class ChatSurface:
         widget = (self.hit(*self.mouse) if self.mouse is not None and self.pressed is None and not quiet
                   else None)
         tip = tip_for(widget)
+        if widget in ("start", "stop_agent"):
+            tip = start_tip(self.top_start_label, widget == "stop_agent")
         if widget in ("approval_menu", "notice:approval_menu") and self.box.approval[0]:   # say which one is on
             tip = "Permissions: {:s} (click to change)".format(self.box.approval[0])
         if not tip:
@@ -591,6 +605,7 @@ class ChatSurface:
                 actions.append((widget_id, ""))
             x -= pad * 0.5
         start_label = "Stop" if top.running else top.start_label
+        self.top_start_label = top.start_label      # its tooltip says the same (#608)
         start_w = canvas.icon_size() + canvas.measure(start_label, "ui", style.font_size) + 3.0 * style.pad
         if x - start_w - row.x < u * 4:      # narrow: Start / Stop as an icon
             start_label, start_w = "", bw

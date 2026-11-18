@@ -295,13 +295,13 @@ on: the scene reader, the checked answers, the wand panel rules and the range-li
 
 | Step | Issue | Size | Needs | Done when |
 |---|---|---|---|---|
-| W0 | Wand panels: one set of presentation rules, applied to the existing panels | S | — | The rules are written down and the transcript, caption and reframe panels follow them. |
-| H1 | Scene reader: every speaking strip, merged, numbered sentences, windows; `read_edit_sentences` | L | — | On made-up edits (two media files, two microphones, a clip used twice, a muted and a retimed strip) the sentences are in playing order, none doubled, and the skipped parts are reported. |
-| H2 | `ask_json`: schema-checked answers on Local and Remote, one retry; request function passes extra fields; schema support of the shipped llama.cpp probed | M | — | A fake server and the real Local server both return checked answers; a wrong answer is retried once and then reported. |
-| H3 | Find and rank, the criteria chapter, the written test transcripts (with made-up word times) and the model check; time measured on the reference card | M | H1, H2 | At least four of six planted moments in the top five on the written transcripts; time per hour of talk stated. |
-| H4 | Picks store on the scene, re-placing after cuts, the Highlights panel, Preview, markers | M | H1, W0 | Picks survive save and reopen; after a cut they are placed again or marked changed or gone; the panel works in Blender and Bforartists. |
-| H5 | Make Short: named scene copy with its range set, range-limited Remove Silences, the hook title tool, the polish chain, MP4 output preset, one undo | M | H4 | A pick becomes a short scene that renders to an MP4 as it is; one undo removes it; the long edit is unchanged. |
-| H6 | Chat tools as a background job, and the External Agent and Harness path | M | H3, H5 | *"Find three shorts and build the best one"* works on Local, Remote and External Agent. |
+| W0 (#610) | Wand panels: one set of presentation rules, applied to the existing panels | S | — | The rules are written down and the transcript, caption and reframe panels follow them. |
+| H1 (#611) | Scene reader: every speaking strip, merged, numbered sentences, windows; `read_edit_sentences` | L | — | On made-up edits (two media files, two microphones, a clip used twice, a muted and a retimed strip) the sentences are in playing order, none doubled, and the skipped parts are reported. |
+| H2 (#612) | `ask_json`: schema-checked answers on Local and Remote, one retry; request function passes extra fields; schema support of the shipped llama.cpp probed | M | — | A fake server and the real Local server both return checked answers; a wrong answer is retried once and then reported. |
+| H3 (#613) | Find and rank, the criteria chapter, the written test transcripts (with made-up word times) and the model check; time measured on the reference card | M | H1, H2 | At least four of six planted moments in the top five on the written transcripts; time per hour of talk stated. |
+| H4 (#614) | Picks store on the scene, re-placing after cuts, the Highlights panel, Preview, markers | M | H1, W0 | Picks survive save and reopen; after a cut they are placed again or marked changed or gone; the panel works in Blender and Bforartists. |
+| H5 (#615) | Make Short: named scene copy with its range set, range-limited Remove Silences, the hook title tool, the polish chain, MP4 output preset, one undo | M | H4 | A pick becomes a short scene that renders to an MP4 as it is; one undo removes it; the long edit is unchanged. |
+| H6 (#616) | Chat tools as a background job, and the External Agent and Harness path | M | H3, H5 | *"Find three shorts and build the best one"* works on Local, Remote and External Agent. |
 
 W0, H1 and H2 can start together; H3 and H4 follow in parallel; then H5; then H6.
 

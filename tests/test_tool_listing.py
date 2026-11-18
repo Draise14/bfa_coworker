@@ -46,9 +46,9 @@ EXPECTED_TOOLS = [
 "            transcript_path: A transcript JSON file (bfa_coworker.transcript/1) to use\n"
 "                instead of transcribing.\n"
 "            replace_edited: Also replace captions changed by hand since they were made.\n"
-"            animation: STYLE (the style's own: BOLD_POP pops, the others don't move), NONE,\n"
-"                FADE, SLIDE_UP, TYPEWRITER (typed out letter by letter, one line per caption)\n"
-"                or POP.\n"
+"            animation: The single animation list of before, still accepted: the line animation\n"
+"                (STYLE, NONE, FADE, SLIDE_UP, SLIDE_DOWN, TYPEWRITER or POP).  Prefer ``animate``,\n"
+"                ``line_animation`` and ``word_animation``.\n"
 "            position: BOTTOM, TOP (e.g. off the UI a tutorial shows at the bottom) or MIDDLE.\n"
 "            margin: Distance from that edge in percent of the frame's height, 0-45 (0: the\n"
 "                safe area of a wide or vertical frame).\n"
@@ -67,6 +67,19 @@ EXPECTED_TOOLS = [
 "            text_color: The text colour: \"#RRGGBB\" as seen on screen, or 3-4 numbers 0-1 (Blender's\n"
 "                own values); none: the style's.\n"
 "            highlight_color: The same for the spoken word of WORD_HIGHLIGHT; none: the style's.\n"
+"            animate: What moves: LINE (each caption as a whole), WORD (each word at its own time),\n"
+"                BOTH, NONE, or STYLE (the style's own: BOLD_POP pops in, WORD_HIGHLIGHT lights the\n"
+"                spoken word, the others stand still).  None: STYLE, or what ``line_animation`` /\n"
+"                ``word_animation`` imply.\n"
+"            line_animation: How a caption moves as a whole: NONE, FADE, POP, SLIDE_UP, SLIDE_DOWN or\n"
+"                TYPEWRITER (typed out; with word motions word by word) (STYLE: the style's own).\n"
+"            word_animation: What each word does at its own time: HIGHLIGHT (the spoken word lights\n"
+"                up in the highlight colour; works over the visible line, on every style), POP,\n"
+"                SCALE, RISE (a small move up), FADE_IN, or HIGHLIGHT_POP / HIGHLIGHT_SCALE /\n"
+"                HIGHLIGHT_RISE / HIGHLIGHT_FADE_IN, NONE.  With a motion every word is a strip of its\n"
+"                own (one channel each, above the caption's) and the caption's own strip stays as the\n"
+"                anchor holding the text but draws nothing; too many words per line (over 24), or too\n"
+"                many keyframes, is refused with the limit named (use HIGHLIGHT or fewer words per line).\n"
 "\n"
 "        Returns:\n"
 "            ``lines_created``, ``channel``, ``first_frame`` / ``last_frame``, the style,\n"
@@ -250,6 +263,42 @@ EXPECTED_TOOLS = [
                     ],
                     "default": None,
                     "title": "Highlight Color"
+                },
+                "animate": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Animate"
+                },
+                "line_animation": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Line Animation"
+                },
+                "word_animation": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Word Animation"
                 }
             },
             "title": "add_captionsArguments",

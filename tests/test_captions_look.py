@@ -32,7 +32,7 @@ WIDE = (1920, 1080)
 TALL = (1080, 1920)
 FPS = 30.0
 STYLES = tuple(cap.STYLES)
-PRESETS = ("NONE", "FADE", "SLIDE_UP", "TYPEWRITER", "POP")
+PRESETS = ("NONE", "FADE", "SLIDE_UP", "SLIDE_DOWN", "TYPEWRITER", "POP")
 
 
 def _measure(text, px):
@@ -539,7 +539,12 @@ class TestAnimatedStrips(_LookCase):
             return {p: [SimpleNamespace(keyframe_points=[SimpleNamespace(interpolation="") for _ in range(n)], data_path=p, id_data=None)] for p, n in out.items()
                     if paths is None or p in paths}
 
-        stack = mock.patch.multiple(self.ops, _strip_curves=curves, _remove_fcurve=removed.append)
+        def remove_curves(scene, names, paths):
+            for n in sorted(names):
+                for fcs in curves(scene, n, paths).values():
+                    removed.extend(fcs)
+
+        stack = mock.patch.multiple(self.ops, _strip_curves=curves, _remove_curves=remove_curves)
         stack.start()
         self.addCleanup(stack.stop)
         return removed
@@ -766,7 +771,7 @@ class TestOperator(_LookCase):
         op.layout = layout
         op.draw(SimpleNamespace(scene=self.scene, workspace=SimpleNamespace(sequencer_scene=self.scene)))
         drawn = [x[1] for x in layout.log if x[0] == "prop"]
-        for name in ("style", "animation", "position", "margin", "speakers", "speaker_labels"):
+        for name in ("style", "animate", "position", "margin", "speakers", "speaker_labels"):
             self.assertIn(name, drawn)
 
 

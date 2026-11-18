@@ -35,6 +35,9 @@ class Params(NamedTuple):
     size: float = 1.0
     text_color: str | tuple[float, ...] | None = None
     highlight_color: str | tuple[float, ...] | None = None
+    animate: str | None = None
+    line_animation: str | None = None
+    word_animation: str | None = None
 
 
 class Result(NamedTuple):
@@ -53,6 +56,8 @@ class Result(NamedTuple):
     strips_skipped: list[dict[str, str]] | None = None
     kept_edited: int = 0
     animation: str | None = None
+    animate: str | None = None
+    word_animation: str | None = None
     position: str | None = None
     speakers: list[dict[str, Any]] | None = None
     note: str | None = None
@@ -74,5 +79,6 @@ def main(params: Params) -> Result:
                                 params.replace_edited, params.animation, params.position, params.margin,
                                 params.speakers, params.speaker_labels, list(params.speaker_settings or ()),
                                 params.case, params.font, params.bold, params.italic, params.size,
-                                params.text_color, params.highlight_color)
+                                params.text_color, params.highlight_color, params.animate, params.line_animation,
+                                params.word_animation)
     return Result(**{k: v for k, v in out.items() if k in Result._fields})

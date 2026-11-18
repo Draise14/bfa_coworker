@@ -4020,24 +4020,28 @@ def stop_local_llama() -> None:
 # ---------------------------------------------------------------------------
 # Health checks
 
-def health_check(url: str | None = None) -> bool:
+def health_check(url: str | None = None, quiet: bool = False) -> bool:
     """
     Ping the LLM backend to confirm it is ready.
 
     *url* -- defaults to ``http://127.0.0.1:{port}/health`` using the configured port.
+    *quiet* -- no log line (the ready wait polls every few seconds for up to 20 minutes, #591).
     """
     if url is None:
         with _lock:
             port = _config.local_port
         url = _LOCAL_LLM_HEALTH_URL.format(port)
-    print("[Coworker] health_check: pinging {:s} ...".format(url))
+    if not quiet:
+        print("[Coworker] health_check: pinging {:s} ...".format(url))
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
             ok = resp.status == 200
-            print("[Coworker] health_check: status={:d} -> {:s}".format(resp.status, "OK" if ok else "FAIL"))
+            if not quiet:
+                print("[Coworker] health_check: status={:d} -> {:s}".format(resp.status, "OK" if ok else "FAIL"))
             return ok
     except (urllib.error.URLError, OSError) as ex:
-        print("[Coworker] health_check: connection failed -- {:s}".format(str(ex)))
+        if not quiet:
+            print("[Coworker] health_check: connection failed -- {:s}".format(str(ex)))
         return False
 
 
@@ -4066,6 +4070,10 @@ def _abandon_launched_server(proc: "subprocess.Popen | None") -> None:
         _state.current_mode = "off"
 
 
+# #591: the longest a still-running llama-server may take to load its model before we give up.
+_READY_HARD_CAP = 20.0 * 60.0
+
+
 def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = None) -> bool:
     """Block until the local llama-server answers a health check.
 
@@ -4080,14 +4088,31 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
     with no error: the caller shows "Stopped" (#543).
     """
     import time as _time
-    deadline = _time.monotonic() + timeout
+    started = _time.monotonic()
+    deadline = started + timeout
     poll = 0.5
+    last_note = started
     print("[Coworker] wait_until_ready: waiting up to {:.0f}s for llama-server...".format(timeout))
-    while _time.monotonic() < deadline:
+    while True:
+        now = _time.monotonic()
+        if now >= deadline:
+            # #591: past the limit, a server process that is still alive is still reading the
+            # model (a cold disk, a big file): keep waiting, up to a hard cap, instead of
+            # abandoning a load that was about to finish.  A dead process ends it at once below.
+            if proc is not None and proc.poll() is None and now - started < _READY_HARD_CAP:
+                deadline = now + 30.0
+            else:
+                break
+        if now - last_note >= 30.0:
+            last_note = now
+            print("[Coworker] wait_until_ready: llama-server is still loading the model ({:.0f}s so far; "
+                  "process {:s}; log: {:s})".format(
+                      now - started, "running" if proc is None or proc.poll() is None else "exited",
+                      (get_llama_server_log_tail(1, 160).splitlines() or ["empty"])[-1]))
         if stopped_by_user(proc):
             print("[Coworker] wait_until_ready: stopped by the user before it was ready")
             return False
-        if health_check():
+        if health_check(quiet=True):
             print("[Coworker] wait_until_ready: server is ready")
             return True
         if proc is not None and proc.poll() is not None and stopped_by_user(proc):
@@ -4169,7 +4194,10 @@ def wait_until_ready(timeout: float = 60.0, proc: "subprocess.Popen | None" = No
         _time.sleep(poll)
         poll = min(poll * 1.5, 3.0)
     tail = get_llama_server_log_tail()
-    msg = "llama-server did not become ready within {:.0f}s".format(timeout)
+    msg = "llama-server did not become ready within {:.0f}s".format(_time.monotonic() - started)
+    if proc is not None and proc.poll() is None:
+        msg += (" (the process was still running, but the model never finished loading: a very large model "
+                "or a slow disk. Starting it again once the file is in the system cache is usually much faster)")
     if tail:
         msg += "\n\n--- llama-server.log (tail) ---\n{:s}".format(tail)
     _set_error(msg)

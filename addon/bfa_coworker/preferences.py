@@ -281,6 +281,11 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         from . import session_identity
         session_identity.set_token_required(self.require_session_token)
 
+    def _update_magic_wording(self, _context: bpy.types.Context) -> None:
+        """Turning the magic wording on or off shows at once in every chat (#528)."""
+        from . import ui_chat
+        ui_chat._redraw_all_chats()
+
     def _update_approval_mode(self, _context: bpy.types.Context) -> None:
         from . import ui_chat
         ui_chat.apply_approval_mode(self.approval_mode)
@@ -1244,6 +1249,15 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         description=("The most helper chats one chat may start in a turn (delegate_task, #479). "
                      "Helpers can't start helpers of their own"),
         default=4, min=1, max=12,
+    )
+
+    magic_wording: BoolProperty(  # type: ignore[valid-type]
+        name="Magic Wording",
+        description=("Show helper chats as mages, wizards and magicians, and a word about magic while "
+                     "the model thinks. Only what you see changes: what is sent to the model stays "
+                     "as it is. Off: plain \"Helper\" and \"Thinking\""),
+        default=True,
+        update=_update_magic_wording,
     )
 
     external_agent_tools_on_demand: BoolProperty(  # type: ignore[valid-type]
@@ -2685,6 +2699,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             text="Long requests keep going in rounds while the plan makes progress.",
             icon='INFO',
         )
+        chat_box.prop(self, "magic_wording")
         chat_box.prop(self, "helpers_per_turn")
         chat_box.label(
             text="A chat can hand parts of a job to helper chats; on Local they run one after another.",

@@ -74,11 +74,11 @@ class TestNoPositionalUndoWithAnotherChat(_tli._TurnLoopTestBase):
                          "loading the newest step again would have taken back the other chat's step")
         self.assertIn("Sphere", self.server.scene_objects, "the turn went on")
 
-    def test_global_undo_still_used_when_alone(self):
+    def test_no_undo_after_a_failure_even_when_alone(self):
         self._script()
         self._run_agent_turn("build the set")
-        self.assertTrue([c for c in self._mcp_codes() if "bpy.ops.ed.undo()" in c],
-                        "one chat at work: the failure rollback as before (#501: undo, then redo)")
+        self.assertFalse([c for c in self._mcp_codes() if "bpy.ops.ed.undo()" in c],
+                         "#591: no undo, then redo, after a failed script: the scoped cleanup only")
 
 
 del _CoWork        # not a test class of this module

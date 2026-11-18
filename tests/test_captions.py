@@ -461,17 +461,24 @@ class _Layout:
 
     column = row
 
+    def box(self):
+        return self
+
 
 def _fake_bpy(state):
     bpy = types.ModuleType("bpy")
     bpy.path = SimpleNamespace(abspath=lambda p, library=None: p)
     bpy.utils = SimpleNamespace(system_resource=lambda *_a, **_k: "", escape_identifier=lambda s: s,
                                 register_class=lambda c: None, unregister_class=lambda c: None)
-    bpy.data = SimpleNamespace(scenes=state["scenes"])
+    bpy.data = SimpleNamespace(scenes=state["scenes"], fonts=[])
+    bpy.app = SimpleNamespace(handlers=SimpleNamespace(persistent=lambda fn: fn, depsgraph_update_post=[]),
+                              timers=SimpleNamespace(register=lambda *_a, **_k: None, is_registered=lambda fn: False,
+                                                     unregister=lambda fn: None))
     bpy.context = SimpleNamespace(scene=None, sequencer_scene=None, workspace=None)
     bpy.ops = SimpleNamespace(ed=SimpleNamespace(undo_push=lambda message="": state["undo"].append(message)))
     props = types.ModuleType("bpy.props")
-    for n in ("BoolProperty", "CollectionProperty", "EnumProperty", "IntProperty", "StringProperty"):
+    for n in ("BoolProperty", "CollectionProperty", "EnumProperty", "FloatProperty", "FloatVectorProperty",
+              "IntProperty", "StringProperty"):
         setattr(props, n, lambda **_k: None)
     bpy.props = props
     bpy.types = SimpleNamespace(Operator=type("Operator", (), {}), Menu=type("Menu", (), {}),
@@ -616,6 +623,8 @@ class TestCaptionStrips(_OpsCase):
         op.replace_edited = False
         op.animation, op.position, op.margin, op.speakers, op.speaker_labels = "STYLE", "BOTTOM", 0, False, False
         op.speaker_list = _Rows()
+        op.case, op.font_choice, op.font_file, op.bold, op.italic, op.size = "STYLE", "STYLE", "", "STYLE", "STYLE", 1.0
+        op.set_text_color, op.text_color, op.set_highlight_color, op.highlight_color = False, (1, 1, 1, 1), False, (1, 0.8, 0.1, 1)
         reports = []
         op.report = lambda kind, msg: reports.append((sorted(kind)[0], msg))
         return op, reports
@@ -1108,8 +1117,10 @@ class TestTool(_OpsCase):
             del sys.modules[fake.__name__]
         self.assertEqual((out.status, out.lines_created, out.channel, out.animation), ("ok", 3, 4, "Fade"))
         # #542: the defaults are today's look; the new arguments reach the add-on in order.
-        self.assertEqual(calls[0], ("STYLE", "BOTTOM", 0, False, False, []))
-        self.assertEqual(calls[1], ("FADE", "TOP", 12, True, True, [{"strip": "speech", "name": "Ana"}]))
+        # #594: then the style choices, each "as the style has it" when left out.
+        none = ("STYLE", None, None, None, 1.0, None, None)
+        self.assertEqual(calls[0], ("STYLE", "BOTTOM", 0, False, False, []) + none)
+        self.assertEqual(calls[1], ("FADE", "TOP", 12, True, True, [{"strip": "speech", "name": "Ana"}]) + none)
         self.assertEqual(set(out._asdict()), set(toolcode.Result._fields))
 
     def test_in_the_vse_domain(self):

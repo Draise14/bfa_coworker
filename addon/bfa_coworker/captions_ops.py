@@ -25,6 +25,14 @@ text strips, SRT in and out, and Translate for many captions at once.
   the existing Translate dialog; each translated line is written back into its own
   strip (same timing, style and tag).
 
+Word strips follow their caption line (#594): :func:`refit_words` lays them out again, from the line
+strip's own font, bold, italic, size, alignment, wrap width, place, transform and text
+(:func:`captions.word_layout`), whenever the layout signature kept in the line's tag (``"lay"``) no longer
+matches the strip: a depsgraph handler notes a change and a debounced timer looks, never while playing,
+rendering or an agent step holds the co-work lock; *Refit Word Highlights* is the manual way.  The style
+choices of the dialog and the tool (letter case, font, bold, italic, size, text and highlight colour) are
+kept in the tag as ``"choices"``.
+
 Every caption strip has the custom property :data:`captions.TAG`:
 ``{"source", "style", "role": "line"|"word", "chars", "lines"}`` (``"line"``: the
 caption's strip name, on a word strip); a line made since #497 also has ``"frame"`` (the
@@ -63,8 +71,8 @@ import textwrap
 from typing import Any
 
 import bpy  # pylint: disable=import-error
-from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, IntProperty,  # pylint: disable=import-error
-                       StringProperty)
+from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProperty,  # pylint: disable=import-error
+                       FloatVectorProperty, IntProperty, StringProperty)
 from bpy.types import Menu, Operator, PropertyGroup  # pylint: disable=import-error
 from bpy_extras.io_utils import ExportHelper, ImportHelper  # pylint: disable=import-error
 
@@ -182,10 +190,29 @@ def _font() -> Any:
 
 
 _BLF_IDS: dict[str, int] = {}
+_BLF_KEEP = 8                       # fonts kept loaded for measuring: the least recently used are unloaded
+
+
+def _blf_forget(all_: bool = False) -> None:
+    """Unload measured fonts beyond :data:`_BLF_KEEP` (all of them with *all_*: unregister, file load)."""
+    try:
+        import blf  # pylint: disable=import-error
+    except ImportError:
+        _BLF_IDS.clear()
+        return
+    while _BLF_IDS and (all_ or len(_BLF_IDS) > _BLF_KEEP):
+        path = next(iter(_BLF_IDS))
+        _BLF_IDS.pop(path)
+        try:
+            blf.unload(path)
+        except (RuntimeError, ValueError, TypeError):
+            pass
 
 
 def _measure(font: Any) -> Any:
     """``measure(text, px) -> width`` in the strip's font, or None (no font, no blf)."""
+    if font is not None and str(font.filepath).startswith("<builtin"):
+        font = _font()                  # Blender's default font is the bundled Inter
     if font is None:
         return None
     path = bpy.path.abspath(font.filepath)
@@ -193,10 +220,11 @@ def _measure(font: Any) -> Any:
         import blf  # pylint: disable=import-error
     except ImportError:
         return None
-    fid = _BLF_IDS.get(path)
+    fid = _BLF_IDS.pop(path, None)
     if fid is None:
         fid = blf.load(path)
-        _BLF_IDS[path] = fid
+    _BLF_IDS[path] = fid            # most recently used last
+    _blf_forget()
     if fid is None or fid < 0:
         return None
 
@@ -204,6 +232,18 @@ def _measure(font: Any) -> Any:
         blf.size(fid, px)
         return float(blf.dimensions(fid, text)[0])
     return measure
+
+
+def _line_measure(line: Any) -> Any:
+    """``measure(text, px) -> width`` as *line*'s text strip draws it: in its font, and wider when it is
+    bold (:func:`captions.bold_measure`); None when the font can't be measured (#594)."""
+    font = line.font or _font()
+    base = _measure(font)
+    if base is None:
+        return None
+    if not line.use_bold:
+        return base
+    return cap.bold_measure(base, cap.font_family(font.filepath if font is not None else ""))
 
 
 # -- transcripts (#375 adds local transcription; until then a transcript file) ---------------
@@ -417,7 +457,7 @@ def _look_params(p: dict[str, Any]) -> dict[str, Any]:
     return {"animation": p.get("animation", cap.ANIM_STYLE), "position": p.get("position", "BOTTOM"),
             "margin": float(p.get("margin", 0.0) or 0.0), "speakers": bool(p.get("speakers", False)),
             "speaker_settings": list(p.get("speaker_settings") or ()),
-            "speaker_labels": bool(p.get("speaker_labels", False))}
+            "speaker_labels": bool(p.get("speaker_labels", False)), "choices": dict(p.get("choices") or {})}
 
 
 def _poll_pending() -> float | None:
@@ -650,9 +690,11 @@ def _words_of(ed: Any, line: Any) -> list:
     return [s for s in _top(ed) if (tag_of(s) or {}).get("role") == "word" and (tag_of(s) or {}).get("line") == line.name]
 
 
-def _animate(scene: Any, line: Any, style: dict, animation: str, words: list | None = None) -> int:
+def _animate(scene: Any, line: Any, style: dict, animation: str, words: list | None = None,
+             words_only: bool = False) -> int:
     """Animation *animation* (:data:`captions.ANIMATIONS`) on a caption *line* in *style* and
-    on its word strips (the same keys, so they move as one), over the line's own frames."""
+    on its word strips (the same keys, so they move as one), over the line's own frames.
+    *words_only*: only the word strips (made again after the line was keyed, #594)."""
     render = scene.render
     lines = [ln for ln in str(line.text).split("\n") if ln] or [""]
     reveal = None
@@ -664,14 +706,16 @@ def _animate(scene: Any, line: Any, style: dict, animation: str, words: list | N
                                   render.resolution_x, render.resolution_y, float(line.font_size), len(lines),
                                   str(getattr(line, "anchor_y", "BOTTOM")), tuple(line.location), reveal)
     if not tracks:
-        _remember_keys(scene, line, ())
+        if not words_only:
+            _remember_keys(scene, line, ())
         return 0
-    targets = [line] + list(words or ())
+    targets = ([] if words_only else [line]) + list(words or ())
     # Bold Pop's own pop is the line's font size: the word strips (none in that style) keep theirs.
     if any(t["path"] == "font_size" for t in tracks):
-        targets = [line]
+        targets = [] if words_only else [line]
     made = _key_tracks(scene, targets, tracks)
-    _remember_keys(scene, line, {t["path"] for t in tracks})
+    if not words_only:
+        _remember_keys(scene, line, {t["path"] for t in tracks})
     return made
 
 
@@ -764,6 +808,27 @@ def _next_number(ed: Any, skip: set[str]) -> int:
     return best
 
 
+def _choice_font(choice: Any) -> Any:
+    """The font the artist chose (#594): the name of a font in this file, or a font file (a path, loaded
+    once); None for "" (the style's own, the bundled Inter).  Raises :class:`CaptionsError` when there is
+    no such font."""
+    text = str(choice or "").strip()
+    if not text:
+        return None
+    found = bpy.data.fonts.get(text)
+    if found is not None:
+        return found
+    path = os.path.normpath(bpy.path.abspath(text))
+    if not os.path.isfile(path):
+        have = ", ".join(repr(f.name) for f in bpy.data.fonts if not f.filepath.startswith("<builtin"))
+        raise CaptionsError("No font {!r}: give the name of a font in this file ({:s}) or the path of a font "
+                            "file.".format(text, have or "none loaded"))
+    try:
+        return bpy.data.fonts.load(path, check_existing=True)
+    except (RuntimeError, OSError):
+        raise CaptionsError("{:s} can't be loaded as a font.".format(os.path.basename(path))) from None
+
+
 def _text_strip(ed: Any, name: str, channel: int, fs: int, fe: int, text: str, style: dict, font: Any) -> Any:
     top = _top(ed)
     s = top.new_effect(name, 'TEXT', channel, fs, length=max(1, fe - fs))
@@ -781,33 +846,107 @@ def _text_strip(ed: Any, name: str, channel: int, fs: int, fe: int, text: str, s
     return s
 
 
+_TRANSFORM_PATHS = ("offset_x", "offset_y", "scale_x", "scale_y", "rotation")
+
+
+def _preset_paths(tag: dict) -> frozenset[str]:
+    """The properties the caption's animation preset keys, as ``"transform.offset_y"``: they change with
+    the frame, so they are no part of the layout signature and the word strips are not given their
+    values (each has the same keys).  From the tag; no F-curve is looked at."""
+    if tag.get("anim") is None:
+        return frozenset()
+    return frozenset(cap.animation_paths(tag["anim"], cap.style_key(tag.get("style")) or "CLEAN"))
+
+
+def _label_words(tag: dict) -> int:
+    """How many words of a line's text are a speaker's label (``"Ana:"``): laid out, but no word strip."""
+    return len(str(tag.get("label") or "").split())
+
+
+def _signature_of(scene: Any, line: Any, tag: dict, animated: Any = ()) -> str:
+    """The layout signature of a caption *line* as its strip is now (:func:`captions.layout_signature`).
+    Reads properties only: no font is measured or loaded.  *animated*: the property paths its preset keys
+    (left out)."""
+    render = scene.render
+    tr = getattr(line, "transform", None)
+    trans = tuple(None if "transform." + p in animated else round(float(getattr(tr, p)), 4)
+                  for p in _TRANSFORM_PATHS) if tr is not None else ()
+    font = line.font
+    return cap.layout_signature(str(line.text), font.filepath if font else "", bool(line.use_bold),
+                                bool(line.use_italic), float(line.font_size), str(line.anchor_x),
+                                str(line.anchor_y), str(line.alignment_x), float(line.wrap_width),
+                                tuple(line.location)[:2], trans, int(render.resolution_x),
+                                int(render.resolution_y), str(tag.get("label") or ""))
+
+
+def _layout_of(scene: Any, line: Any, tag: dict, animated: Any = ()) -> tuple[str, list[dict[str, Any]], Any]:
+    """``(signature, word positions, the line's measure)`` of a caption *line* as its strip is now
+    (:func:`captions.word_layout`); positions are empty when the font can't be measured.  This measures
+    every word: :func:`refit_words` only calls it for a line whose :func:`_signature_of` changed."""
+    render = scene.render
+    sig = _signature_of(scene, line, tag, animated)
+    measure = _line_measure(line)
+    if measure is None:
+        return sig, [], None
+    pos = cap.word_layout(str(line.text), measure, float(line.font_size), render.resolution_x, render.resolution_y,
+                          tuple(line.location), str(line.anchor_x), str(line.anchor_y), str(line.alignment_x),
+                          float(line.wrap_width), _label_words(tag), italic=bool(line.use_italic))
+    return sig, pos, measure
+
+
+def _sync_word(word: Any, line: Any, pos: dict[str, Any], animated: Any = ()) -> None:
+    """A word strip takes over from its line (#594): font, bold, italic and size, the place the layout
+    gives it, and the transform values that are not animated."""
+    word.font = line.font
+    word.use_bold, word.use_italic = line.use_bold, line.use_italic
+    word.font_size = line.font_size
+    word.anchor_x, word.alignment_x, word.anchor_y = 'LEFT', 'LEFT', line.anchor_y
+    word.wrap_width = 1.0
+    word.location = (pos["x"], pos["y"])
+    tr, mine = getattr(line, "transform", None), getattr(word, "transform", None)
+    if tr is not None and mine is not None:
+        for prop in _TRANSFORM_PATHS:
+            if "transform." + prop not in animated:
+                try:
+                    setattr(mine, prop, getattr(tr, prop))
+                except (AttributeError, TypeError, ValueError):
+                    pass
+
+
+def _remember_layout(ed: Any, name: str, sig: str) -> None:
+    """The layout signature into the tag of caption line *name* (looked up again by name)."""
+    line = _all(ed).get(name)
+    tag = tag_of(line) if line is not None else None
+    if tag is not None and tag.get("lay") != sig:
+        tag["lay"] = sig
+        line[cap.TAG] = tag
+
+
 def _add_highlights(scene: Any, line: Any, framed: dict, style: dict, font: Any, measure: Any) -> int:
-    """The word strips of a Word-by-word caption on the channel above *line*."""
+    """The word strips of a Word-by-word caption on the channel above *line*: one per word, over the
+    word's own frames, laid out from the line strip's current settings (:func:`_layout_of`; #594).
+    *measure* only says the font can be measured (None: no word strips)."""
     ed = scene.sequence_editor
-    lines = framed.get("lines") or [line.text]
-    if measure is None or len(lines) != 1 or not framed.get("words"):
+    if measure is None or not framed.get("words"):
         return 0
-    px = float(line.font_size)
-    words = [w["w"].upper() if style["uppercase"] else w["w"] for w in framed["words"]]
-    label = str(framed.get("label") or "")         # a speaker's "Ana:" in front: not a word (#542)
-    lead = ((label.upper() if style["uppercase"] else label) + " ") if label else ""
-    text = lead + " ".join(words)
-    width = measure(text, px)
-    x0, y0 = line.location[0], line.location[1]
-    made = 0
     tag = tag_of(line) or {}
-    line_name, line_channel = line.name, line.channel      # read once: no strip is held across the new ones (#593)
-    del line
-    for i, a, b in cap.highlight_windows(framed):
-        prefix = lead + (" ".join(words[:i]) + " " if i else "")
-        x = cap.highlight_left(x0, width, measure(prefix, px) if prefix else 0.0, scene.render.resolution_x)
-        h = _text_strip(ed, "{:s}_w{:02d}".format(line_name, i + 1), line_channel + 1, a, b, words[i], style, font)
-        h.color = tuple(style["highlight"])
-        h.anchor_x, h.alignment_x = 'LEFT', 'LEFT'
-        h.location = (x, y0)
-        h.wrap_width = 1.0
-        h[cap.TAG] = {"source": tag.get("source", ""), "style": style["key"], "role": "word", "line": line_name}
+    if framed.get("label") is not None:
+        tag = dict(tag, label=framed["label"])
+    name, channel, source = line.name, line.channel + 1, tag.get("source", "")
+    animated = _preset_paths(tag)
+    sig, pos, _measure_line = _layout_of(scene, line, tag, animated)
+    windows = [(i, a, b) for i, a, b in cap.highlight_windows(framed) if i < len(pos)]
+    colour = tuple(style["highlight"])
+    made = 0
+    for i, a, b in windows:         # only names and numbers from here: strips are added
+        h = _text_strip(ed, "{:s}_w{:02d}".format(name, i + 1), channel, a, b, pos[i]["text"], style, font)
+        h.color = colour
+        line = _all(ed).get(name)
+        if line is not None:
+            _sync_word(h, line, pos[i], animated)
+        h[cap.TAG] = {"source": source, "style": style["key"], "role": "word", "line": name}
         made += 1
+    _remember_layout(ed, name, sig)
     return made
 
 
@@ -822,12 +961,12 @@ def _line_tag(source: str, style: str, chars: int, lines: int, scene: Any, frame
     if offsets:
         tag["word_frames"] = offsets
     for k, v in (look or {}).items():
-        if k in _LOOK_KEYS and v is not None and v != "":
-            tag[k] = v
+        if k in _LOOK_KEYS and v is not None and v != "" and v != {}:
+            tag[k] = {kk: list(vv) if isinstance(vv, tuple) else vv for kk, vv in v.items()} if isinstance(v, dict) else v
     return tag
 
 
-_LOOK_KEYS = ("anim", "position", "margin", "speaker", "label")
+_LOOK_KEYS = ("anim", "position", "margin", "speaker", "label", "choices")
 
 
 def _look_tag(tag: dict) -> dict[str, Any]:
@@ -845,7 +984,8 @@ def _occupied(ed: Any, skip: set[str]) -> dict[int, list[tuple[float, float]]]:
 
 def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars: int, lines: int,
            above: int, targets: list[tuple] | None = None, replace_edited: bool = False,
-           animation: str = cap.ANIM_STYLE, lanes: dict[str, dict] | None = None) -> dict[str, Any]:
+           animation: str = cap.ANIM_STYLE, lanes: dict[str, dict] | None = None,
+           font: Any = None) -> dict[str, Any]:
     """Text strips for framed captions: one per caption (and the word strips), on the
     *Captions* channel above *above*; the earlier captions of the same sources go.
 
@@ -856,7 +996,8 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
     *animation*: an :data:`captions.ANIMATIONS` key (#542).  *lanes*: one per speaker (#542),
     ``{key: {"name", "style" (resolved), "chars", "lines", "label", "channel",
     "highlight_channel"}}``: each speaker's captions on a channel of their own, in their style;
-    None: every source on the *Captions* channel in *style*."""
+    None: every source on the *Captions* channel in *style*.  *font*: the artist's own font (#594;
+    None: the bundled Inter)."""
     ed = scene.sequence_editor
     keys = {key for key, _framed in groups}
     old = [s for s in _owned(ed, keys) if (tag_of(s) or {}).get("role") == "line"]
@@ -917,7 +1058,7 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
         taken.update(range(channel, channel + need))
         picked.append((lane, lane_groups, channel, need))
     replaced = remove_captions(scene, keys, None if targets is None else doomed_lines)
-    font = _font()
+    font = font or _font()
     number = _next_number(ed, set())
     made = words = 0
     notes = []
@@ -931,15 +1072,15 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
         if st["highlight"] and measure is None:
             notes.append("The bundled font couldn't be measured here, so there are no word highlights.")
         look = {"anim": animation, "position": st.get("position", "BOTTOM"), "margin": st.get("margin", 0.0),
-                "speaker": lane["name"], "label": lane["label"]}
+                "speaker": lane["name"], "label": lane["label"], "choices": st.get("choices")}
         lane_made = 0
         for key, framed in lane_groups:
             for c in framed:
                 number += 1
-                text = cap.with_label(c["text"], lane["label"])
-                text = text.upper() if st["uppercase"] else text
+                text = cap.apply_case(cap.with_label(c["text"], lane["label"]), st["case"])
                 s = _text_strip(ed, "cap_{:04d}".format(number), channel, c["frame_start"], c["frame_end"], text,
                                 st, font)
+                name = s.name
                 s[cap.TAG] = dict(_line_tag(key, st["key"], lane["chars"], lane["lines"], scene, c["frame_start"],
                                             c.get("words"), look),
                                   sig=_signature(s))      # what it is now: a later run tells hand edits (#538)
@@ -948,6 +1089,7 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
                 hl = []
                 if st["highlight"]:
                     words += _add_highlights(scene, s, dict(c, label=lane["label"]), st, font, measure)
+                    s = _all(ed).get(name)              # strips were added: look the line up again
                     hl = _words_of(ed, s)
                 # After the signature: the keys change none of what it holds (#542).
                 _animate(scene, s, st, animation, hl)
@@ -971,7 +1113,8 @@ def _limits(style: dict, scene: Any, max_chars: int, max_lines: int,
             animation: str = cap.ANIM_STYLE) -> tuple[int, int]:
     """Characters per line and lines: one line for Word-by-word and for Typewriter (#542)."""
     lines = 1 if style["highlight"] or cap.one_line(animation) else (max_lines or style["max_lines"])
-    chars = max_chars or cap.default_max_chars(style["key"], scene.render.resolution_x, scene.render.resolution_y)
+    chars = max_chars or cap.default_max_chars(style["key"], scene.render.resolution_x, scene.render.resolution_y,
+                                               style.get("choices"))
     return int(chars), (1 if lines <= 1 else 2)
 
 
@@ -987,7 +1130,7 @@ def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str 
                  transcript_path: str = "", max_chars: int = 0, max_lines: int = 0,
                  replace_edited: bool = False, animation: str = cap.ANIM_STYLE, position: str = "BOTTOM",
                  margin: float = 0.0, speakers: bool = False, speaker_settings: Any = (),
-                 speaker_labels: bool = False) -> dict[str, Any]:
+                 speaker_labels: bool = False, choices: dict[str, Any] | None = None) -> dict[str, Any]:
     """Caption *sources* (sound / movie strips) in *style*; the result for the artist / the tool.
 
     Every selected strip gets the captions of the part of its media it shows (#538); the
@@ -1001,13 +1144,19 @@ def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str 
     ``MIDDLE``) and *margin* (fraction of the frame's height, 0: the safe area's).  With
     *speakers* each media file is a speaker with a channel of their own
     (:func:`captions.plan_speakers`; *speaker_settings*: their names, styles, positions;
-    *speaker_labels*: "Name:" in front of each caption)."""
+    *speaker_labels*: "Name:" in front of each caption).
+
+    #594: *choices* (:func:`captions.check_style_params`): the artist's own letter case, font, bold,
+    italic, size, text and highlight colour; whatever is left out is as the style has it.  They are kept
+    in each caption's tag, so Make Vertical, a rewrite by Edit by Transcript and Translate keep them."""
     ed = scene.sequence_editor
     if ed is None:
         raise CaptionsError("The scene “{:s}” has no strips.".format(scene.name))
     animation = cap.animation_key(animation) or cap.ANIM_STYLE
     res = (scene.render.resolution_x, scene.render.resolution_y)
-    st = cap.resolve_style(style, res[0], res[1], position, margin)
+    choices = dict(choices or {})
+    font = _choice_font(choices.get("font", ""))
+    st = cap.resolve_style(style, res[0], res[1], position, margin, choices)
     chars, lines = _limits(st, scene, max_chars, max_lines, animation)
     items = []
     for s in _media_strips(sources):
@@ -1030,7 +1179,7 @@ def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str 
         lanes = {}
         for key, sp in cap.plan_speakers(todo, st["key"], st["position"], speaker_settings or (),
                                          speaker_labels).items():
-            sst = cap.resolve_style(sp["style"], res[0], res[1], sp["position"], margin)
+            sst = cap.resolve_style(sp["style"], res[0], res[1], sp["position"], margin, choices)
             c, n = _limits(sst, scene, max_chars, max_lines, animation)
             lanes[key] = dict(sp, style=sst, chars=c, lines=n)
     groups, errors, langs = [], [], []
@@ -1088,7 +1237,7 @@ def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str 
     targets = [(it["key"], it["left"], it["right"]) for it in items if it["key"] in captioned_keys
                and outcome.get(it["name"]) in ("captioned", cap.SKIP_NO_SPEECH)]
     above = max(s.channel for s in _media_strips(sources))      # above every selected clip, kept or not
-    result = _place(scene, groups, st, chars, lines, above, targets, replace_edited, animation, lanes)
+    result = _place(scene, groups, st, chars, lines, above, targets, replace_edited, animation, lanes, font)
     firsts = [next(it["name"] for it in items if it["key"] == k) for k, _f in groups]
     result.update(sources=firsts, language=next((x for x in langs if x), None), max_chars=chars, max_lines=lines,
                   strips_captioned=captioned, strips_skipped=skipped)
@@ -1271,7 +1420,8 @@ def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dic
             continue                                    # already laid out for this frame
         position, margin = tag.get("position", "BOTTOM"), float(tag.get("margin") or 0.0)
         label = str(tag.get("label") or "")
-        if key is None or cap.hand_edits(_look_of(scene, line), key, *made_for, position, margin):
+        choices = tag.get("choices") or None
+        if key is None or cap.hand_edits(_look_of(scene, line), key, *made_for, position, margin, choices):
             out["left"] += 1
             out["left_names"].append(line.name)
             continue
@@ -1283,7 +1433,7 @@ def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dic
         elif tag.get("word_frames"):
             frames = [fs + int(v) for v in tag["word_frames"]]
         lay = cap.relayout(line.text, key, res[0], res[1], fs, fe, int(tag.get("chars") or 0),
-                           int(tag.get("lines") or 0), made_for, frames, position, margin, label)
+                           int(tag.get("lines") or 0), made_for, frames, position, margin, label, choices)
         # #542: made again below, over each piece; a caption whose preset keys nothing keeps
         # what the user set on it (and a Bold Pop split piece gets its pop only before #542).
         paths = cap.animation_paths(tag["anim"], key) if tag.get("anim") is not None else ()
@@ -1342,6 +1492,248 @@ def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dic
     return out
 
 
+# -- word strips follow their line (#594) ---------------------------------------------------
+
+def _word_names(ed: Any) -> dict[str, list[str]]:
+    """``{caption line name: [its word strips' names]}`` in one light pass (no tag copies)."""
+    out: dict[str, list[str]] = {}
+    for s in _top(ed):
+        value = s.get(cap.TAG)
+        if value is not None and value.get("role") == "word":
+            out.setdefault(str(value.get("line")), []).append(s.name)
+    return out
+
+
+def _rebuild_words(scene: Any, name: str, even: bool = False) -> bool:
+    """The word strips of caption line *name* made again, from the line as it is now: the words of its
+    text, each over its own frames (the line's stored word frames when they still fit the words, else
+    spread over its time), laid out by :func:`_layout_of`, and keyed like the line.  Only names are held
+    across the strips removed and added."""
+    ed = scene.sequence_editor
+    pool = _all(ed)
+    line = pool.get(name)
+    if line is None or line.type != 'TEXT':
+        return False
+    tag = tag_of(line) or {}
+    key = cap.style_key(tag.get("style")) or "CLEAN"
+    label = str(tag.get("label") or "")
+    old = [pool.get(n) for n in sorted(_word_names(ed).get(name, ()))]
+    old = [w for w in old if w is not None]
+    highlight = tuple(old[0].color) if old else None
+    old_names = [w.name for w in old]
+    top = _top(ed)
+    from .wand.prefetch import remove_strips    # the Sequencer's prefetch stopped first (#536)
+    remove_strips(top, old)
+    old = None
+    if old_names:
+        _drop_fcurves(scene, old_names)
+    line = pool.get(name)
+    if line is None:
+        return False
+    st = cap.resolve_style(key, scene.render.resolution_x, scene.render.resolution_y, tag.get("position", "BOTTOM"),
+                           float(tag.get("margin") or 0.0), tag.get("choices") or None)
+    text = str(line.text)               # a line break the artist typed stays: the layout handles lines
+    left, right = _left(line), _right(line)
+    words = text.split()[_label_words(tag):]
+    frames = [left + int(v) for v in tag.get("word_frames") or ()]
+    if even or len(frames) != len(words):
+        timed = [dict(w, frame=int(round(w["start"]))) for w in cap.even_words(" ".join(words), left, right)]
+    else:
+        timed = [{"w": w, "frame": f} for w, f in zip(words, frames)]
+    framed = {"frame_start": left, "frame_end": right, "lines": [text], "words": timed, "label": label}
+    style = dict(st, uppercase=False, highlight=highlight or st["highlight"])     # the text already is as shown
+    font = line.font or _font()
+    made = _add_highlights(scene, line, framed, style, font, _measure(font))
+    anim = tag.get("anim")
+    if made and anim is not None:
+        line = pool.get(name)
+        news = [pool.get(n) for n in sorted(_word_names(ed).get(name, ()))]
+        if line is not None:
+            _animate(scene, line, st, anim, [w for w in news if w is not None], words_only=True)
+    return bool(made)
+
+
+def _reposition_words(scene: Any, name: str, word_names: list[str], pos: list[dict[str, Any]], animated: Any) -> None:
+    """Caption line *name*'s word strips put on the positions *pos* with the line's font, bold, italic and
+    size (no strip is added or removed here)."""
+    pool = _all(scene.sequence_editor)
+    line = pool.get(name)
+    if line is None:
+        return
+    for n, p in zip(sorted(word_names), pos):
+        word = pool.get(n)
+        if word is not None:
+            if word.text != p["text"]:
+                word.text = p["text"]
+            _sync_word(word, line, p, animated)
+
+
+def refit_words(scene: Any, names: Any = None, force: bool = False, rebuild: bool = False) -> int:
+    """Word strips laid out again where their caption line's settings changed (#594): its font, bold,
+    italic, size, alignment, wrap width, place, transform or text, or the frame size.  *names*: only
+    these caption lines (None: all of *scene*); *force*: also those whose settings did not change.
+
+    The words are moved and restyled in place when there are as many as the text has words (their own
+    frames stay).  When the words changed, the strips are made again only with *rebuild* (the Refit
+    operator; ``text_changed`` does it by itself): the automatic path never adds or removes a strip,
+    so it leaves such a caption as it is.  A caption with no signature (made before #594) only has its
+    signature noted, unless *force*: its word strips are not touched by opening the file.  How many
+    captions were fitted again.  Cheap when nothing changed: one signature per caption with word strips,
+    and no font is measured or loaded."""
+    ed = scene.sequence_editor
+    if ed is None:
+        return 0
+    by_line = _word_names(ed)
+    wanted = None if names is None else set(names)
+    todo = [n for n in by_line if wanted is None or n in wanted]
+    if not todo:
+        return 0
+    pool = _all(ed)
+    done = 0
+    for name in todo:
+        line = pool.get(name)
+        if line is None or line.type != 'TEXT':
+            continue
+        tag = tag_of(line) or {}
+        if tag.get("role") != "line":
+            continue
+        animated = _preset_paths(tag)
+        sig = _signature_of(scene, line, tag, animated)
+        if not force and tag.get("lay") == sig:
+            continue
+        if not force and tag.get("lay") is None:
+            _remember_layout(ed, name, sig)         # made before #594: just note it
+            continue
+        words = str(line.text).split()[_label_words(tag):]
+        same = len(words) == len(by_line[name])
+        if not same and not rebuild:
+            continue                                # needs strips added or removed: not from a timer
+        if same:
+            _sig, pos, _measure_line = _layout_of(scene, line, tag, animated)
+            if not pos or len(pos) != len(words):
+                continue                            # the font can't be measured: nothing to place by
+            _reposition_words(scene, name, by_line[name], pos, animated)
+            _remember_layout(ed, name, sig)
+        elif not _rebuild_words(scene, name, even=False):
+            continue
+        done += 1
+    return done
+
+
+# The word strips follow their line by themselves: a cheap depsgraph handler notes that something
+# changed, a timer a moment later (debounced) compares each caption's layout signature, and never
+# while playing, rendering, a modal operator runs, or an agent turn is open; the timer only moves and
+# restyles existing word strips, it never adds or removes one.
+_WATCH: dict[str, Any] = {"dirty": set(), "t": 0.0}
+DEBOUNCE_S = 0.4
+RETRY_S = 1.5
+
+
+def _playing() -> bool:
+    """A window is playing the animation."""
+    try:
+        return any(win.screen is not None and win.screen.is_animation_playing
+                   for win in bpy.context.window_manager.windows)
+    except (AttributeError, ReferenceError, RuntimeError):
+        return False
+
+
+def _busy() -> str:
+    """Why captions must not be touched now ("" when they can): playback, a render, or the co-work
+    lock or an open turn of an agent, or a modal operator (a drag) running in a window."""
+    if _playing():
+        return "playing"
+    try:
+        # Coworker's own chat input is a modal operator that is always running: not that one.
+        if any(not str(op.bl_idname).startswith("BFACW_OT_") for win in bpy.context.window_manager.windows
+               for op in win.modal_operators):
+            return "a modal operator"
+    except (AttributeError, ReferenceError, RuntimeError):
+        pass
+    try:
+        if bpy.app.is_job_running('RENDER'):
+            return "rendering"
+    except (AttributeError, TypeError, ValueError):
+        pass
+    try:
+        from . import co_work_guard
+        if co_work_guard.is_locked():
+            return "an agent step"
+    except ImportError:
+        pass
+    try:
+        from . import coworker_api
+        if coworker_api.any_turn_open():
+            return "an agent turn"
+    except ImportError:
+        pass
+    return ""
+
+
+def _visible_scenes() -> set[str]:
+    """The names of the scenes being edited: each window's scene and Sequencer scene."""
+    names = set()
+    for win in getattr(bpy.context.window_manager, "windows", ()):
+        names.add(win.scene.name)
+        seq = getattr(win.workspace, "sequencer_scene", None)
+        if seq is not None:
+            names.add(seq.name)
+    return names or {bpy.context.scene.name}
+
+
+def _watch_tick() -> float | None:
+    """The timer: look at the scenes that changed, once nothing has changed for :data:`DEBOUNCE_S`."""
+    if not _WATCH["dirty"]:
+        return None
+    wait = DEBOUNCE_S - (_clock() - _WATCH["t"])
+    if wait > 0:
+        return wait
+    if _busy():
+        return RETRY_S
+    names, _WATCH["dirty"] = _WATCH["dirty"], set()
+    try:
+        for name in names & _visible_scenes():
+            scene = bpy.data.scenes.get(name)
+            if scene is not None and scene.sequence_editor is not None:
+                refit_words(scene)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] Word highlights could not be fitted again: {!s}".format(ex))
+    return DEBOUNCE_S if _WATCH["dirty"] else None
+
+
+@bpy.app.handlers.persistent
+def _on_depsgraph(scene: Any, _depsgraph: Any = None) -> None:
+    """``depsgraph_update_post``: a scene with strips changed.  Nothing is looked at here; the scene is
+    only noted (also while playing: the timer holds it back, so a change during playback is not lost)
+    and the timer, a moment after the last change, compares each caption's signature."""
+    try:
+        if scene.sequence_editor is None:
+            return
+        _WATCH["dirty"].add(scene.name)
+        _WATCH["t"] = _clock()
+        if not bpy.app.timers.is_registered(_watch_tick):
+            bpy.app.timers.register(_watch_tick, first_interval=DEBOUNCE_S)
+    except (AttributeError, ReferenceError, RuntimeError):
+        pass
+
+
+def _watch_start() -> None:
+    if _on_depsgraph not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
+
+
+def _watch_stop() -> None:
+    try:
+        if _on_depsgraph in bpy.app.handlers.depsgraph_update_post:
+            bpy.app.handlers.depsgraph_update_post.remove(_on_depsgraph)
+        if bpy.app.timers.is_registered(_watch_tick):
+            bpy.app.timers.unregister(_watch_tick)
+    except (AttributeError, ValueError):
+        pass
+    _WATCH["dirty"] = set()
+    _blf_forget(all_=True)
+
+
 # -- Translate (#42 for many captions) ---------------------------------------------------
 
 def translate_request(scene: Any, strips: list) -> tuple[str, str, str]:
@@ -1353,15 +1745,17 @@ def translate_request(scene: Any, strips: list) -> tuple[str, str, str]:
 
 
 def set_caption_text(scene: Any, strip: Any, text: str) -> None:
-    """*text* into a caption strip, laid out for its style; its word strips follow."""
+    """*text* into a caption strip, laid out for its style (and the letter case it was made in, #594);
+    its word strips follow."""
     tag = tag_of(strip) or {}
-    style = cap.STYLES.get(tag.get("style") or "", cap.STYLES["CLEAN"])
+    key = tag.get("style") or ""
+    style = cap.STYLES.get(key, cap.STYLES["CLEAN"])
     if style["highlight"]:      # one line: the word strips are placed along it
         new = " ".join(text.split())
     else:
         new = "\n".join(cap.layout_lines(text.split(), int(tag.get("chars") or 36), int(tag.get("lines") or 2),
                                          force=True) or [text])
-    strip.text = new.upper() if style["uppercase"] else new
+    strip.text = cap.apply_case(new, cap.effective_case(key, (tag.get("choices") or {}).get("case")))
     text_changed(strip, scene)
 
 
@@ -1375,28 +1769,7 @@ def text_changed(strip: Any, scene: Any = None) -> None:
     if not (cap.STYLES.get(key) or {}).get("highlight"):
         return
     scene = scene or strip.id_data
-    ed = scene.sequence_editor
-    top = _top(ed)
-    old = [s for s in top if (tag_of(s) or {}).get("line") == strip.name]
-    names = [s.name for s in old]
-    from .wand.prefetch import remove_strips    # the Sequencer's prefetch stopped first (#536)
-    line_name = strip.name
-    remove_strips(top, old)
-    del old, top
-    _drop_fcurves(scene, names)
-    strip = _all(ed).get(line_name)         # the line looked up again: nothing is held across a removal (#593)
-    if strip is None:
-        return
-    st = cap.resolve_style(key, scene.render.resolution_x, scene.render.resolution_y)
-    text = " ".join(strip.text.split())
-    if strip.text != text:
-        strip.text = text           # one line, or the word strips would sit off their words
-    left, right = _left(strip), _right(strip)
-    timed = [dict(w, frame=int(round(w["start"]))) for w in cap.even_words(text, left, right)]
-    framed = {"frame_start": left, "frame_end": right, "lines": [text], "words": timed}
-    style = dict(st, uppercase=False)       # the text already is as it should be shown
-    font = strip.font or _font()
-    _add_highlights(scene, strip, framed, style, font, _measure(font))
+    _rebuild_words(scene, strip.name, even=True)
 
 
 def apply_translation(path: str, reply: str) -> tuple[int, int]:
@@ -1459,12 +1832,16 @@ def tool_add_captions(strips: Any = None, style: str = "CLEAN", language: str | 
                       transcript_path: str | None = None, replace_edited: bool = False,
                       animation: Any = cap.ANIM_STYLE, position: Any = "BOTTOM", margin: Any = 0,
                       speakers: bool = False, speaker_labels: bool = False,
-                      speaker_settings: Any = None) -> dict[str, Any]:
+                      speaker_settings: Any = None, case: Any = None, font: Any = None, bold: Any = None,
+                      italic: Any = None, size: Any = None, text_color: Any = None,
+                      highlight_color: Any = None) -> dict[str, Any]:
     """``add_captions`` (MCP): a result dict, ``status`` ``"ok"`` or ``"error"`` + ``message``.
-    *margin* in percent of the frame's height (#542)."""
+    *margin* in percent of the frame's height (#542); *case*, *font*, *bold*, *italic*, *size*,
+    *text_color* and *highlight_color* are the style choices of #594 (none: as the style has it)."""
     try:
         names, key, lang = cap.check_tool_params(strips, style, language)
         anim, pos, margin_frac = cap.check_look_params(animation, position, margin)
+        choices = cap.check_style_params(case, font, bold, italic, size, text_color, highlight_color)
         per_speaker, settings = cap.check_speakers(speakers, speaker_settings)
         scene = seq_scene()
         ed = scene.sequence_editor
@@ -1485,7 +1862,7 @@ def tool_add_captions(strips: Any = None, style: str = "CLEAN", language: str | 
                 raise CaptionsError("Name the sound or movie strips to caption (strips=[...]), or select them.")
         result = add_captions(scene, found, key, lang, transcript_path or "", replace_edited=bool(replace_edited),
                               animation=anim, position=pos, margin=margin_frac, speakers=per_speaker,
-                              speaker_settings=settings, speaker_labels=bool(speaker_labels))
+                              speaker_settings=settings, speaker_labels=bool(speaker_labels), choices=choices)
         result["message"] = "{:d} caption lines on channel {:d} ({:s}), frames {:d}-{:d}, {:s}.".format(
             result["lines_created"], result["channel"], _look_text(result), result["first_frame"],
             result["last_frame"],
@@ -1507,13 +1884,29 @@ def tool_add_captions(strips: Any = None, style: str = "CLEAN", language: str | 
 # -- operators and menus ---------------------------------------------------------------
 
 _STYLE_ITEMS = [(k, s["label"], s["description"]) for k, s in cap.STYLES.items()]
-_LINES_ITEMS = [("STYLE", "Style's", "As many lines as the style uses"), ("1", "1", "One line"),
-                ("2", "2", "Up to two lines")]
+
+
+def _lines_items_for(count: int) -> list[tuple]:
+    """The Lines drop-down for a style that uses *count* lines: every entry says what it counts."""
+    return [("STYLE", "As the Style ({:d} Line{:s})".format(count, "" if count == 1 else "s"),
+             "Use the number of lines the style has", 'PRESET', 0),
+            ("1", "1 Line", "Every caption on one line (the words are split into more captions)", 'NONE', 1),
+            ("2", "2 Lines", "Up to two lines per caption", 'NONE', 2)]
+
+
+_LINES_BY_COUNT = {1: _lines_items_for(1), 2: _lines_items_for(2)}
+
+
+def _lines_items(self: Any, _context: Any) -> list[tuple]:
+    """Lines: "As the Style (N Lines)" with the number the chosen style and animation give."""
+    key = cap.style_key(getattr(self, "style", "CLEAN")) or "CLEAN"
+    one = cap.STYLES[key]["highlight"] or cap.one_line(getattr(self, "animation", cap.ANIM_STYLE))
+    return _LINES_BY_COUNT[1 if one or cap.STYLES[key]["max_lines"] <= 1 else 2]
 
 
 def _language_items() -> list[tuple[str, str, str]]:
     from .preferences import _LANGUAGES
-    items = [("auto", "Detect", "Let the transcription find the language")]
+    items = [("auto", "Detect Automatically", "Let the transcription find the language that is spoken")]
     items += [(code, name, "Spoken in " + name) for code, name in _LANGUAGES]
     return items
 
@@ -1525,9 +1918,38 @@ def _lines_value(value: str) -> int:
     return 0 if value == "STYLE" else int(value)
 
 
-_ANIM_ITEMS = [(k, a["label"], a["description"]) for k, a in cap.ANIMATIONS.items()]
-_POSITION_ITEMS = [(k, p["label"], p["description"]) for k, p in cap.POSITIONS.items()]
-_SAME = ("SAME", "Same", "As set above for every speaker")
+_ANIM_ICONS = {cap.ANIM_STYLE: 'PRESET', "NONE": 'X', "FADE": 'IMAGE_ALPHA', "SLIDE_UP": 'TRIA_UP',
+               "TYPEWRITER": 'TEXT', "POP": 'ZOOM_IN'}
+_POSITION_ICONS = {"BOTTOM": 'ANCHOR_BOTTOM', "TOP": 'ANCHOR_TOP', "MIDDLE": 'ANCHOR_CENTER'}
+_CASE_ICONS = {cap.STYLE_CASE: 'PRESET', "AS_SPOKEN": 'TEXT', "UPPER": 'SMALL_CAPS', "LOWER": 'FONT_DATA',
+               "TITLE": 'SORTALPHA'}
+# Icons through safe_icon (a Blender icon in every build; none of them is Bforartists-only), one per entry.
+_ANIM_ITEMS = [(k, a["label"], a["description"], safe_icon(_ANIM_ICONS.get(k, 'NONE')), i)
+               for i, (k, a) in enumerate(cap.ANIMATIONS.items())]
+_POSITION_ITEMS = [(k, p["label"], p["description"], safe_icon(_POSITION_ICONS.get(k, 'NONE')), i)
+                   for i, (k, p) in enumerate(cap.POSITIONS.items())]
+_CASE_ITEMS = [(k, c["label"], c["description"], safe_icon(_CASE_ICONS.get(k, 'NONE')), i)
+               for i, (k, c) in enumerate(cap.CASES.items())]
+_TRI_ITEMS = {name: [("STYLE", "As the Style", "The style's own: " + what[0], 'NONE', 0),
+                     ("ON", "On", what[1], 'NONE', 1), ("OFF", "Off", what[2], 'NONE', 2)]
+              for name, what in (("bold", ("bold or not, as the style has it", "Bold text", "Regular weight text")),
+                                 ("italic", ("never italic", "Slanted text", "Upright text")))}
+_TRI_VALUE = {"STYLE": None, "ON": True, "OFF": False}
+_SAME = ("SAME", "Same as Above", "As set above for every speaker")
+_FONT_ITEMS: list[tuple] = []       # kept alive: Blender reads the strings of a dynamic enum later
+
+
+def _font_items(_self: Any, _context: Any) -> list[tuple]:
+    """Font: the style's own, each font loaded in this file, or a font file."""
+    items = [("STYLE", "As the Style", "The style's own font: Blender's bundled Inter", safe_icon('FONT_DATA'), 0)]
+    for f in bpy.data.fonts:
+        if not str(f.filepath).startswith("<builtin"):
+            items.append(("FONT:" + f.name, f.name, "A font loaded in this file", safe_icon('FONT_DATA'),
+                          len(items)))
+    items.append(("FILE", "A Font File...", "Pick a font file on disk (.ttf, .otf, .woff2...); it is loaded "
+                                            "into this file", safe_icon('FILE_FONT'), len(items)))
+    _FONT_ITEMS[:] = items
+    return _FONT_ITEMS
 
 
 class BFACW_PG_caption_speaker(PropertyGroup):  # type: ignore[misc]
@@ -1536,9 +1958,12 @@ class BFACW_PG_caption_speaker(PropertyGroup):  # type: ignore[misc]
     name: StringProperty(  # type: ignore[valid-type]
         name="Name", default="", description="The speaker's name: their caption channel's, and the label in front "
                                              "of their captions")
-    style: EnumProperty(name="Style", items=[_SAME] + _STYLE_ITEMS, default="SAME")  # type: ignore[valid-type]
-    position: EnumProperty(name="Position", items=[_SAME] + _POSITION_ITEMS,  # type: ignore[valid-type]
-                           default="SAME")
+    style: EnumProperty(  # type: ignore[valid-type]
+        name="Style", items=[_SAME] + _STYLE_ITEMS, default="SAME",
+        description="How this speaker's captions look (Same as Above: the style chosen above)")
+    position: EnumProperty(  # type: ignore[valid-type]
+        name="Position", items=[_SAME] + [(i[0], i[1], i[2]) for i in _POSITION_ITEMS], default="SAME",
+        description="Where this speaker's captions sit (Same as Above: the position chosen above)")
 
 
 def speaker_rows(scene: Any, sources: list) -> list[tuple[str, str]]:
@@ -1579,12 +2004,18 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
     bl_label = "Auto Captions"
     bl_options = {'REGISTER', 'UNDO'}
 
-    style: EnumProperty(name="Style", items=_STYLE_ITEMS, default="CLEAN")  # type: ignore[valid-type]
-    language: EnumProperty(name="Language", items=_LANGUAGE_ITEMS, default="auto")  # type: ignore[valid-type]
+    style: EnumProperty(  # type: ignore[valid-type]
+        name="Style", items=_STYLE_ITEMS, default="CLEAN",
+        description="How the captions look: size, colours, outline, box and whether the spoken word lights up")
+    language: EnumProperty(  # type: ignore[valid-type]
+        name="Language", items=_LANGUAGE_ITEMS, default="auto",
+        description="The language that is spoken, so it is transcribed right (Detect: let the transcription find it)")
     max_chars: IntProperty(  # type: ignore[valid-type]
         name="Max Characters", default=0, min=0, max=80,
         description="Characters per line (0: what fits the frame in this style)")
-    lines: EnumProperty(name="Lines", items=_LINES_ITEMS, default="STYLE")  # type: ignore[valid-type]
+    lines: EnumProperty(  # type: ignore[valid-type]
+        name="Lines", items=_lines_items,
+        description="How many lines a caption may have; words that don't fit become another caption")
     transcript_path: StringProperty(  # type: ignore[valid-type]
         name="Transcript", subtype='FILE_PATH', default="",
         description="A transcript file (.json, bfa_coworker.transcript/1) to caption from instead of transcribing")
@@ -1592,12 +2023,49 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         name="Replace Edited Captions", default=False,
         description="Replace captions changed by hand since Auto Captions made them (reworded, moved, trimmed); "
                     "off: they are kept")
-    animation: EnumProperty(name="Animation", items=_ANIM_ITEMS, default=cap.ANIM_STYLE)  # type: ignore[valid-type]
-    position: EnumProperty(name="Position", items=_POSITION_ITEMS, default="BOTTOM")  # type: ignore[valid-type]
+    animation: EnumProperty(  # type: ignore[valid-type]
+        name="Animation", items=_ANIM_ITEMS, default=cap.ANIM_STYLE,
+        description="How each caption moves in and out (As the Style: Bold Pop pops in, the others stand still)")
+    position: EnumProperty(  # type: ignore[valid-type]
+        name="Position", items=_POSITION_ITEMS, default="BOTTOM",
+        description="Where the captions sit in the frame: near the bottom, near the top or in the middle")
     margin: IntProperty(  # type: ignore[valid-type]
         name="Margin", default=0, min=0, max=45, subtype='PERCENTAGE',
         description="How far the captions stay from the frame's edge, in percent of its height (0: the safe area "
                     "of a wide or vertical frame)")
+    case: EnumProperty(  # type: ignore[valid-type]
+        name="Letter Case", items=_CASE_ITEMS, default=cap.STYLE_CASE,
+        description="Capital and small letters of the caption text (As the Style: capitals for Bold Pop, the "
+                    "words as spoken for the others)")
+    font_choice: EnumProperty(  # type: ignore[valid-type]
+        name="Font", items=_font_items,
+        description="The caption font: the style's own, a font already in this file, or a font file")
+    font_file: StringProperty(  # type: ignore[valid-type]
+        name="Font File", subtype='FILE_PATH', default="",
+        description="A font file (.ttf, .otf, .woff2...) for the captions; it is loaded into this file")
+    bold: EnumProperty(  # type: ignore[valid-type]
+        name="Bold", items=_TRI_ITEMS["bold"], default="STYLE",
+        description="Bold captions or not (As the Style: bold only where the style is)")
+    italic: EnumProperty(  # type: ignore[valid-type]
+        name="Italic", items=_TRI_ITEMS["italic"], default="STYLE",
+        description="Italic (slanted) captions or not (As the Style: upright)")
+    size: FloatProperty(  # type: ignore[valid-type]
+        name="Size", default=1.0, min=cap.MIN_SIZE_SCALE, max=cap.MAX_SIZE_SCALE, step=5, precision=2,
+        description="The text size as a scale of the style's own size (1 = as the style has it, 1.5 = half "
+                    "again as big)")
+    set_text_color: BoolProperty(  # type: ignore[valid-type]
+        name="Own Text Colour", default=False,
+        description="Use the colour chosen here for the text instead of the style's own")
+    text_color: FloatVectorProperty(  # type: ignore[valid-type]
+        name="Text Colour", subtype='COLOR', size=4, min=0.0, max=1.0, default=(1.0, 1.0, 1.0, 1.0),
+        description="The colour of the caption text")
+    set_highlight_color: BoolProperty(  # type: ignore[valid-type]
+        name="Own Highlight Colour", default=False,
+        description="Use the colour chosen here for the word that is spoken (Word-by-word highlight) instead of "
+                    "the style's own")
+    highlight_color: FloatVectorProperty(  # type: ignore[valid-type]
+        name="Highlight Colour", subtype='COLOR', size=4, min=0.0, max=1.0, default=(1.0, 0.82, 0.1, 1.0),
+        description="The colour of the word that is being spoken")
     speakers: BoolProperty(  # type: ignore[valid-type]
         name="A Channel per Speaker", default=False,
         description="Each selected sound file is one speaker: their captions go on a channel of their own, with "
@@ -1627,23 +2095,54 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         layout = self.layout
         layout.use_property_split = True
         scene = seq_scene(context)
-        layout.prop(self, "style")
-        layout.prop(self, "animation")
-        layout.prop(self, "position")
-        row = layout.row()
+        highlight = bool(cap.STYLES[self.style]["highlight"])
+        # Style: how the captions look.
+        box = layout.box()
+        box.label(text="Style: how the captions look", icon=safe_icon('FONT_DATA'))
+        col = box.column()
+        col.use_property_split = True
+        col.prop(self, "style")
+        col.prop(self, "case")
+        col.prop(self, "font_choice")
+        if self.font_choice == "FILE":
+            col.prop(self, "font_file")
+        col.prop(self, "bold")
+        col.prop(self, "italic")
+        col.prop(self, "size")
+        row = col.row(align=True)
+        row.prop(self, "set_text_color", text="Text")
+        sub = row.row(align=True)
+        sub.enabled = self.set_text_color
+        sub.prop(self, "text_color", text="")
+        row = col.row(align=True)
+        row.prop(self, "set_highlight_color", text="Highlight")
+        sub = row.row(align=True)
+        sub.enabled = self.set_highlight_color and highlight
+        sub.prop(self, "highlight_color", text="")
+        if not highlight:
+            col.label(text="The highlight colour is for Word-by-word highlight.", icon=safe_icon('INFO'))
+        col.prop(self, "position")
+        row = col.row()
         row.enabled = self.position != "MIDDLE"
         row.prop(self, "margin")
         if self.margin == 0 and self.position != "MIDDLE":
             kind = cap.frame_kind(scene.render.resolution_x, scene.render.resolution_y)
             row.label(text="Auto: {:d} %".format(int(round(cap.default_margin(self.position, kind) * 100))))
+        # Motion: how they move.
+        box = layout.box()
+        box.label(text="Motion: how the captions move", icon=safe_icon('ANIM'))
+        col = box.column()
+        col.use_property_split = True
+        col.prop(self, "animation")
+        # The words: what is transcribed and how it is split.
         layout.prop(self, "language")
         row = layout.row()
         row.prop(self, "max_chars")
         if self.max_chars == 0:
             row.label(text="Auto: {:d}".format(cap.default_max_chars(
-                self.style, scene.render.resolution_x, scene.render.resolution_y)))
+                self.style, scene.render.resolution_x, scene.render.resolution_y, self._choices_or_none())))
         sub = layout.row()
-        sub.enabled = not cap.STYLES[self.style]["highlight"] and not cap.one_line(self.animation)
+        sub.enabled = not highlight and not cap.one_line(self.animation)
         sub.prop(self, "lines")
         layout.prop(self, "transcript_path")
         layout.prop(self, "replace_edited")
@@ -1717,7 +2216,28 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
                 settings.append(row)
         return {"animation": self.animation, "position": self.position, "margin": self.margin / 100.0,
                 "speakers": bool(self.speakers), "speaker_settings": settings,
-                "speaker_labels": bool(self.speaker_labels)}
+                "speaker_labels": bool(self.speaker_labels), "choices": self._choices()}
+
+    def _choices(self) -> dict[str, Any]:
+        """The dialog's style choices (#594), as :func:`captions.check_style_params` checks them;
+        raises :class:`CaptionsError`."""
+        font = ""
+        if self.font_choice.startswith("FONT:"):
+            font = self.font_choice[len("FONT:"):]
+        elif self.font_choice == "FILE":
+            if not self.font_file.strip():
+                raise CaptionsError("Pick a font file, or choose another font.")
+            font = self.font_file
+        return cap.check_style_params(
+            self.case, font, _TRI_VALUE[self.bold], _TRI_VALUE[self.italic], self.size,
+            tuple(self.text_color) if self.set_text_color else None,
+            tuple(self.highlight_color) if self.set_highlight_color else None)
+
+    def _choices_or_none(self) -> dict[str, Any] | None:
+        try:
+            return self._choices()
+        except CaptionsError:
+            return None
 
     # -- transcribing first (#516) --
     def _transcribe_first(self, context: Any, scene: Any, sources: list, language: str | None) -> set[str]:
@@ -1725,9 +2245,13 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         the status bar shows the progress, this operator's undo step and report hold the
         captions).  Without one (a script), or from Adjust Last Operation (no modal there), a
         timer makes them on its own."""
+        try:
+            look = self._look(scene, sources)
+        except CaptionsError as ex:
+            self.report({'ERROR'}, str(ex))
+            return {'CANCELLED'}
         params = dict({"style": self.style, "language": language, "max_chars": self.max_chars,
-                       "max_lines": _lines_value(self.lines), "replace_edited": self.replace_edited},
-                      **self._look(scene, sources))
+                       "max_lines": _lines_value(self.lines), "replace_edited": self.replace_edited}, **look)
         # options.is_repeat: the redo panel.  Not Operator.is_repeat(), which is true whenever the
         # last operator run was Auto Captions too.
         options = getattr(self, "options", None)
@@ -1840,7 +2364,9 @@ class BFACW_OT_captions_import_srt(Operator, ImportHelper):  # type: ignore[misc
 
     filename_ext = ".srt"
     filter_glob: StringProperty(default="*.srt", options={'HIDDEN'})  # type: ignore[valid-type]
-    style: EnumProperty(name="Style", items=_STYLE_ITEMS, default="CLEAN")  # type: ignore[valid-type]
+    style: EnumProperty(  # type: ignore[valid-type]
+        name="Style", items=_STYLE_ITEMS, default="CLEAN",
+        description="How the imported captions look: size, colours, outline, box")
     max_chars: IntProperty(  # type: ignore[valid-type]
         name="Max Characters", default=0, min=0, max=80,
         description="Characters per line for Word-by-word highlight (0: what fits the frame)")
@@ -1897,6 +2423,57 @@ class BFACW_OT_captions_export_srt(Operator, ExportHelper):  # type: ignore[misc
         return {'FINISHED'}
 
 
+class BFACW_OT_captions_refit_words(Operator):  # type: ignore[misc]
+    """Put the word highlights of Word-by-word captions back on their words, from the caption's current font, bold, italic, size, alignment, wrap width and position"""
+    bl_idname = "bfacw.captions_refit_words"
+    bl_label = "Refit Word Highlights"
+    bl_description = ("Put the word highlights of Word-by-word captions back on their words: after the caption's "
+                      "font, bold, italic, size, alignment, wrap width, position or text changed. This happens by "
+                      "itself a moment after the change; this is the manual way. Selected captions, else all")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context: Any) -> bool:
+        if not _seq.poll(cls, context):
+            return False
+        if not _has_word_strips(seq_scene(context)):
+            cls.poll_message_set("No word highlights: they come with the Word-by-word highlight style")
+            return False
+        return True
+
+    def execute(self, context: Any) -> set[str]:
+        scene = seq_scene(context)
+        names = _selected_caption_names(scene)
+        done = refit_words(scene, names or None, force=True, rebuild=True)
+        self.report({'INFO'}, "Word highlights fitted again on {:d} caption{:s}".format(done, "" if done == 1 else "s"))
+        return {'FINISHED'}
+
+
+def _has_word_strips(scene: Any) -> bool:
+    """The scene has word strips (a light look: no tag copies)."""
+    ed = getattr(scene, "sequence_editor", None)
+    if ed is None:
+        return False
+    for s in _top(ed):
+        value = s.get(cap.TAG)
+        if value is not None and value.get("role") == "word":
+            return True
+    return False
+
+
+def _selected_caption_names(scene: Any) -> list[str]:
+    """The caption lines of the selected caption strips (a selected word strip stands for its line)."""
+    ed = scene.sequence_editor
+    out = []
+    for s in _top(ed):
+        value = s.get(cap.TAG)
+        if s.select and value is not None:
+            line = value.get("line") if value.get("role") == "word" else s.name
+            if line:
+                out.append(str(line))
+    return list(dict.fromkeys(out))
+
+
 class BFACW_MT_captions(Menu):  # type: ignore[misc]
     bl_idname = "BFACW_MT_captions"
     bl_label = "Captions"
@@ -1908,6 +2485,8 @@ class BFACW_MT_captions(Menu):  # type: ignore[misc]
         # (wand.sequencer), so it shows once.
         layout.operator("bfacw.captions_import_srt", text="Import SRT...", icon=safe_icon('IMPORT'))
         layout.operator("bfacw.captions_export_srt", text="Export SRT...", icon=safe_icon('EXPORT'))
+        if _has_word_strips(seq_scene(_context)):
+            layout.operator("bfacw.captions_refit_words", text="Refit Word Highlights", icon=safe_icon('FILE_REFRESH'))
 
 
 def _draw_context_menu(self: Any, context: Any) -> None:
@@ -1923,9 +2502,12 @@ def _draw_context_menu(self: Any, context: Any) -> None:
     op = layout.operator("bfacw.translate", text="Translate Captions ({:d})...".format(len(strips)),
                          icon=safe_icon('FONT_DATA'))
     op.path, op.current, op.what = path, current, what
+    if _has_word_strips(scene):
+        layout.operator("bfacw.captions_refit_words", text="Refit Word Highlights", icon=safe_icon('FILE_REFRESH'))
 
 
-_CLASSES = (BFACW_PG_caption_speaker, BFACW_OT_auto_captions, BFACW_OT_captions_import_srt, BFACW_OT_captions_export_srt, BFACW_MT_captions)
+_CLASSES = (BFACW_PG_caption_speaker, BFACW_OT_auto_captions, BFACW_OT_captions_import_srt, BFACW_OT_captions_export_srt,
+            BFACW_OT_captions_refit_words, BFACW_MT_captions)
 # The Strip menu's entries are drawn by wand.sequencer's Coworker section (one place for every
 # Coworker video tool); the right-click menu keeps Translate Captions.
 _MENUS = (("SEQUENCER_MT_context_menu", _draw_context_menu),)
@@ -1940,9 +2522,11 @@ def register() -> None:
         if menu is not None:
             menu.append(draw)
             _HOOKED.append((menu, draw))
+    _watch_start()
 
 
 def unregister() -> None:
+    _watch_stop()
     for menu, draw in _HOOKED:
         try:
             menu.remove(draw)

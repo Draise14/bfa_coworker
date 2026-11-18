@@ -46,10 +46,11 @@ def register(mcp: FastMCP) -> None:
             wait_seconds: How long to wait for the job to finish (0 = answer now, at most 240).
 
         Returns:
-            ``status``, ``job_id``, ``state`` ("running", "done", "error" or "cancelled"),
+            ``status``, ``job_id``, ``state`` ("running", "done", "error", "cancelled" or "stuck"),
             ``kind``, ``label``, ``elapsed_seconds``, ``progress_percent`` (when Blender
             reports it), ``result`` once done (e.g. the ``filepath`` or baked images),
-            and a ``message``.
+            and a ``message``.  ``state`` "stuck" (a render with no progress for a few
+            minutes): stop polling, don't start another render, tell the user.
         """
         code = toolcode_format_call(_TOOL_CALL, Params(job_id=job_id, wait_seconds=wait_seconds))
         # Waiting must not block the server: the bridge call runs on a worker thread.

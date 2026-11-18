@@ -44,7 +44,7 @@ from typing import Any
 
 import bpy  # pylint: disable=import-error
 
-from . import agent_controller, helpers, log, threads
+from . import agent_controller, helpers, log, magic_wording, threads
 from .helpers import HELPERS
 
 
@@ -346,19 +346,31 @@ def card(thread: Any) -> Any:
     rows = []
     for helper in batch:
         word, icon = _status_of(helper)
-        rows.append((helper.id, log.redact(helper.title), word, icon))     # the title is an argument (#511)
+        shown = log.redact(helper.title)                     # the title is an argument (#511)
+        rows.append((helper.id, magic_wording.helper_label(helper, shown) if magic_wording.enabled() else shown,
+                     word, icon))
     left = sum(1 for h in batch if not h.finished)
-    title = "{:d} helper{:s} — {:d} working".format(len(batch), "" if len(batch) == 1 else "s", left)
+    noun = magic_wording.group_noun(len(batch)) if magic_wording.enabled() else         "helper" + ("" if len(batch) == 1 else "s")
+    title = "{:d} {:s} — {:d} working".format(len(batch), noun, left)
     return Helpers(title=title, rows=tuple(rows))
 
 
-def tab_label(thread: Any) -> str:
-    """A helper tab's label (its title), or "" for any other tab."""
+def tab_label(thread: Any, named: bool = True) -> str:
+    """A helper tab's label (its title, "Mage 1: ..." with the magic wording unless
+    *named* is False), or "" for any other tab."""
     helper = HELPERS.get(getattr(thread, "id", ""))
-    return log.redact(helper.title) if helper is not None else ""     # keys as *** (#511)
+    if helper is None:
+        return ""
+    shown = log.redact(helper.title)        # keys as *** (#511)
+    return magic_wording.helper_label(helper, shown) if named and magic_wording.enabled() else shown
 
 
 def tab_tip(thread: Any) -> str:
-    """"Helper for <parent>: " for a helper tab's tooltip, else ""."""
+    """"Helper for <parent>: " for a helper tab's tooltip, else "".  With the magic wording:
+    "Mage 1, a helper chat that does part of the task of <parent>: " (#528)."""
     helper = HELPERS.get(getattr(thread, "id", ""))
-    return "Helper for \"{:s}\": ".format(helper.parent_title) if helper is not None else ""
+    if helper is None:
+        return ""
+    if magic_wording.enabled():
+        return magic_wording.helper_tip(helper)
+    return "Helper for \"{:s}\": ".format(helper.parent_title)

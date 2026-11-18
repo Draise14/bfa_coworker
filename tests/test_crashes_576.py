@@ -8,7 +8,7 @@ Two crashes from use (#576): Paste Image, and agent code running during a slider
 1. The agent's code of a step is on disk before it runs (``step_code_log``): redacted like
    ``operations.jsonl``, bounded, marked RUNNING until the step returns.
 2. A scene-changing bridge step waits while the user drags a slider or a modal tool runs
-   (``ui_activity`` + the bridge's ``_drag_gate``), a bounded time, then answers clearly;
+   (``ui_activity`` + ``scene_busy`` + the bridge's ``_busy_gate``), a bounded time, then answers clearly;
    reads and Coworker's own bookkeeping never wait.
 3. Paste Image does not switch an area under a drag, and a restore that finds its image gone
    does not raise.
@@ -23,6 +23,7 @@ Run with::
 __all__ = ()
 
 import importlib
+import json
 import sys
 import tempfile
 import types
@@ -47,6 +48,11 @@ scl = _load("step_code_log")
 ua = _load("ui_activity")
 br = _load("mcp_to_blender_server")
 att = _load("chat_attachments")
+lj = _load("long_jobs")
+sb = _load("scene_busy")
+
+
+WRITE = "import bpy\nbpy.data.objects.new('x', None)"
 
 
 def _op(ident, pointer=1):
@@ -207,13 +213,13 @@ class DragGate(unittest.TestCase):
         return br._ExecResult({"status": "ok", "result": "done"})
 
     def test_nothing_in_the_way_runs_at_once(self):
-        res = br._drag_gate("", "execute_blender_code", "code", self._run)
+        res = br._busy_gate("", "execute_blender_code", WRITE, False, self._run)
         self.assertEqual(self.ran, [1])
         self.assertIsNone(res.check_fn)
 
     def test_a_write_waits_for_the_drag_then_runs(self):
         ua.note_update()
-        res = br._drag_gate("", "execute_blender_code", "code", self._run)
+        res = br._busy_gate("", "execute_blender_code", WRITE, False, self._run)
         self.assertEqual(self.ran, [])
         self.assertIsNotNone(res.check_fn)
         self.assertIsNone(res.check_fn())              # still dragging
@@ -226,7 +232,7 @@ class DragGate(unittest.TestCase):
         self.wm.windows[0].modal_operators = [_op("TRANSFORM_OT_rotate")]
         t0 = 1000.0
         with mock.patch.object(br.time, "monotonic", return_value=t0):
-            res = br._drag_gate("", "execute_blender_code", "code", self._run)
+            res = br._busy_gate("", "execute_blender_code", WRITE, False, self._run)
         with mock.patch.object(br.time, "monotonic", return_value=t0 + ua.WAIT_LIMIT + 1):
             answer = res.check_fn()
         self.assertEqual(self.ran, [])
@@ -236,13 +242,13 @@ class DragGate(unittest.TestCase):
 
     def test_reads_and_plans_never_wait(self):
         ua.note_update()
-        res = br._drag_gate("", "get_scene_info", "code", self._run)
+        res = br._busy_gate("", "get_scene_info", WRITE, False, self._run)
         self.assertEqual(self.ran, [1])
         self.assertIsNone(res.check_fn)
 
     def test_stop_ends_the_wait_without_running(self):
         ua.note_update()
-        res = br._drag_gate("t1", "execute_blender_code", "code", self._run)
+        res = br._busy_gate("t1", "execute_blender_code", WRITE, False, self._run)
         with mock.patch.object(br, "_stop_pressed", return_value=True):
             answer = res.check_fn()
         self.assertEqual(self.ran, [])
@@ -254,7 +260,7 @@ class DragGate(unittest.TestCase):
 
         def run():
             return br._ExecResult({}, inner)
-        res = br._drag_gate("", "execute_blender_code", "code", run)
+        res = br._busy_gate("", "execute_blender_code", WRITE, False, run)
         ua._last_update[0] -= 1.0
         self.assertIsNone(res.check_fn())              # ran, its own answer not there yet
         self.assertIsNone(res.check_fn())
@@ -355,8 +361,8 @@ class LongModalsAndOwnChanges(unittest.TestCase):
         ran = []
         with mock.patch.dict(sys.modules, {"bpy": bpy}):
             ua.note_update()
-            parent = br._drag_gate("", "execute_blender_code", "a", lambda: ran.append("parent") or br._ExecResult({"status": "ok"}))
-            helper = br._drag_gate("h1", "execute_blender_code", "b", lambda: ran.append("helper") or br._ExecResult({"status": "ok"}))
+            parent = br._busy_gate("", "execute_blender_code", WRITE, False, lambda: ran.append("parent") or br._ExecResult({"status": "ok"}))
+            helper = br._busy_gate("h1", "execute_blender_code", WRITE, False, lambda: ran.append("helper") or br._ExecResult({"status": "ok"}))
             self.assertEqual(ran, [])
             ua._last_update[0] -= 1.0
             self.assertEqual(parent.check_fn()["status"], "ok")
@@ -368,27 +374,27 @@ class LongModalsAndOwnChanges(unittest.TestCase):
         bpy = types.SimpleNamespace(context=types.SimpleNamespace(window_manager=wm))
         with mock.patch.dict(sys.modules, {"bpy": bpy}):
             ua.note_update()
-            res = br._drag_gate("", "execute_blender_code", "a", lambda: br._ExecResult({"status": "ok"}))
+            res = br._busy_gate("", "execute_blender_code", WRITE, False, lambda: br._ExecResult({"status": "ok"}))
         self.assertIsNone(res.check_fn)
 
     def test_jump_to_tools_are_gated_like_writes(self):
         wm = _wm(["TRANSFORM_OT_translate"])
         bpy = types.SimpleNamespace(context=types.SimpleNamespace(window_manager=wm))
         with mock.patch.dict(sys.modules, {"bpy": bpy}):
-            res = br._drag_gate("", "jump_to_asset_browser", "a", lambda: br._ExecResult({"status": "ok"}))
+            res = br._busy_gate("", "jump_to_asset_browser", "a", False, lambda: br._ExecResult({"status": "ok"}))
         self.assertIsNotNone(res.check_fn)
-        self.assertTrue(br._changes_scene("jump_to_asset_browser"))
-        self.assertFalse(br._changes_scene("get_scene_digest"))
+        self.assertTrue(sb.changes_scene("jump_to_asset_browser"))
+        self.assertFalse(sb.changes_scene("get_scene_digest"))
 
     def test_a_step_that_waited_for_an_approval_card_is_checked_again_when_it_runs(self):
         src = (_ADDON / "mcp_to_blender_server.py").read_text(encoding="utf-8")
         body = src[src.index("    def _execute(c: str, s: bool)"):src.index("    def _run() -> _ExecResult")]
-        self.assertIn("_drag_gate(", body)          # the gate sits in _execute, after card and claim waits
-        self.assertNotIn("_drag_gate(", src[src.index("    def _gated_run()"):src.index("    exec_result = None")])
+        self.assertIn("_busy_gate(", body)          # the gate sits in _execute, after card and claim waits
+        self.assertNotIn("_busy_gate(", src[src.index("    def _gated_run()"):src.index("    exec_result = None")])
 
-    def test_internal_code_is_not_held(self):
-        src = (_ADDON / "mcp_to_blender_server.py").read_text(encoding="utf-8")
-        self.assertIn("if _internal:\n            return _run_code_step(c, s)", src.replace("\r\n", "\n"))
+    def test_internal_code_goes_through_the_same_gate(self):
+        src = (_ADDON / "mcp_to_blender_server.py").read_text(encoding="utf-8").replace("\r\n", "\n")
+        self.assertIn("_busy_gate(_thread, _tool, c, _internal,", src)
 
 
 class PasteRefusal(unittest.TestCase):
@@ -423,6 +429,92 @@ class PasteRefusal(unittest.TestCase):
         src = (_ADDON / "chat_editor.py").read_text(encoding="utf-8")
         self.assertIn("Paste Image waits while a tool is running", src)
         self.assertIn("chat_attachments.take_refusal()", src)
+
+
+def _step_refused(result_text):
+    """The loop's own test (``agent_controller._step_refused``, #591), copied from its source."""
+    text = str(result_text or "")
+    return '"status": "error"' in text[:200] and '"message": "Not run:' in text[:400]
+
+
+class UnifiedGate(unittest.TestCase):
+    def setUp(self):
+        ua.reset()
+        lj.clear()
+        self.addCleanup(ua.reset)
+        self.addCleanup(lj.clear)
+        self.wm = _wm()
+        bpy = types.SimpleNamespace(context=types.SimpleNamespace(window_manager=self.wm),
+                                    app=types.SimpleNamespace(is_job_running=lambda kind: kind == self.job))
+        patcher = mock.patch.dict(sys.modules, {"bpy": bpy})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.job = ""
+        self.ran = []
+
+    def _run(self):
+        self.ran.append(1)
+        return br._ExecResult({"status": "ok", "result": "done"})
+
+    def test_a_render_is_refused_at_once_with_the_render_wording(self):
+        self.job = "RENDER"
+        res = br._busy_gate("", "execute_blender_code", "import bpy\nbpy.data.objects.new('x', None)", False, self._run)
+        self.assertIsNone(res.check_fn)
+        self.assertEqual(self.ran, [])
+        self.assertIn("render is running", res.response["message"])
+        self.assertTrue(_step_refused(json.dumps(res.response)))
+
+    def test_a_bake_gets_its_own_word(self):
+        self.job = "OBJECT_BAKE"
+        res = br._busy_gate("", "execute_blender_code", "import bpy\nbpy.data.objects.new('x', None)", False, self._run)
+        self.assertIn("bake is running", res.response["message"])
+
+    def test_a_modal_tool_is_waited_for_then_refused_with_the_tool_wording(self):
+        self.wm.windows[0].modal_operators = [_op("TRANSFORM_OT_translate")]
+        t0 = 1000.0
+        with mock.patch.object(br.time, "monotonic", return_value=t0):
+            res = br._busy_gate("", "execute_blender_code", "import bpy\nbpy.data.objects.new('x', None)", False, self._run)
+        self.assertIsNotNone(res.check_fn)
+        with mock.patch.object(br.time, "monotonic", return_value=t0 + ua.WAIT_LIMIT + 1):
+            answer = res.check_fn()
+        self.assertIn("TRANSFORM_OT_translate", answer["message"])
+        self.assertTrue(_step_refused(json.dumps(answer)))
+
+    def test_a_render_that_starts_while_waiting_for_a_drag_refuses_with_the_render_wording(self):
+        ua.note_update()
+        res = br._busy_gate("", "execute_blender_code", "import bpy\nbpy.data.objects.new('x', None)", False, self._run)
+        self.job = "RENDER"
+        ua._last_update[0] -= 1.0
+        answer = res.check_fn()
+        self.assertIn("render is running", answer["message"])
+        self.assertEqual(self.ran, [])
+
+    def test_the_scene_touching_reads_and_jump_to_are_one_list(self):
+        for tool in lj.SCENE_TOUCHING_READS | {"jump_to_anything"}:
+            self.assertTrue(sb.changes_scene(tool), tool)
+        self.wm.windows[0].modal_operators = [_op("TRANSFORM_OT_translate")]
+        for tool in ("get_asset_tags", "jump_to_tab_by_name"):
+            res = br._busy_gate("", tool, WRITE, False, self._run)
+            self.assertIsNotNone(res.check_fn, tool)
+
+    def test_a_script_that_only_reads_is_not_held(self):
+        self.wm.windows[0].modal_operators = [_op("TRANSFORM_OT_translate")]
+        res = br._busy_gate("", "execute_blender_code", "import bpy\nresult = {'n': len(bpy.data.objects)}", False, self._run)
+        self.assertIsNone(res.check_fn)
+        self.assertEqual(self.ran, [1])
+
+    def test_internal_code_is_held_only_for_the_risky_markers(self):
+        self.wm.windows[0].modal_operators = [_op("TRANSFORM_OT_translate")]
+        risky = br._busy_gate("", "coworker_internal", "bpy.ops.ed.undo()", True, self._run)
+        self.assertIsNotNone(risky.check_fn)
+        quiet = br._busy_gate("", "coworker_internal", "result = {'ok': 1}", True, self._run)
+        self.assertIsNone(quiet.check_fn)
+
+    def test_the_early_refusal_only_covers_render_and_bake(self):
+        self.wm.windows[0].modal_operators = [_op("TRANSFORM_OT_translate")]
+        self.assertIsNone(br._busy_refusal("execute_blender_code", "import bpy\nbpy.data.objects.new('x', None)", False))
+        self.job = "RENDER"
+        self.assertIsNotNone(br._busy_refusal("execute_blender_code", "import bpy\nbpy.data.objects.new('x', None)", False))
 
 
 if __name__ == "__main__":

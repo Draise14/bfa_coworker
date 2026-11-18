@@ -140,7 +140,7 @@ class _UiBase(unittest.TestCase):
 
         self.ac = types.SimpleNamespace(THREADS=reg, thread_state=thread_state)
         self.stopped, self.status, self.helper_closed = [], [], []
-        helper_chats = types.SimpleNamespace(tab_label=lambda t: self.helper_titles.get(t.id, ""),
+        helper_chats = types.SimpleNamespace(tab_label=lambda t, named=True: self.helper_titles.get(t.id, ""),
                                              tab_closed=lambda t: self.helper_closed.append(t.id), stop_helpers=lambda t: self.stopped.append(t.id))
         approvals = types.SimpleNamespace(cancel_all=lambda _tag: None)
         for name, mod in (("coworker_api", types.SimpleNamespace(cancel_questions=lambda _tag: None)),
@@ -169,7 +169,8 @@ class _UiBase(unittest.TestCase):
             "_redraw_all_chats": lambda: None, "_save_tabs": lambda: None,
             "_fresh_default_chat": lambda: self.fresh_default.append(True), "_auto_toggle": lambda *_a: None,
             "_AREA_PINS": {}, "_socket": lambda: types.SimpleNamespace(focus=""), "_focus_thread": lambda _t: None,
-            "_acp": None, "safe_icon": lambda name: name, "_thread_status": lambda _t: ("Idle", "DOT"),
+            "_acp": None, "safe_icon": lambda name: name, "_thread_status": lambda _t: ("Idle", "DOT"), "_thread_status_shown": lambda _t: ("Idle", "DOT"),
+            "_magic": types.SimpleNamespace(shown_agent_text=lambda text, loose=False: text, redacted_agent_text=lambda text, loose=False: text),
             "_tab_icon": lambda _t: ("WORLD", False), "_running_now": lambda: False,
             "draw_new_chat_entries": lambda layout, _ctx: layout.log.append(("new_chat_entries",)),
             "new_chat_for_label": lambda _ctx: self.editor_label, "_tab_kind": lambda _ctx: "VIEW_3D",

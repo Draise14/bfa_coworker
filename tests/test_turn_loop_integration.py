@@ -355,10 +355,12 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
                 # failed-step recovery path).
                 with server.lock:
                     _fail = False
+                    _fail_text = None
                     for _i, _m in enumerate(server.fail_tool_markers):
                         if _m in code:
                             server.fail_tool_markers.pop(_i)
                             _fail = True
+                            _fail_text = getattr(server, "fail_texts", {}).get(_m)
                             break
                     if not _fail:
                         if "primitive_cube_add" in code and "Cube" not in server.scene_objects:
@@ -367,7 +369,10 @@ class _FakeLLMHandler(BaseHTTPRequestHandler):
                         if "primitive_uv_sphere_add" in code and "Sphere" not in server.scene_objects:
                             server.scene_objects.append("Sphere")
                             server.scene_state["active_object"] = "Sphere"
-                if _fail:
+                if _fail and _fail_text is not None:
+                    # a custom answer: the raw text of a timeout, or a refusal's JSON (#591)
+                    result = {"content": [{"type": "text", "text": _fail_text}]}
+                elif _fail:
                     result = {"content": [{
                         "type": "text",
                         "text": json.dumps(
@@ -1885,9 +1890,8 @@ class TestCoWorkUserEditAndScopedUndo(_TurnLoopTestBase):
 
     def test_scoped_undo_runs_after_failed_step(self):
         """A failed step (no foreign edit) that was the turn's first change:
-        snapshot-only capture, then the rollback (#501: the newest undo step
-        loaded again -- undo, then redo -- since there is no save point on the
-        undo list any more), then the fingerprint restore and a fresh baseline."""
+        snapshot-only capture, then (#591: no undo / redo any more) the scoped cleanup of
+        what the step made, the fingerprint restore and a fresh baseline."""
         self._mk_server([
             _tool_call_msg("call_1", self._FAIL_MARKER + "\\nimport bpy"),
             _tool_call_msg("call_2", "bpy.ops.mesh.primitive_uv_sphere_add()"),
@@ -1913,12 +1917,11 @@ class TestCoWorkUserEditAndScopedUndo(_TurnLoopTestBase):
                     if "restored_active" in c]
         # Recovery order: snapshot-only capture BEFORE the rollback.
         self.assertTrue(snapshot_only, "failed step must be captured snapshot-only")
-        self.assertTrue(undo_calls,
-                        "the rollback fires when no foreign edit was seen")
-        self.assertIn("bpy.ops.ed.redo()", codes[undo_calls[0]], "undo, then redo: the newest step again")
-        self.assertEqual(self.server.reloads, 1)
-        self.assertLess(snapshot_only[0], undo_calls[0],
-                        "capture must precede the rollback")
+        # #591: no undo + redo after a failed model script (its data-API changes are on no undo
+        # step, and the memfile reload from the timer crashed Blender): the scoped cleanup only.
+        self.assertEqual(undo_calls, [], "#591: the rollback (undo, then redo) is never run")
+        self.assertEqual(getattr(self.server, "reloads", 0), 0)
+        self.assertFalse([c for c in codes if "bpy.ops.ed.redo()" in c])
         self.assertEqual(undo_pushes, [], "#501: the loop pushes no undo step of its own")
         self.assertTrue(restores, "pre-step fingerprint must be restored")
         with self.server.lock:
@@ -1955,6 +1958,52 @@ class TestCoWorkUserEditAndScopedUndo(_TurnLoopTestBase):
         self.assertEqual(cleanups, [], "the failed step made nothing, and the turn's earlier work is not its")
         self.assertIn("Cube", self.server.scene_objects, "the turn's earlier change stays")
         self.assertIn("Sphere", self.server.scene_objects)
+
+    def _failed_then_retry(self, fail_text, retry_marker=""):
+        self._mk_server([
+            _tool_call_msg("call_1", self._FAIL_MARKER + "\nimport bpy"),
+            _tool_call_msg("call_2", "bpy.ops.mesh.primitive_uv_sphere_add()"),
+            {"content": "recovered"},
+        ])
+        self.server.snapshot_script = True
+        self.server.fail_tool_markers.append(self._FAIL_MARKER)
+        self.server.fail_texts = {self._FAIL_MARKER: fail_text}
+        _history, texts = self._run_agent_turn("build the set")
+        self.assertIn("recovered", texts)
+        return self._mcp_codes()
+
+    def test_a_timed_out_step_is_not_cleaned_up_or_undone(self):
+        """#591: a step that hit the time limit may still be running: no undo, no cleanup, no restore."""
+        codes = self._failed_then_retry(
+            "Error executing tool execute_blender_code: Blender connection timed out at localhost:9876 after "
+            "300 s; Blender may still be busy.")
+        self.assertEqual([c for c in codes if "bpy.ops.ed.undo()" in c or "'cleaned'" in c
+                          or "restored_active" in c], [], "nothing runs against a scene the step may still change")
+
+    def test_a_refused_step_is_not_a_failure(self):
+        """#591: "Not run: ..." came back before anything ran: the next script triggers no smart undo."""
+        codes = self._failed_then_retry(json.dumps({"status": "error", "message": "Not run: a render is running "
+                                                   "in Blender, and changing the scene while it runs can crash Blender."}))
+        self.assertEqual([c for c in codes if "bpy.ops.ed.undo()" in c or "'cleaned'" in c
+                          or "restored_active" in c], [], "a refusal has no side effects to clean up")
+
+    def test_a_script_raising_timeout_error_is_an_ordinary_failure(self):
+        """#591: only Coworker's own timeout shapes count; the script's own TimeoutError is cleaned up."""
+        self._mk_server([
+            _tool_call_msg("call_1", self._FAIL_MARKER + "\nimport bpy"),
+            _tool_call_msg("call_2", "bpy.ops.mesh.primitive_uv_sphere_add()"),
+            {"content": "recovered"},
+        ])
+        self.server.snapshot_script = True
+        self.server.fail_tool_markers.append(self._FAIL_MARKER)
+        self.server.fail_texts = {self._FAIL_MARKER: json.dumps(
+            {"status": "error", "message": "Traceback ... TimeoutError: the lock timed out"})}
+        self.server.scene_objects = ["Cube"]
+        self.server.scene_state.update(active_object="Cube", selected=["Cube"])
+        self._run_agent_turn("build the set")
+        codes = self._mcp_codes()
+        self.assertTrue([c for c in codes if "restored_active" in c], "ordinary recovery ran (selection restore)")
+        self.assertEqual([c for c in codes if "bpy.ops.ed.undo()" in c], [], "#591: still no undo")
 
     def test_global_undo_skipped_when_user_edited_scene(self):
         """With a foreign edit before the recovery (D8), the rollback

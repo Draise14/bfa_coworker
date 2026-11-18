@@ -613,6 +613,75 @@ def _set(owner: Any, prop: str, value: float) -> None:
     setattr(owner, prop, int(round(value)) if isinstance(current, int) and not isinstance(current, bool) else value)
 
 
+_PENDING_MODES: dict[str, dict[str, str]] | None = None   # a run in progress: name -> {path: interpolation}
+
+
+def _set_modes(scene: Any, name: str, modes: dict[str, str]) -> None:
+    """The interpolation of strip *name*'s new keys: at once, or, in a run that keys many strips
+    (:func:`_batch_modes`), noted and set in one pass over the action at its end (a scan of the whole action
+    per strip is quadratic in the number of strips)."""
+    if _PENDING_MODES is not None:
+        _PENDING_MODES.setdefault(name, {}).update(modes)
+        return
+    _apply_modes(scene, {name: modes})
+
+
+def _apply_modes(scene: Any, wanted: dict[str, dict[str, str]]) -> None:
+    ad = getattr(scene, "animation_data", None)
+    action = ad.action if ad is not None else None
+    if action is None or not wanted:
+        return
+    escaped = {bpy.utils.escape_identifier(n): m for n, m in wanted.items()}
+    prefix = 'sequence_editor.strips_all["'
+    for layer in getattr(action, "layers", ()):
+        for strip in layer.strips:
+            for bag in getattr(strip, "channelbags", ()):
+                for fc in bag.fcurves:
+                    path = fc.data_path
+                    if not path.startswith(prefix):
+                        continue
+                    name, sep, rel = path[len(prefix):].partition('"].')
+                    mode = escaped.get(name, {}).get(rel) if sep else None
+                    if mode is None:
+                        continue
+                    for k in getattr(fc, "keyframe_points", ()):
+                        k.interpolation = mode
+                    if hasattr(fc, "update"):
+                        fc.update()
+
+
+def _batched(fn: Any) -> Any:
+    """*fn*'s keys get their interpolation in one pass when it returns (its first argument is the scene)."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(scene: Any, *args: Any, **kw: Any) -> Any:
+        with _batch_modes(scene):
+            return fn(scene, *args, **kw)
+    return wrapper
+
+
+class _batch_modes:     # pylint: disable=invalid-name
+    """``with _batch_modes(scene):`` keyed strips get their interpolation in one pass when it ends."""
+
+    def __init__(self, scene: Any) -> None:
+        self.scene = scene
+        self.outer = False
+
+    def __enter__(self) -> "_batch_modes":
+        global _PENDING_MODES  # pylint: disable=global-statement
+        self.outer = _PENDING_MODES is not None
+        if not self.outer:
+            _PENDING_MODES = {}
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        global _PENDING_MODES  # pylint: disable=global-statement
+        if not self.outer:
+            wanted, _PENDING_MODES = _PENDING_MODES or {}, None
+            _apply_modes(self.scene, wanted)
+
+
 def _key_tracks(scene: Any, strips: list, tracks: list[dict]) -> int:
     """Key *tracks* (:func:`captions.animation_tracks`) on each of *strips*, with their own
     interpolation (not the Preferences' default); each property is left at its steady value.
@@ -631,13 +700,7 @@ def _key_tracks(scene: Any, strips: list, tracks: list[dict]) -> int:
                 _set(owner, prop, t["steady"])
             except (AttributeError, TypeError, ValueError, RuntimeError):
                 continue
-        modes = {t["path"]: t.get("interpolation", "BEZIER") for t in tracks}
-        for rel, fcurves in _strip_curves(scene, s.name, set(modes)).items():
-            for fc in fcurves:
-                for k in getattr(fc, "keyframe_points", ()):
-                    k.interpolation = modes[rel]
-                if hasattr(fc, "update"):
-                    fc.update()
+        _set_modes(scene, s.name, {t["path"]: t.get("interpolation", "BEZIER") for t in tracks})
     return made
 
 
@@ -651,15 +714,10 @@ def _clear_animation(scene: Any, strips: list, paths: Any = None, colour: Any = 
             "transform.scale_y": 1.0, "crop.max_x": 0.0}
     if colour is not None:
         rest["color"] = tuple(colour)
+    sizes = {s.name: _steady_size(scene, s) for s in strips if hasattr(s, "font_size") and "font_size" in paths}
+    _remove_curves(scene, {s.name for s in strips}, paths)       # one pass over the action for all of them
     for s in strips:
-        size = _steady_size(scene, s) if hasattr(s, "font_size") and "font_size" in paths else None
-        for rel, fcurves in _strip_curves(scene, s.name, paths).items():
-            for fc in fcurves:
-                try:
-                    fc.id_data  # noqa: B018 -- still there
-                    _remove_fcurve(fc)
-                except (AttributeError, ReferenceError, RuntimeError):
-                    pass
+        size = sizes.get(s.name)
         for rel, value in rest.items():
             if rel not in paths:
                 continue
@@ -677,6 +735,26 @@ def _clear_animation(scene: Any, strips: list, paths: Any = None, colour: Any = 
             ad.action.update_tag()
         except (AttributeError, RuntimeError):
             pass
+
+
+def _remove_curves(scene: Any, names: set[str], paths: set[str]) -> None:
+    """The F-curves of *paths* of the strips *names* out of *scene*'s action, in one pass over it."""
+    ad = getattr(scene, "animation_data", None)
+    action = ad.action if ad is not None else None
+    if action is None or not names:
+        return
+    wanted = {bpy.utils.escape_identifier(n) for n in names}
+    prefix = 'sequence_editor.strips_all["'
+    for layer in getattr(action, "layers", ()):
+        for strip in layer.strips:
+            for bag in getattr(strip, "channelbags", ()):
+                doomed = []
+                for fc in bag.fcurves:
+                    name, sep, rel = fc.data_path[len(prefix):].partition('"].')                         if fc.data_path.startswith(prefix) else ("", "", "")
+                    if sep and name in wanted and rel in paths:
+                        doomed.append(fc)
+                for fc in doomed:
+                    bag.fcurves.remove(fc)
 
 
 def _remove_fcurve(fc: Any) -> None:
@@ -752,6 +830,23 @@ def _word_middles(line: Any, words: list, measure: Any, res: tuple[float, float]
     return mids, ((min(left) + max(right)) / 2.0, (min(ys) + max(ys)) / 2.0)
 
 
+def _word_spans(line: Any, tag: dict, words: list) -> list[tuple[int, int]]:
+    """Each word strip's own time ``(start, end)`` in frames, from the line's *current* ``word_frames``
+    (Remove Silences' cuts and moves keep those up to date; the ``at`` of a word's own tag is from when it was
+    made and is only the fallback), inside the line; the label's words start with it."""
+    fs, fe = _left(line), _right(line)
+    lead, frames = _label_words(tag), tag.get("word_frames")
+    if frames and len(frames) == len(words) - lead:
+        starts = [fs] * lead + [fs + int(v) for v in frames]
+    else:
+        starts = [fs + int((tag_of(w) or {}).get("at", 0)) for w in words]
+    out, prev = [], fs
+    for a in starts:
+        prev = min(max(int(a), prev), fe)
+        out.append(prev)
+    return [(a, out[i + 1] if i + 1 < len(out) else fe) for i, a in enumerate(out)]
+
+
 def _animate_words(scene: Any, line: Any, tag: dict, style: dict) -> int:
     """Keys on each word strip of *line* (made with word motions: the line strip is only the anchor): its
     word animation at the word's own time, the line animation over it, and with Highlight its colour at
@@ -773,10 +868,8 @@ def _animate_words(scene: Any, line: Any, tag: dict, style: dict) -> int:
               if anim == "TYPEWRITER" else [None] * len(words))
     base, hi = tuple(style["props"]["color"]), _hi_colour(style)
     made = 0
-    for w, mid, rev in zip(words, mids, reveal):
-        wt = tag_of(w) or {}
-        a = fs + int(wt.get("at", 0))
-        b = fs + int(wt.get("to", fe - fs))
+    spans = _word_spans(line, tag, words)
+    for w, mid, rev, (a, b) in zip(words, mids, reveal, spans):
         tracks = cap.word_tracks(anim, wanim, fs, fe, a, b, _fps(scene), res[0], res[1], mid, centre, rev, base, hi)
         made += _key_tracks(scene, [w], tracks)
     return made
@@ -870,6 +963,7 @@ def _remember_keys(scene: Any, line: Any, paths: Any) -> None:
     line[cap.TAG] = tag
 
 
+@_batched
 def refit_captions(scene: Any, names: Any) -> int:
     """Remove Silences trimmed or cut these caption lines (#542): each one's animation fits its
     frames again (:func:`reanimate`).  How many were animated again."""
@@ -1131,6 +1225,7 @@ def _occupied(ed: Any, skip: set[str]) -> dict[int, list[tuple[float, float]]]:
     return out
 
 
+@_batched
 def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars: int, lines: int,
            above: int, targets: list[tuple] | None = None, replace_edited: bool = False,
            animation: str = cap.ANIM_STYLE, lanes: dict[str, dict] | None = None,
@@ -1240,9 +1335,9 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
     speakers = []
     for lane, lane_groups, channel, need, lp in picked:
         st = lane["style"]
-        ed.channels[channel].name = lane["channel"]
+        _name_channel(ed.channels[channel], lane["channel"])
         for extra in range(1, need):
-            ed.channels[channel + extra].name = lane["highlight_channel"]
+            _name_channel(ed.channels[channel + extra], lane["highlight_channel"])
         measure = _measure(font) if lp["words"] != "none" else None
         if lp["words"] != "none" and measure is None:
             notes.append("The bundled font couldn't be measured here, so there are no word highlights.")
@@ -1582,6 +1677,7 @@ def _look_of(scene: Any, strip: Any) -> dict[str, Any]:
     return look
 
 
+@_batched
 def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dict[str, Any]:
     """Every Coworker caption line of *scene* laid out again for the scene's output size (Make
     Vertical's 9:16 copy): the style's size, place and line breaks for that frame
@@ -1670,6 +1766,7 @@ def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dic
                 number += 1
                 s = _text_strip(ed, "cap_{:04d}".format(number), line.channel, piece["frame_start"],
                                 piece["frame_end"], piece["text"], st, font)
+                line = _all(ed).get(line_name)          # a strip was added: look the caption up again
                 for attr in _LOOK:
                     try:
                         setattr(s, attr, getattr(line, attr))
@@ -1687,11 +1784,15 @@ def relayout_captions(scene: Any, old_res: tuple[int, int] | None = None) -> dic
             s[cap.TAG] = dict(_line_tag(tag.get("source", ""), key, lay["chars"], lay["lines"], scene,
                                         piece["frame_start"], piece["words"], _look_tag(tag)), sig=_signature(s))
             piece_name = s.name
+            got = 0
             if mode != "none" and had_words:
                 style = dict(st, uppercase=False, highlight=highlight)     # the text already is as shown
-                _add_highlights(scene, s, piece, style, font or _font(), _measure(font or _font()))
+                got = _add_highlights(scene, s, piece, style, font or _font(), _measure(font or _font()))
                 s = _all(ed).get(piece_name)    # strips were added: look the caption up again
                 line = _all(ed).get(line_name)
+            if mode == "motion" and not got and s is not None:
+                _demote(scene, piece_name, "NONE", "it got no words in the new layout")    # never a clear caption
+                s = _all(ed).get(piece_name)
             if s is not None and (animated or mode == "motion"):
                 reanimate(scene, s)
         out["laid_out"] += 1
@@ -1713,11 +1814,77 @@ def _word_names(ed: Any) -> dict[str, list[str]]:
     return out
 
 
+NOTES: list[str] = []       # what the last rebuilds fell back from, for the operator to report (#594)
+
+
+_DEFAULT_CHANNEL = re.compile(r"^Channel \d+$")
+
+
+def _name_channel(channel: Any, name: str) -> None:
+    """Name *channel* for the captions, unless the artist named it themselves (it still has Blender's own
+    name, no name, or ours already)."""
+    if _DEFAULT_CHANNEL.match(str(channel.name)) or not str(channel.name) or str(channel.name) == name:
+        channel.name = name
+
+
+def _block_problem(scene: Any, line: Any, count: int, ignore: Any = ()) -> str:
+    """Why *count* word strips can't go on the channels above caption *line* ("" when they can): over the
+    word limit, past channel 128, or a strip of somebody else on one of those channels over the caption's
+    time.  *ignore*: names of strips that are going away."""
+    if count > cap.MAX_WORD_CHANNELS:
+        return "{:d} words are over the limit of {:d} (one channel each)".format(count, cap.MAX_WORD_CHANNELS)
+    top = line.channel + count
+    if top > cap.MAX_CHANNEL:
+        return "{:d} word channels above channel {:d} would pass channel {:d}".format(count, line.channel,
+                                                                                     cap.MAX_CHANNEL)
+    fs, fe, skip = _left(line), _right(line), set(ignore) | {line.name}
+    for s in _top(scene.sequence_editor):
+        if s.name not in skip and line.channel < s.channel <= top and _left(s) < fe and fs < _right(s):
+            return "channel {:d} is taken by {:s}".format(s.channel, s.name)
+    return ""
+
+
+def _show_anchor(line: Any, st: dict) -> None:
+    """The line strip draws again, as the style has it (it was the clear anchor of word motions)."""
+    props = st["props"]
+    line.color = tuple(props["color"])
+    for prop in ("use_outline", "use_shadow", "use_box"):
+        try:
+            setattr(line, prop, bool(props[prop]))
+        except (AttributeError, TypeError, ValueError, KeyError):
+            pass
+
+
+def _demote(scene: Any, name: str, wanim: str, why: str) -> None:
+    """Caption *name* can't keep its word motions (#594): its line strip draws again and its word animation
+    becomes *wanim* ("HIGHLIGHT" or "NONE"); the line animation keys the line.  Nothing is added or removed."""
+    line = _all(scene.sequence_editor).get(name)
+    tag = tag_of(line) if line is not None else None
+    if tag is None:
+        return
+    key = cap.style_key(tag.get("style")) or "CLEAN"
+    st = cap.resolve_style(key, scene.render.resolution_x, scene.render.resolution_y, tag.get("position", "BOTTOM"),
+                           float(tag.get("margin") or 0.0), tag.get("choices") or None)
+    tag["wanim"] = wanim
+    line[cap.TAG] = tag
+    _show_anchor(line, st)
+    _clear_animation(scene, [line], cap.animation_paths(tag.get("anim", cap.ANIM_STYLE), key))
+    _animate(scene, line, st, tag.get("anim", cap.ANIM_STYLE), None)
+    msg = "{:s}: {:s}; it is {:s} now.".format(name, why, "Highlight only" if wanim == "HIGHLIGHT" else "plain")
+    NOTES.append(msg)
+    print("[Coworker] " + msg)
+
+
 def _rebuild_words(scene: Any, name: str, even: bool = False) -> bool:
     """The word strips of caption line *name* made again, from the line as it is now: the words of its
     text, each over its own frames (the line's stored word frames when they still fit the words, else
     spread over its time), laid out by :func:`_layout_of`, and keyed like the line.  Only names are held
-    across the strips removed and added."""
+    across the strips removed and added.
+
+    With word motions the new words must fit the channel block (the word limit, channel 128, nothing of
+    somebody else's in the way): checked before anything is removed.  If they don't, the caption drops to
+    Highlight only (its line draws again) or, if even that has no room, to plain, and says so in
+    :data:`NOTES`: never a clear caption with no words."""
     ed = scene.sequence_editor
     pool = _all(ed)
     line = pool.get(name)
@@ -1726,9 +1893,18 @@ def _rebuild_words(scene: Any, name: str, even: bool = False) -> bool:
     tag = tag_of(line) or {}
     key = cap.style_key(tag.get("style")) or "CLEAN"
     label = str(tag.get("label") or "")
-    old = [pool.get(n) for n in sorted(_word_names(ed).get(name, ()))]
-    old = [w for w in old if w is not None]
+    own = sorted(_word_names(ed).get(name, ()))
     mode = cap.tag_words(tag, key)[0]
+    if mode == "motion":
+        count = len(str(line.text).split())
+        why = _block_problem(scene, line, count, own)
+        if why:
+            fallback = "NONE" if _block_problem(scene, line, 1, own) else "HIGHLIGHT"
+            _demote(scene, name, fallback, "the new text doesn't fit its word motions (" + why + ")")
+            line = pool.get(name)
+            tag = tag_of(line) or {}
+            mode = cap.tag_words(tag, key)[0]
+    old = [w for w in (pool.get(n) for n in own) if w is not None]
     highlight = tuple(old[0].color) if old and mode != "motion" else None
     old_names = [w.name for w in old]
     top = _top(ed)
@@ -1740,6 +1916,8 @@ def _rebuild_words(scene: Any, name: str, even: bool = False) -> bool:
     line = pool.get(name)
     if line is None:
         return False
+    if mode == "none":
+        return False
     st = cap.resolve_style(key, scene.render.resolution_x, scene.render.resolution_y, tag.get("position", "BOTTOM"),
                            float(tag.get("margin") or 0.0), tag.get("choices") or None)
     text = str(line.text)               # a line break the artist typed stays: the layout handles lines
@@ -1750,6 +1928,8 @@ def _rebuild_words(scene: Any, name: str, even: bool = False) -> bool:
         timed = [dict(w, frame=int(round(w["start"]))) for w in cap.even_words(" ".join(words), left, right)]
     else:
         timed = [{"w": w, "frame": f} for w, f in zip(words, frames)]
+    tag["word_frames"] = [int(w["frame"]) - left for w in timed]     # the one source of every word's time
+    line[cap.TAG] = tag
     framed = {"frame_start": left, "frame_end": right, "lines": [text], "words": timed, "label": label}
     style = dict(st, uppercase=False, highlight=highlight or st["highlight"])     # the text already is as shown
     font = line.font or _font()
@@ -1778,6 +1958,64 @@ def _reposition_words(scene: Any, name: str, word_names: list[str], pos: list[di
             _sync_word(word, line, p, animated)
 
 
+def _hidden_anchors(ed: Any) -> list[str]:
+    """The names of the caption lines made with word motions (their line strip draws nothing), found by their
+    tag: also those that have lost all their words."""
+    out = []
+    for s in _top(ed):
+        value = s.get(cap.TAG)
+        if value is not None and value.get("role") == "line" and s.type == 'TEXT':
+            if cap.tag_words(dict(value))[0] == "motion":
+                out.append(s.name)
+    return out
+
+
+def _adopt_words(scene: Any) -> int:
+    """After a hard cut (Shift+K) through an anchor and its words, every piece of a word still names the first
+    anchor: each word strip goes to the anchor piece on its channels that it starts in, and a piece's word
+    frames (copied from the first piece) are moved to its own start.  Their keys follow the new times.  Only
+    tags change, no strip is added or removed.  How many anchors got words."""
+    ed = scene.sequence_editor
+    pool = _all(ed)
+    lines: dict[str, Any] = {}
+    words = []
+    for s in _top(ed):
+        value = s.get(cap.TAG)
+        if value is None:
+            continue
+        role = value.get("role")
+        if role == "line" and s.type == 'TEXT':
+            lines[s.name] = s
+        elif role == "word":
+            words.append(s)
+    moved: dict[str, str] = {}
+    for w in words:
+        tag = tag_of(w) or {}
+        home = lines.get(str(tag.get("line")))
+        if home is None or _left(home) <= _left(w) < _right(home):
+            continue
+        other = next((a for a in lines.values() if a.channel == home.channel and a.name != home.name
+                      and _left(a) <= _left(w) < _right(a)), None)
+        if other is None:
+            continue
+        tag["line"] = other.name
+        w[cap.TAG] = tag
+        moved.setdefault(other.name, home.name)
+    for name, origin in moved.items():
+        line, first = pool.get(name), pool.get(origin)
+        if line is None or first is None:
+            continue
+        tag, first_tag = tag_of(line) or {}, tag_of(first) or {}
+        if tag.get("word_frames") and tag.get("word_frames") == first_tag.get("word_frames"):
+            shift = _left(line) - _left(first)
+            tag["word_frames"] = [int(v) - shift for v in tag["word_frames"]]
+            line[cap.TAG] = tag
+        if cap.tag_words(tag)[0] == "motion":
+            _reanimate_words(scene, line, tag_of(line) or tag)
+    return len(moved)
+
+
+@_batched
 def refit_words(scene: Any, names: Any = None, force: bool = False, rebuild: bool = False) -> int:
     """Word strips laid out again where their caption line's settings changed (#594): its font, bold,
     italic, size, alignment, wrap width, place, transform or text, or the frame size.  *names*: only
@@ -1793,13 +2031,23 @@ def refit_words(scene: Any, names: Any = None, force: bool = False, rebuild: boo
     ed = scene.sequence_editor
     if ed is None:
         return 0
+    done = _adopt_words(scene)
     by_line = _word_names(ed)
     wanted = None if names is None else set(names)
+    pool = _all(ed)
+    for name in _hidden_anchors(ed):
+        if name in by_line or (wanted is not None and name not in wanted):
+            continue
+        # A clear anchor whose words are all gone: its words again (the operator), else it draws again.
+        if rebuild:
+            if _rebuild_words(scene, name, even=False):
+                done += 1
+                continue
+        _demote(scene, name, "NONE", "its word strips are gone")
+        done += 1
     todo = [n for n in by_line if wanted is None or n in wanted]
     if not todo:
-        return 0
-    pool = _all(ed)
-    done = 0
+        return done
     for name in todo:
         line = pool.get(name)
         if line is None or line.type != 'TEXT':
@@ -2709,8 +2957,11 @@ class BFACW_OT_captions_refit_words(Operator):  # type: ignore[misc]
     def execute(self, context: Any) -> set[str]:
         scene = seq_scene(context)
         names = _selected_caption_names(scene)
+        del NOTES[:]
         done = refit_words(scene, names or None, force=True, rebuild=True)
         self.report({'INFO'}, "Word highlights fitted again on {:d} caption{:s}".format(done, "" if done == 1 else "s"))
+        if NOTES:
+            self.report({'WARNING'}, " ".join(NOTES[:3]))
         return {'FINISHED'}
 
 
@@ -2721,7 +2972,8 @@ def _has_word_strips(scene: Any) -> bool:
         return False
     for s in _top(ed):
         value = s.get(cap.TAG)
-        if value is not None and value.get("role") == "word":
+        if value is not None and (value.get("role") == "word"
+                                  or (value.get("role") == "line" and cap.tag_words(dict(value))[0] == "motion")):
             return True
     return False
 

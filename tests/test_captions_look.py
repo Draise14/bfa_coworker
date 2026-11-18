@@ -539,7 +539,12 @@ class TestAnimatedStrips(_LookCase):
             return {p: [SimpleNamespace(keyframe_points=[SimpleNamespace(interpolation="") for _ in range(n)], data_path=p, id_data=None)] for p, n in out.items()
                     if paths is None or p in paths}
 
-        stack = mock.patch.multiple(self.ops, _strip_curves=curves, _remove_fcurve=removed.append)
+        def remove_curves(scene, names, paths):
+            for n in sorted(names):
+                for fcs in curves(scene, n, paths).values():
+                    removed.extend(fcs)
+
+        stack = mock.patch.multiple(self.ops, _strip_curves=curves, _remove_curves=remove_curves)
         stack.start()
         self.addCleanup(stack.stop)
         return removed

@@ -1587,6 +1587,18 @@ def _product(a: Sequence[tuple[int, float]], b: Sequence[tuple[int, float]]) -> 
     return [(f, round(_interp(a, f) * _interp(b, f), 4)) for f in sorted({f for f, _v in a} | {f for f, _v in b})]
 
 
+def _prune(keys: Sequence[tuple[int, Any]]) -> list[tuple[int, Any]]:
+    """*keys* without a key that only repeats the value of its neighbours (nothing moves between them)."""
+    out = list(keys)
+    i = 1
+    while i < len(out) - 1:
+        if out[i][1] == out[i - 1][1] == out[i + 1][1]:
+            del out[i]
+        else:
+            i += 1
+    return out
+
+
 def _line_parts(animation: Any, fs: int, fe: int, fps: float, res_y: float,
                 reveal_frame: int | None) -> dict[str, list[tuple[int, float]]]:
     """What the line animation does to one word strip, as parts: ``alpha``, ``lscale`` (the line's scale,
@@ -1702,7 +1714,7 @@ def word_tracks(line_animation: Any, word_animation: Any, frame_start: int, fram
             keys.append((b, tuple(base_colour)))
         if len(keys) >= 2 or (keys and a == fs):
             tracks.append({"path": "color", "interpolation": "CONSTANT", "steady": tuple(base_colour), "keys": keys})
-    return tracks
+    return [dict(t, keys=_prune(t["keys"])) for t in tracks]
 
 
 def word_animation_paths(line_animation: Any, word_animation: Any) -> tuple[str, ...]:
@@ -1740,8 +1752,9 @@ def check_word_plan(words_per_line: Sequence[int], line_animation: Any, word_ani
     if per > MAX_WORD_KEYS:
         return "One word would get {:d} keyframes; the limit is {:d}.{:s}".format(per, MAX_WORD_KEYS, hint)
     if per * total > MAX_RUN_KEYS:
-        return ("The captions would get about {:d} keyframes on {:d} words; the limit is {:d}.{:s}"
-                .format(per * total, total, MAX_RUN_KEYS, hint))
+        return ("The captions would get about {:d} keyframes on {:d} words; the limit is {:d} for one run. Use a "
+                "lighter Word Animation (Highlight, Fade In and Rise need far fewer keyframes than Pop or Scale), "
+                "or caption fewer clips per run.".format(per * total, total, MAX_RUN_KEYS))
     return None
 
 

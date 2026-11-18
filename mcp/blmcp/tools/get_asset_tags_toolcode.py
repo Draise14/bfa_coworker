@@ -410,8 +410,8 @@ def _catalog_fields(library_name: str, catalog_id: Any) -> dict[str, str]:
     uuid = catalog_uuid_or_empty(catalog_id)
     if not uuid:
         return {"catalog": "", "catalog_id": ""}
-    catalogs, _notes = _catalogs_for(library_name, {})
-    return describe_catalog(uuid, catalog_paths_by_uuid(catalogs))
+    entries, _notes = _catalog_entries_for(library_name, {})
+    return describe_catalog(uuid, catalog_paths_by_uuid(entries))
 
 
 def _socket_count(ng, direction: str) -> int:

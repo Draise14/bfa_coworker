@@ -27,13 +27,14 @@ import os
 _CATS_FILE = "blender_assets.cats.txt"
 
 
-def parse_catalogs(text: str) -> dict[str, str]:
-    """``{catalog path: UUID}`` from the text of a ``blender_assets.cats.txt``.
+def parse_catalog_entries(text: str) -> list[tuple[str, str]]:
+    """Every ``(catalog path, UUID)`` of a ``blender_assets.cats.txt``, in file order.
 
     Lines are ``UUID:path/with/slashes:Simple Name``; ``#`` comments, the
-    ``VERSION`` line and malformed lines are skipped.
+    ``VERSION`` line and malformed lines are skipped.  Blender allows two catalogs
+    with the same path, so a path can appear twice (with different UUIDs).
     """
-    found: dict[str, str] = {}
+    found: list[tuple[str, str]] = []
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#") or line.startswith("VERSION"):
@@ -44,7 +45,16 @@ def parse_catalogs(text: str) -> dict[str, str]:
         uuid, path = parts[0].strip(), parts[1].strip().replace("\\", "/").strip("/")
         if len(uuid) != 36 or uuid.count("-") != 4 or not path:
             continue
-        found[path] = uuid
+        if (path, uuid) not in found:
+            found.append((path, uuid))
+    return found
+
+
+def parse_catalogs(text: str) -> dict[str, str]:
+    """``{catalog path: UUID}`` from the text of a catalog file; for a path named twice, the first UUID."""
+    found: dict[str, str] = {}
+    for path, uuid in parse_catalog_entries(text):
+        found.setdefault(path, uuid)
     return found
 
 
@@ -121,13 +131,14 @@ def _local_catalog_dirs(blend_dir: str) -> list[str]:
     return [blend_dir]
 
 
-def _catalogs_for(reference: str, cache: dict) -> tuple[dict[str, str], list[str]]:
-    """``({path: UUID}, notes)`` for *reference*, read once into *cache*. Never raises."""
-    if reference in cache:
-        return cache[reference]
+def _catalog_entries_for(reference: str, cache: dict) -> tuple[list[tuple[str, str]], list[str]]:
+    """``([(path, UUID), ...] in file order, notes)`` for *reference*, read once into *cache*. Never raises."""
+    key = ("entries", reference)
+    if key in cache:
+        return cache[key]
     import os
 
-    catalogs: dict[str, str] = {}
+    entries: list[tuple[str, str]] = []
     notes: list[str] = []
     try:
         roots, reason = _library_roots(reference)
@@ -145,8 +156,21 @@ def _catalogs_for(reference: str, cache: dict) -> tuple[dict[str, str], list[str
         except (OSError, ValueError) as ex:
             notes.append("Could not read '{:s}' ({:s}).".format(cats_path, str(ex)))
             continue
-        for path, uuid in parse_catalogs(text).items():
-            catalogs.setdefault(path, uuid)
+        for pair in parse_catalog_entries(text):
+            if pair not in entries:
+                entries.append(pair)
+    cache[key] = (entries, notes)
+    return cache[key]
+
+
+def _catalogs_for(reference: str, cache: dict) -> tuple[dict[str, str], list[str]]:
+    """``({path: UUID}, notes)`` for *reference* (a path named twice gives its first UUID), read once into *cache*."""
+    if reference in cache:
+        return cache[reference]
+    entries, notes = _catalog_entries_for(reference, cache)
+    catalogs: dict[str, str] = {}
+    for path, uuid in entries:
+        catalogs.setdefault(path, uuid)
     cache[reference] = (catalogs, notes)
     return cache[reference]
 
@@ -162,9 +186,12 @@ def catalog_uuid_or_empty(value) -> str:
     return text
 
 
-def catalog_paths_by_uuid(catalogs: dict[str, str]) -> dict[str, str]:
-    """``{lower-case UUID: catalog path}`` from a ``{path: UUID}`` map (the reverse lookup)."""
-    return {uuid.lower(): path for path, uuid in catalogs.items()}
+def catalog_paths_by_uuid(catalogs) -> dict[str, str]:
+    """``{lower-case UUID: catalog path}``: every UUID resolves, also when two catalogs share a path.
+
+    *catalogs* is a list of ``(path, UUID)`` pairs (``_catalog_entries_for``) or a ``{path: UUID}`` map."""
+    pairs = catalogs.items() if isinstance(catalogs, dict) else catalogs
+    return {uuid.lower(): path for path, uuid in pairs}
 
 
 def describe_catalog(catalog_id, paths_by_uuid: dict[str, str]) -> dict[str, str]:

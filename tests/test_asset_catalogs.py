@@ -135,7 +135,7 @@ class _Case(unittest.TestCase):
 
 def _asset(name, kind="MATERIAL", catalog_id=""):
     return {"name": name, "type": kind, "file": "Wood/Oak/a.blend", "tags": [], "description": "",
-            "catalog_id": catalog_id, "catalog_simple_name": "", "color_tag": "NONE"}
+            "is_asset": True, "catalog_id": catalog_id, "catalog_simple_name": "", "color_tag": "NONE"}
 
 
 class TestListAssetCatalogs(_Case):
@@ -194,12 +194,81 @@ class TestListAssetCatalogs(_Case):
         self.assertEqual(res["libraries"][0]["assets_without_catalog"], 2)
         self.assertEqual(res["asset_counts"]["MATERIAL"], 4)
 
-    def test_without_an_index_the_catalogs_still_come_and_the_counts_are_said_to_be_pending(self):
-        res = self._call("Lib")
+    def _no_index_answer(self, binary="", started=True):
+        """list_asset_catalogs with no index; *binary* is the indexer's executable ("" = none)."""
+        self.bpy.app.binary_path = binary
+        mod = _load("list_asset_catalogs_toolcode.py")
+        launched = []
+        mod.subprocess = types.SimpleNamespace(
+            Popen=lambda *a, **k: launched.append(a) or object(), DEVNULL=-3, CREATE_NO_WINDOW=0)
+        res = mod.main(mod.Params(library_name="Lib"))._asdict()
+        return res, launched
+
+    def test_without_an_index_the_catalogs_still_come_and_a_started_build_is_said_to_be_running(self):
+        res, launched = self._no_index_answer(binary=sys.executable)
         self.assertEqual(len(res["catalogs"]), 3)
         self.assertNotIn("assets", res["catalogs"][0])
         self.assertIsNone(res["libraries"][0]["assets_without_catalog"])
-        self.assertIn("not ready", res["message"])
+        self.assertEqual(len(launched), 1)
+        self.assertIn("being built", res["message"])
+        # a second call while that build runs (marker fresh): still "being built", no second build
+        res2, launched2 = self._no_index_answer(binary=sys.executable)
+        self.assertEqual(launched2, [])
+        self.assertIn("being built", res2["message"])
+
+    def test_no_binary_for_the_indexer_says_so_and_promises_no_retry(self):
+        res, launched = self._no_index_answer(binary="")
+        self.assertEqual(launched, [])
+        self.assertIn("could not be built", res["message"])
+        self.assertIn("no Bforartists binary", res["message"])
+        self.assertNotIn("ask again", res["message"])
+        self.assertEqual(len(res["catalogs"]), 3)
+
+    def test_a_missing_library_folder_says_so_and_promises_no_retry(self):
+        self.libs.append(types.SimpleNamespace(name="Gone", path=os.path.join(self.tmp, "gone")))
+        res = self._call("Gone")
+        self.assertIn("does not exist", res["message"])
+        self.assertNotIn("ask again", res["message"])
+        self.assertIsNone(res["libraries"][0]["assets_without_catalog"])
+
+    def test_non_assets_in_the_index_are_not_counted(self):
+        """A library of one asset built from internal node groups and materials: those are not assets."""
+        assets = {"Chair": _asset("Chair", "OBJECT", U_CHAIRS)}
+        for i in range(6):
+            assets["internal_ng_%d" % i] = dict(_asset("internal_ng_%d" % i, "NODETREE"), is_asset=False)
+        for i in range(2):
+            assets["internal_mat_%d" % i] = dict(_asset("internal_mat_%d" % i), is_asset=False)
+        self.write_index(self.lib, assets)
+        res = self._call("Lib")
+        self.assertEqual(res["libraries"][0]["assets_without_catalog"], 0)
+        self.assertEqual(sum(res["asset_counts"].values()), 1)
+        by_path = {c["path"]: c for c in res["catalogs"]}
+        self.assertEqual(by_path["Props/Chairs"]["assets"], 1)
+        self.assertEqual([n["name"] for c in res["catalogs"] for n in c["asset_names"]], ["Chair"])
+
+    def test_two_catalogs_with_one_path_are_both_listed_with_their_own_counts(self):
+        self.write_cats(self.lib, (U_CHAIRS, "Props/Chairs"), (U_TABLES, "Props/Chairs"), (U_ROCKS, "Rocks"))
+        self.write_index(self.lib, {"A": _asset("A", catalog_id=U_CHAIRS), "B": _asset("B", catalog_id=U_TABLES),
+                                    "C": _asset("C", catalog_id=U_TABLES)})
+        res = self._call("Lib")
+        rows = [(c["path"], c["uuid"], c["assets"]) for c in res["catalogs"]]
+        self.assertEqual(rows, [("Props/Chairs", U_CHAIRS, 1), ("Props/Chairs", U_TABLES, 2), ("Rocks", U_ROCKS, 0)])
+        self.assertEqual(res["libraries"][0]["assets_without_catalog"], 0)
+
+    def test_the_real_tool_code_loader_gives_working_tool_code(self):
+        """The tool code as the server sends it (``toolcode_load_from_filepath``), not this file's splicer."""
+        sys.path.insert(0, os.path.join(_ROOT, "mcp"))
+        self.addCleanup(sys.path.remove, os.path.join(_ROOT, "mcp"))
+        from blmcp.tools_helpers import toolcode_load_from_filepath  # pylint: disable=import-outside-toplevel
+        for tool in ("list_asset_catalogs", "get_asset_tags", "jump_to_asset_browser"):
+            source = toolcode_load_from_filepath(os.path.join(_TOOLS, tool + ".py"))
+            self.assertFalse(any(line.startswith("# @include_begin") for line in source.splitlines()))
+            module = types.ModuleType("real_" + tool)
+            exec(compile(source, tool, "exec"), module.__dict__)  # pylint: disable=exec-used
+            self.assertTrue(callable(module._catalogs_for), tool)
+            if tool == "list_asset_catalogs":
+                res = module.main(module.Params(library_name="Lib"))
+                self.assertEqual(sorted(c["path"] for c in res.catalogs), ["Props/Chairs", "Props/Tables", "Rocks"])
 
     def test_current_file_uses_the_catalog_file_beside_the_blend(self):
         folder = os.path.join(self.tmp, "scene")
@@ -255,6 +324,45 @@ class TestAssetWithoutCatalog(_Case):
         res = self._tags("Gone")
         self.assertEqual((res["catalog"], res["catalog_id"]), ("", U_UNNAMED))
 
+    def _live_stub(self, catalog_id):
+        """get_asset_tags with no index: the asset is loaded from its .blend (live path)."""
+        mat = types.SimpleNamespace(
+            asset_data=types.SimpleNamespace(tags=[], catalog_id=catalog_id), color_tag="NONE",
+            description="", use_nodes=True, blend_method="OPAQUE", preview=None)
+
+        class Load:
+            def __init__(self_inner, path):
+                self_inner.to = types.SimpleNamespace()
+
+            def __enter__(self_inner):
+                names = types.SimpleNamespace(
+                    materials=["Mat"], node_groups=[], objects=[], worlds=[], actions=[], collections=[])
+                return names, self_inner.to
+
+            def __exit__(self_inner, *exc):
+                if getattr(self_inner.to, "materials", None):
+                    self_inner.to.materials = [mat]
+                return False
+        self.bpy.data.libraries = types.SimpleNamespace(load=Load)
+
+    def test_without_an_index_the_null_uuid_is_no_catalog(self):
+        self._live_stub(NULL)
+        res = self._tags("Mat")
+        self.assertEqual((res["status"], res["catalog"], res["catalog_id"]), ("ok", "", ""))
+        self.assertNotIn(NULL, json.dumps(res))
+
+    def test_without_an_index_a_set_catalog_gives_path_and_uuid(self):
+        self._live_stub(U_CHAIRS)
+        res = self._tags("Mat")
+        self.assertEqual((res["catalog"], res["catalog_id"]), ("Props/Chairs", U_CHAIRS))
+
+    def test_an_asset_in_either_of_two_catalogs_with_one_path_shows_it(self):
+        self.write_cats(self.lib, (U_CHAIRS, "Props/Chairs"), (U_TABLES, "Props/Chairs"))
+        self.write_index(self.lib, {"A": _asset("A", catalog_id=U_CHAIRS), "B": _asset("B", catalog_id=U_TABLES)})
+        for name, uuid in (("A", U_CHAIRS), ("B", U_TABLES)):
+            res = self._tags(name)
+            self.assertEqual((res["catalog"], res["catalog_id"]), ("Props/Chairs", uuid))
+
     def test_a_library_without_a_catalog_file_still_answers(self):
         os.remove(os.path.join(self.lib, "blender_assets.cats.txt"))
         self.write_index(self.lib, {"Oak": _asset("Oak", catalog_id=U_CHAIRS)})
@@ -308,6 +416,30 @@ class TestIndexedCatalogForm(unittest.TestCase):
         with open(self.shared._blmcp_index_path(lib, bpy), "w", encoding="utf-8") as fh:
             json.dump(index, fh)
         self.assertIsNone(self.shared._blmcp_index_read(lib, bpy))
+
+
+class TestDuplicatePaths(unittest.TestCase):
+
+    def setUp(self):
+        self.mod = _load("_asset_catalogs_shared.py", "cats")
+        self.text = _cats_text((U_CHAIRS, "Props/Chairs"), (U_TABLES, "Props/Chairs"), (U_ROCKS, "Rocks"))
+
+    def test_every_entry_is_kept_in_file_order(self):
+        self.assertEqual(self.mod.parse_catalog_entries(self.text),
+                         [("Props/Chairs", U_CHAIRS), ("Props/Chairs", U_TABLES), ("Rocks", U_ROCKS)])
+
+    def test_a_path_picks_the_first_uuid(self):
+        self.assertEqual(self.mod.parse_catalogs(self.text), {"Props/Chairs": U_CHAIRS, "Rocks": U_ROCKS})
+        self.assertEqual(self.mod.match_catalog(self.mod.parse_catalogs(self.text), "props/chairs"), (U_CHAIRS, []))
+
+    def test_every_uuid_resolves_to_its_path(self):
+        by_uuid = self.mod.catalog_paths_by_uuid(self.mod.parse_catalog_entries(self.text))
+        self.assertEqual(by_uuid[U_CHAIRS], "Props/Chairs")
+        self.assertEqual(by_uuid[U_TABLES], "Props/Chairs")
+
+    def test_unique_paths_parse_as_before(self):
+        text = _cats_text((U_CHAIRS, "Props/Chairs"), (U_ROCKS, "Rocks"))
+        self.assertEqual(self.mod.parse_catalogs(text), {"Props/Chairs": U_CHAIRS, "Rocks": U_ROCKS})
 
 
 class TestCatalogHelpers(unittest.TestCase):

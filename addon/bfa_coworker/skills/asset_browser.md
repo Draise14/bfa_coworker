@@ -186,7 +186,7 @@ best when socket names are short, plain nouns.
 ## Workflow: Assigning Materials from Asset Libraries
 
 ```python
-# 1. Browse library structure
+# 1. See which catalogs the library has (its catalog file, not its folders)
 list_asset_catalogs(library_name="My Assets")
 
 # 2. Search for materials
@@ -243,12 +243,10 @@ place_asset_in_scene(
 ## Catalog Path Conventions
 
 Catalogs are named in the library's `blender_assets.cats.txt`; `list_asset_catalogs`
-answers with those paths. The folders of a library on disk do not have to match them.
-Folders commonly used for organization:
-- `Materials/` — Material assets
-- `NodeGroups/` — Geometry/shader node groups
-- `Objects/` — Mesh and object assets
-- `Worlds/` — World/environment assets
-- `Collections/` — Collection assets
+answers with those paths and their UUIDs. They are not the folders of the library on
+disk, and the two do not have to match: never pass a folder name as a catalog.
+Catalog paths are slash-separated and nest (`Props/Chairs` is inside `Props`). Two
+catalogs may share a path; both are listed, and a path picks the first one.
 
-Use `list_asset_catalogs` to see the actual structure of each library.
+Use `list_asset_catalogs` to see the catalogs of each library, and
+`get_asset_tags` to see which catalog an asset is in.

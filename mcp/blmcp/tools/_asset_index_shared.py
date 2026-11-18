@@ -46,7 +46,8 @@ import time
 # Keep this in sync with the schema written by the embedded indexer script.
 # 2: indexes written by schema 1 are empty (the indexer stored no asset), so they are rebuilt.
 # 3: an entry's "catalog" (a UUID, the null UUID for no catalog) became "catalog_id" ("" for no catalog)
-#    and "catalog_simple_name"; the catalog's path is read from the library's catalog file when answering.
+#    and "catalog_simple_name", and "is_asset" tells assets from the other datablocks of the .blend files
+#    (the index lists every datablock: search and load find them by name); the catalog's path is read from the library's catalog file when answering.
 _BLMCP_INDEX_SCHEMA = 3
 
 
@@ -141,6 +142,7 @@ def _entry(datablock, asset_type, blend_rel):
         "author": _str_attr(asset_data, "author") if asset_data else "",
         "copyright": _str_attr(asset_data, "copyright") if asset_data else "",
         "license": _str_attr(asset_data, "license") if asset_data else "",
+        "is_asset": bool(asset_data),
         "catalog_id": catalog_id,
         "catalog_simple_name": _str_attr(asset_data, "catalog_simple_name") if catalog_id else "",
         "color_tag": _str_attr(datablock, "color_tag") or "NONE",

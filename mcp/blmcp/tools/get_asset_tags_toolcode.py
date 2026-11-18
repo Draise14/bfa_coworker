@@ -17,6 +17,8 @@ from typing import Any, NamedTuple
 
 # @include_begin: _asset_index_shared.py
 # @include_end
+# @include_begin: _asset_catalogs_shared.py
+# @include_end
 
 
 _TREE_TYPE_ALIASES = {
@@ -43,6 +45,10 @@ class Result(NamedTuple):
     color_tag: str
     description: str
     metadata: dict[str, Any]
+    # The asset's catalog: its path from the library's catalog file and its UUID. Both are "" for an
+    # asset without a catalog (never the null UUID); the path is "" when the file does not name the UUID.
+    catalog: str = ""
+    catalog_id: str = ""
 
 
 class Params(NamedTuple):
@@ -153,6 +159,7 @@ def main(params: Params) -> Result:
             color_tag=str(entry.get("color_tag", "NONE") or "NONE"),
             description=str(entry.get("description", "") or ""),
             metadata=metadata,
+            **_catalog_fields(library_name, entry.get("catalog_id", "")),
         )
 
     # Fallback: live inspection (append in the session -- the pre-Phase C path).
@@ -219,6 +226,7 @@ def main(params: Params) -> Result:
     color_tag = "NONE"
     description = ""
     metadata = {}
+    catalog_id = ""
 
     try:
         if asset_type == "NODETREE":
@@ -236,6 +244,7 @@ def main(params: Params) -> Result:
                     description = ng.description or ""
 
                 if hasattr(ng, "asset_data") and ng.asset_data:
+                    catalog_id = str(getattr(ng.asset_data, "catalog_id", "") or "")
                     if hasattr(ng.asset_data, "tags"):
                         for tag in ng.asset_data.tags:
                             tags.append(tag.name)
@@ -269,6 +278,7 @@ def main(params: Params) -> Result:
                 if hasattr(mat, "description"):
                     description = mat.description or ""
                 if hasattr(mat, "asset_data") and mat.asset_data:
+                    catalog_id = str(getattr(mat.asset_data, "catalog_id", "") or "")
                     if hasattr(mat.asset_data, "tags"):
                         for tag in mat.asset_data.tags:
                             tags.append(tag.name)
@@ -288,6 +298,7 @@ def main(params: Params) -> Result:
                 if hasattr(obj, "description"):
                     description = obj.description or ""
                 if hasattr(obj, "asset_data") and obj.asset_data:
+                    catalog_id = str(getattr(obj.asset_data, "catalog_id", "") or "")
                     if hasattr(obj.asset_data, "tags"):
                         for tag in obj.asset_data.tags:
                             tags.append(tag.name)
@@ -307,6 +318,7 @@ def main(params: Params) -> Result:
                 if hasattr(col, "description"):
                     description = col.description or ""
                 if hasattr(col, "asset_data") and col.asset_data:
+                    catalog_id = str(getattr(col.asset_data, "catalog_id", "") or "")
                     if hasattr(col.asset_data, "tags"):
                         for tag in col.asset_data.tags:
                             tags.append(tag.name)
@@ -327,6 +339,7 @@ def main(params: Params) -> Result:
                 if hasattr(world, "description"):
                     description = world.description or ""
                 if hasattr(world, "asset_data") and world.asset_data:
+                    catalog_id = str(getattr(world.asset_data, "catalog_id", "") or "")
                     if hasattr(world.asset_data, "tags"):
                         for tag in world.asset_data.tags:
                             tags.append(tag.name)
@@ -346,6 +359,7 @@ def main(params: Params) -> Result:
                 if hasattr(action, "description"):
                     description = action.description or ""
                 if hasattr(action, "asset_data") and action.asset_data:
+                    catalog_id = str(getattr(action.asset_data, "catalog_id", "") or "")
                     if hasattr(action.asset_data, "tags"):
                         for tag in action.asset_data.tags:
                             tags.append(tag.name)
@@ -385,7 +399,19 @@ def main(params: Params) -> Result:
         color_tag=color_tag,
         description=description,
         metadata=metadata,
+        **_catalog_fields(library_name, catalog_id),
     )
+
+
+def _catalog_fields(library_name: str, catalog_id: Any) -> dict[str, str]:
+    """``{"catalog": path, "catalog_id": UUID}`` for the asset's catalog UUID; empty strings for no catalog.
+
+    The path comes from the library's ``blender_assets.cats.txt`` (empty when the file does not name it)."""
+    uuid = catalog_uuid_or_empty(catalog_id)
+    if not uuid:
+        return {"catalog": "", "catalog_id": ""}
+    catalogs, _notes = _catalogs_for(library_name, {})
+    return describe_catalog(uuid, catalog_paths_by_uuid(catalogs))
 
 
 def _socket_count(ng, direction: str) -> int:

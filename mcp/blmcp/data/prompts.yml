@@ -230,7 +230,7 @@ initial_instructions: |
      first:
      * get_asset_libraries -- list the registered libraries (prefer the
        "Default" / "Essentials" libraries; they are the built-in sets).
-     * list_asset_catalogs -- see how a library is organized.
+     * list_asset_catalogs -- a library's catalogs (path + UUID), as jump_to_asset_browser takes them.
      * search_assets(query, asset_type) -- find assets by name, tag, or
        description (asset_type: MATERIAL, NODETREE, OBJECT, COLLECTION,
        WORLD, ACTION).

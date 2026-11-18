@@ -47,7 +47,9 @@ def register(mcp: FastMCP) -> None:
                         Auto-detected if omitted.
 
         Returns:
-            Dict with tags, editor_type (for node groups), color_tag, and other metadata.
+            Dict with tags, editor_type (for node groups), color_tag, and other metadata, and the
+            asset's catalog: catalog (its path, from the library's catalog file) and catalog_id
+            (its UUID). Both are empty for an asset without a catalog.
         """
         return send_code(
             toolcode_format_call(

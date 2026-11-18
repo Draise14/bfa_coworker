@@ -33,17 +33,22 @@ def register(mcp: FastMCP) -> None:
         library_name: str = "",
     ) -> dict[str, object]:
         """
-        List the catalog/directory structure of asset libraries.
+        List the catalogs of asset libraries: their paths and UUIDs.
 
-        Shows how assets are organized into folders within each library,
-        with counts of materials, node groups, objects, worlds, and actions
-        in each directory.
+        Reads each library's catalog file (blender_assets.cats.txt), the same source that
+        jump_to_asset_browser uses, so a path returned here can be passed to it as catalog_path.
+        Folders on disk are not catalogs. A library without a catalog file answers with an
+        empty list and a message saying so. When the library's metadata index is ready, each
+        catalog also gets its asset count and up to 10 sample asset names, and each library the
+        number of assets without a catalog (the first call starts building the index).
 
         Args:
             library_name: Limit to a specific library. Empty = all libraries.
+                          LOCAL = the current file's catalogs, ESSENTIALS = the built-in library.
 
         Returns:
-            Catalogs with paths and asset counts per directory.
+            catalogs (path, uuid, library, and assets / counts / asset_names when known),
+            libraries (catalog count and assets without a catalog), asset_counts, message.
         """
         return send_code(
             toolcode_format_call(_TOOL_CALL, Params(library_name=library_name)),

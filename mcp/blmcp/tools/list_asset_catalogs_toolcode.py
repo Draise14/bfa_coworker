@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """
-Tool-code for listing asset library catalog/directory structure.
+Tool-code for listing the catalogs of asset libraries (read from their catalog files, #602).
 """
 
 __all__ = (
@@ -15,12 +15,23 @@ __all__ = (
 
 from typing import Any, NamedTuple
 
+# @include_begin: _asset_index_shared.py
+# @include_end
+# @include_begin: _asset_catalogs_shared.py
+# @include_end
+
+_ASSET_TYPES = ("MATERIAL", "NODETREE", "OBJECT", "WORLD", "ACTION", "COLLECTION")
+_SAMPLE_NAMES = 10
+
 
 class Result(NamedTuple):
     status: str
     library_name: str
     catalogs: list[dict[str, Any]]
     asset_counts: dict[str, int]
+    # One entry per library looked at: its catalog file, how many catalogs and uncatalogued assets.
+    libraries: list[dict[str, Any]] = []
+    message: str = ""
 
 
 class Params(NamedTuple):
@@ -28,106 +39,95 @@ class Params(NamedTuple):
 
 
 def main(params: Params) -> Result:
-    library_name = params.library_name
-    """List the catalog/directory structure of asset libraries.
+    """List the catalogs of asset libraries, read from each library's ``blender_assets.cats.txt``.
 
-    Each catalog includes up to 10 sample asset names so the agent
-    can see what is in each folder without a separate search call.
+    The catalog paths and UUIDs are the ones ``jump_to_asset_browser`` takes. The asset counts and up to
+    10 sample names per catalog come from the library's metadata index, when it is ready (the first call
+    starts building it). Folders on disk are not catalogs: a library without a catalog file answers with
+    an empty list and says so.
     """
     import bpy  # pylint: disable=import-error
     import os
 
-    all_catalogs = []
-    total_counts = {"MATERIAL": 0, "NODETREE": 0, "OBJECT": 0, "WORLD": 0, "ACTION": 0, "COLLECTION": 0}
+    library_name = params.library_name
+    total_counts = {k: 0 for k in _ASSET_TYPES}
+    all_catalogs: list[dict[str, Any]] = []
+    libraries: list[dict[str, Any]] = []
+    messages: list[str] = []
+    shown = library_name or "(all)"
 
     try:
-        for lib in bpy.context.preferences.filepaths.asset_libraries:
-            if library_name and lib.name != library_name:
-                continue
-            lib_path = str(lib.path) if lib.path else ""
-            if not lib_path or not os.path.isdir(lib_path):
-                continue
+        # (reference the Asset Browser uses, library folder or "").
+        targets: list[tuple[str, str]] = []
+        if library_name in ("LOCAL", "ESSENTIALS"):
+            targets.append((library_name, ""))
+        else:
+            for lib in bpy.context.preferences.filepaths.asset_libraries:
+                if library_name and lib.name != library_name:
+                    continue
+                targets.append((lib.name, bpy.path.abspath(str(lib.path)) if lib.path else ""))
+        if not targets:
+            if library_name:
+                return Result(status="library not found", library_name=shown, catalogs=[],
+                              asset_counts=total_counts,
+                              message="No asset library named '{:s}'. Use get_asset_libraries to see the names "
+                                      "(or LOCAL for the current file, ESSENTIALS for the built-in one).".format(library_name))
+            return Result(status="no catalogs found", library_name=shown, catalogs=[], asset_counts=total_counts,
+                          message="No asset libraries are configured.")
 
-            # Walk the directory structure to find catalogs.
-            for root, dirs, files in os.walk(lib_path):
-                rel = os.path.relpath(root, lib_path)
-                if rel == ".":
-                    rel = ""
-
-                # Count blend files in this directory.
-                blend_files = [f for f in files if f.endswith(".blend")]
-
-                # Scan blend files for asset types and collect sample names.
-                dir_counts = {"MATERIAL": 0, "NODETREE": 0, "OBJECT": 0, "WORLD": 0, "ACTION": 0, "COLLECTION": 0}
-                asset_names: dict[str, list[str]] = {
-                    "MATERIAL": [], "NODETREE": [], "OBJECT": [],
-                    "WORLD": [], "ACTION": [], "COLLECTION": [],
-                }
-                for bf in blend_files:
-                    bp = os.path.join(root, bf)
-                    try:
-                        with bpy.data.libraries.load(bp) as (data_from, _data_to):
-                            for k, names_list in [
-                                ("MATERIAL", data_from.materials),
-                                ("NODETREE", data_from.node_groups),
-                                ("OBJECT", data_from.objects),
-                                ("WORLD", data_from.worlds),
-                                ("ACTION", data_from.actions),
-                                ("COLLECTION", data_from.collections),
-                            ]:
-                                count = len(names_list)
-                                dir_counts[k] += count
-                                # Collect first 10 asset names per type.
-                                remaining = 10 - len(asset_names[k])
-                                if remaining > 0:
-                                    asset_names[k].extend(list(names_list)[:remaining])
-                    except Exception:
-                        pass
-
-                # Only include directories with assets or subdirectories.
-                has_assets = any(v > 0 for v in dir_counts.values())
-                if has_assets or dirs:
-                    # Build asset_names list: combine all types into one flat list.
-                    sample_assets = []
-                    for k in ("MATERIAL", "NODETREE", "OBJECT", "WORLD", "COLLECTION", "ACTION"):
-                        for name in asset_names[k]:
-                            sample_assets.append({"name": name, "type": k})
-
-                    catalog = {
-                        "path": rel or "(root)",
-                        "library": lib.name,
-                        "blend_files": len(blend_files),
-                        "materials": dir_counts["MATERIAL"],
-                        "node_groups": dir_counts["NODETREE"],
-                        "objects": dir_counts["OBJECT"],
-                        "worlds": dir_counts["WORLD"],
-                        "actions": dir_counts["ACTION"],
-                        "collections": dir_counts["COLLECTION"],
-                        "asset_names": sample_assets[:10],
-                    }
-                    all_catalogs.append(catalog)
-                    for k, v in dir_counts.items():
-                        total_counts[k] += v
-
-        if not all_catalogs:
-            return Result(
-                status="no catalogs found" if not library_name else "library not found",
-                library_name=library_name or "(all)",
-                catalogs=[],
-                asset_counts=total_counts,
-            )
+        cache: dict = {}
+        for reference, lib_path in targets:
+            catalogs, notes = _catalogs_for(reference, cache)
+            messages.extend(notes)
+            index = None
+            if lib_path and os.path.isdir(lib_path):
+                index = _blmcp_index_ensure(lib_path, bpy)
+            per_catalog: dict[str, dict[str, Any]] = {}
+            uncatalogued = 0
+            if isinstance(index, dict) and isinstance(index.get("assets"), dict):
+                by_uuid = catalog_paths_by_uuid(catalogs)
+                for name_i, entry in index["assets"].items():
+                    if not isinstance(entry, dict):
+                        continue
+                    kind = str(entry.get("type", ""))
+                    if kind in total_counts:
+                        total_counts[kind] += 1
+                    uuid = catalog_uuid_or_empty(entry.get("catalog_id", ""))
+                    if not uuid or uuid.lower() not in by_uuid:
+                        uncatalogued += 1
+                        continue
+                    slot = per_catalog.setdefault(by_uuid[uuid.lower()], {"counts": {}, "names": []})
+                    slot["counts"][kind] = slot["counts"].get(kind, 0) + 1
+                    if len(slot["names"]) < _SAMPLE_NAMES:
+                        slot["names"].append({"name": str(name_i), "type": kind})
+            index_ready = isinstance(index, dict)
+            for path, uuid in sorted(catalogs.items()):
+                item: dict[str, Any] = {"path": path, "uuid": uuid, "library": reference}
+                if index_ready:
+                    slot = per_catalog.get(path, {"counts": {}, "names": []})
+                    item["assets"] = sum(slot["counts"].values())
+                    item["counts"] = slot["counts"]
+                    item["asset_names"] = slot["names"]
+                all_catalogs.append(item)
+            libraries.append({
+                "library": reference,
+                "catalogs": len(catalogs),
+                "assets_without_catalog": uncatalogued if index_ready else None,
+            })
+            if not catalogs and not notes:
+                messages.append(
+                    "Library '{:s}' has no catalogs: no {:s} that names any. Its assets are not filed in "
+                    "catalogs (the folders on disk are not catalogs).".format(reference, _CATS_FILE))
+            if lib_path and not index_ready:
+                messages.append(
+                    "Asset counts for '{:s}' are not ready: its metadata index is being built; ask again in a "
+                    "minute.".format(reference))
 
         return Result(
-            status="ok",
-            library_name=library_name or "(all)",
-            catalogs=all_catalogs,
-            asset_counts=total_counts,
-        )
+            status="ok", library_name=shown, catalogs=all_catalogs, asset_counts=total_counts,
+            libraries=libraries, message=" ".join(messages))
 
     except Exception as ex:
         return Result(
-            status="error: {:s}".format(str(ex)),
-            library_name=library_name or "(all)",
-            catalogs=[],
-            asset_counts=total_counts,
-        )
+            status="error: {:s}".format(str(ex)), library_name=shown, catalogs=[],
+            asset_counts=total_counts, libraries=libraries, message=" ".join(messages))

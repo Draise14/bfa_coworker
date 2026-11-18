@@ -984,7 +984,9 @@ EXPECTED_TOOLS = [
 "                        Auto-detected if omitted.\n"
 "\n"
 "        Returns:\n"
-"            Dict with tags, editor_type (for node groups), color_tag, and other metadata.\n"
+"            Dict with tags, editor_type (for node groups), color_tag, and other metadata, and the\n"
+"            asset's catalog: catalog (its path, from the library's catalog file) and catalog_id\n"
+"            (its UUID). Both are empty for an asset without a catalog.\n"
 "        ",
         "inputSchema": {
             "properties": {
@@ -1958,17 +1960,22 @@ EXPECTED_TOOLS = [
     {
         "name": "list_asset_catalogs",
         "description": "\n"
-"        List the catalog/directory structure of asset libraries.\n"
+"        List the catalogs of asset libraries: their paths and UUIDs.\n"
 "\n"
-"        Shows how assets are organized into folders within each library,\n"
-"        with counts of materials, node groups, objects, worlds, and actions\n"
-"        in each directory.\n"
+"        Reads each library's catalog file (blender_assets.cats.txt), the same source that\n"
+"        jump_to_asset_browser uses, so a path returned here can be passed to it as catalog_path.\n"
+"        Folders on disk are not catalogs. A library without a catalog file answers with an\n"
+"        empty list and a message saying so. When the library's metadata index is ready, each\n"
+"        catalog also gets its asset count and up to 10 sample asset names, and each library the\n"
+"        number of assets without a catalog (the first call starts building the index).\n"
 "\n"
 "        Args:\n"
 "            library_name: Limit to a specific library. Empty = all libraries.\n"
+"                          LOCAL = the current file's catalogs, ESSENTIALS = the built-in library.\n"
 "\n"
 "        Returns:\n"
-"            Catalogs with paths and asset counts per directory.\n"
+"            catalogs (path, uuid, library, and assets / counts / asset_names when known),\n"
+"            libraries (catalog count and assets without a catalog), asset_counts, message.\n"
 "        ",
         "inputSchema": {
             "properties": {

@@ -730,9 +730,12 @@ class TestMenus(_OpsCase):
         data = Path(__file__).resolve().parent / "data" / "blender_icons.txt"
         known = {line.strip() for line in data.read_text(encoding="utf-8").splitlines() if line.strip()
                  and not line.startswith("#")}
+        # through shared.icon() on a stand-in without bpy a name passes through: Bforartists-only names are fine here,
+        # test_captions_easing checks that each has a Blender fallback
         for items in (self.ops._ANIM_ITEMS, self.ops._POSITION_ITEMS, self.ops._CASE_ITEMS):
             for ident, _label, _tip, icon, _number in items:
-                self.assertIn(icon, known, ident)
+                self.assertTrue(icon in known or icon in self.ops.cap.ICONS["line"].values()
+                                or icon in self.ops.cap.ICONS["case"].values(), ident)
 
     def test_lines_says_what_it_counts(self):
         items = {n: [i[1] for i in self.ops._lines_items_for(n)] for n in (1, 2)}

@@ -55,7 +55,16 @@ ICON_FALLBACKS = {
     "WARNING": "ERROR",             # Blender's warning triangle is ERROR
     "MAKE_SCREENSHOT": "WINDOW",
     "EXTENSION": "PLUGIN",
-    "SEQ_TEXT": "TEXT",             # the Text strip (the Auto Captions dialog's Text section)
+    # The Auto Captions dialog (#605): Bforartists' own icons, a distinct Blender icon for each.
+    "SEQ_TEXT": "TEXT",             # the Text section
+    "CARET_NEXT_WORD": "FORWARD",
+    "MOVE_UP": "TRIA_UP",
+    "MOVE_DOWN": "TRIA_DOWN",
+    "CARET_NEXT_CHAR": "KEY_RETURN",
+    "SET_UPPERCASE": "SMALL_CAPS",
+    "SET_LOWERCASE": "FONT_DATA",
+    "SET_STRING_CASE": "SORTALPHA",
+    "MESH_LINE": "REMOVE",
 }
 _ICONS: frozenset[str] | None = None
 

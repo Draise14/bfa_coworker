@@ -156,7 +156,9 @@ class TestLineEasing(unittest.TestCase):
         for e in EASINGS:
             for t in line_tracks("SLIDE_UP", easing=e):
                 self.assertEqual([f for f, _i, _e in t["easing"]], [f for f, _v in t["keys"]], (e, t["path"]))
-                self.assertTrue(all(i == cap.EASING_TYPES[e][0] for _f, i, _e in t["easing"]))
+                want = "CUBIC" if t["path"] == "blend_alpha" and e in ("BACK", "BOUNCE", "ELASTIC") \
+                    else cap.EASING_TYPES[e][0]
+                self.assertTrue(all(i == want for _f, i, _e in t["easing"]), (e, t["path"]))
 
     def test_a_way_in_slows_into_place_with_ease_out_and_the_way_out_is_mirrored(self):
         alpha = {t["path"]: t for t in line_tracks("FADE", easing="EASE_OUT")}["blend_alpha"]
@@ -170,10 +172,35 @@ class TestLineEasing(unittest.TestCase):
             alpha = {t["path"]: t for t in line_tracks("FADE", easing=e)}["blend_alpha"]
             self.assertEqual(len({k for _f, _i, k in alpha["easing"]}), 1)
 
-    def test_back_bounce_and_elastic_land_on_the_way_in_and_pull_back_on_the_way_out(self):
+    def test_the_opacity_never_overshoots_it_gets_the_plain_cubic(self):
         for e in ("BACK", "BOUNCE", "ELASTIC"):
-            alpha = {t["path"]: t for t in line_tracks("FADE", easing=e)}["blend_alpha"]
-            self.assertEqual([(i, k) for _f, i, k in alpha["easing"]][0::2], [(e, "EASE_OUT"), (e, "EASE_IN")], e)
+            for line in ("FADE", "SLIDE_UP", "SLIDE_DOWN", "TYPEWRITER"):
+                for t in line_tracks(line, easing=e):
+                    if t["path"] == "blend_alpha":
+                        self.assertEqual([(i, k) for _f, i, k in t["easing"]][0::2][-2:],
+                                         [("CUBIC", "EASE_OUT"), ("CUBIC", "EASE_IN")][-len(t["easing"][0::2][-2:]):],
+                                         (e, line))
+                        self.assertTrue(all(i == "CUBIC" for _f, i, _e in t["easing"]))
+
+    def test_position_and_scale_keep_the_overshoot_where_they_land(self):
+        for e in ("BACK", "BOUNCE", "ELASTIC"):
+            offset = {t["path"]: t for t in line_tracks("SLIDE_UP", easing=e)}["transform.offset_y"]
+            self.assertEqual([(i, k) for _f, i, k in offset["easing"]][0], (e, "EASE_OUT"))
+
+    def test_a_pop_overshoots_once_only_on_the_segment_that_lands_on_the_rest_value(self):
+        for e in ("BACK", "BOUNCE", "ELASTIC"):
+            for path in ("transform.scale_x", "transform.offset_y"):
+                t = {x["path"]: x for x in line_tracks("POP", easing=e)}[path]
+                self.assertEqual(len(t["keys"]), 3)
+                first, second = t["easing"][0], t["easing"][1]
+                self.assertEqual(first[1:], ("CUBIC", "EASE_OUT"), (e, path))      # up to the peak: plain
+                self.assertEqual(second[1:], (e, "EASE_OUT"), (e, path))           # peak to rest: the curve
+
+    def test_a_word_pop_and_scale_land_with_the_overshoot_once(self):
+        for word in ("POP", "SCALE"):
+            t = {x["path"]: x for x in word_tr("NONE", word, None, "BACK")}["transform.scale_x"]
+            self.assertEqual([i for _f, i, _e in t["easing"]][:-1].count("BACK"), 1, (word, t["easing"]))
+            self.assertEqual(t["easing"][0][1:], ("CUBIC", "EASE_OUT"), word)
 
     def test_steps_stay_constant_and_get_no_easing(self):
         for e in EASINGS:
@@ -275,10 +302,38 @@ class TestWordEasing(unittest.TestCase):
 
     def test_the_word_motion_gets_the_word_easing_and_the_line_animation_the_line_easing(self):
         ts = {t["path"]: t for t in word_tr("FADE", "POP", "LINEAR", "BOUNCE")}
-        scale = ts["transform.scale_x"]
-        self.assertTrue(all(i == "BOUNCE" for _f, i, _e in scale["easing"][:-1]))
-        alpha = ts["blend_alpha"]            # the line's fade out only: the word's pop has no alpha beyond a step
-        self.assertTrue(any(i == "LINEAR" for _f, i, _e in alpha["easing"]))
+        scale = ts["transform.scale_x"]            # only the word moves the scale
+        self.assertTrue(any(i == "BOUNCE" for _f, i, _e in scale["easing"]))
+        alpha = ts["blend_alpha"]            # the line's fade in: linear; the word's own step is the word's (plain)
+        self.assertTrue(all(i == "LINEAR" for f, i, _e in alpha["easing"] if f <= 100 + cap._windows(90, FPS)[0]
+                            and f < 130 - 1))
+
+    def test_every_word_moves_the_line_the_same_way_first_middle_and_last(self):
+        # Both: Slide Up + Pop, Line Bounce, Word Ease In: the line's keys carry the line's easing on every word
+        per = {}
+        for tag, (a, b) in (("first", (100, 118)), ("middle", (140, 158)), ("last", (180, 190))):
+            ts = {t["path"]: t for t in word_tr("SLIDE_UP", "POP", "BOUNCE", "EASE_IN", a=a, b=b)}
+            keys = ts["transform.offset_y"]["keys"]
+            easing = {f: (i, e) for f, i, e in ts["transform.offset_y"]["easing"]}
+            fs, n_in = 100, cap._windows(90, FPS)[0]
+            per[tag] = [easing[f] for f, _v in keys if f < fs + n_in and f in easing]
+            self.assertTrue(per[tag], tag)
+            # the line's curve (the plain cubic where the word's own keys cut a segment short), never the word's
+            # Ease In: no word moves the line's slide differently from the others
+            self.assertTrue(all(e == "EASE_OUT" and i in ("BOUNCE", "CUBIC") for i, e in per[tag]), (tag, per[tag]))
+        self.assertEqual(per["middle"], per["last"])               # words that move outside the line's way in
+        self.assertEqual(per["middle"][0], ("BOUNCE", "EASE_OUT"))
+        self.assertEqual(per["first"][-1], ("BOUNCE", "EASE_OUT"))     # and the first one still lands with it
+
+    def test_fade_and_rise_every_word_fades_the_same_way(self):
+        firsts = set()
+        for a in (100, 130, 160):
+            ts = {t["path"]: t for t in word_tr("FADE", "RISE", "EASE_OUT", "BOUNCE", a=a, b=a + 18)}
+            alpha = ts["blend_alpha"]
+            in_end = 100 + cap._windows(90, FPS)[0]
+            firsts.add(tuple((i, e) for f, i, e in alpha["easing"] if f < in_end and f <= 100))
+        self.assertEqual(len(firsts), 1)                           # the caption's fade in: one curve on every word
+        self.assertEqual(next(iter(firsts))[0][0], "CUBIC")
 
     def test_a_late_words_motion_does_not_take_the_lines_way_out(self):
         # the last word is spoken where the caption's fade out starts: that key is the line's, so it is mirrored
@@ -287,7 +342,7 @@ class TestWordEasing(unittest.TestCase):
         self.assertTrue(out)
         self.assertTrue(all((i, e) == ("CUBIC", "EASE_IN") for _f, i, e in out), out)
         scale = ts["transform.scale_x"]["easing"]               # the pop itself keeps the word's easing
-        self.assertTrue(all(i == "BACK" for _f, i, _e in scale), scale)
+        self.assertTrue(any(i == "BACK" for _f, i, _e in scale), scale)
 
     def test_the_colour_stays_constant_and_unease(self):
         ts = {t["path"]: t for t in word_tr("NONE", "HIGHLIGHT_POP", "BACK", "BOUNCE")}
@@ -306,6 +361,100 @@ class TestWordEasing(unittest.TestCase):
             for t in word_tr("SLIDE_UP", word, "ELASTIC", "BACK"):
                 if "easing" in t:
                     self.assertLessEqual({f for f, _i, _e in t["easing"]}, {f for f, _v in t["keys"]})
+
+
+# -- nothing changes without a choice (golden) -------------------------------------------------------
+
+class TestGolden(unittest.TestCase):
+    """As the Style / Normal gives the keys the code gave before #605: 820 cases stored from the code of that
+    time (``data/captions_golden_before_605.json``: every line animation on every style at two frame rates and five
+    lengths, every word animation under every line animation at three places in the caption)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import json
+        cls.cases = json.loads((_DATA / "captions_golden_before_605.json").read_text(encoding="utf-8"))
+
+    def run_case(self, kind, args, **extra):
+        import json
+        if kind == "line":
+            anim, style, fs, fe, fps, rx, ry, size, lines, anchor, loc, reveal = args
+            got = cap.animation_tracks(anim, style, fs, fe, fps, rx, ry, size, lines, anchor, tuple(loc),
+                                       [tuple(r) for r in reveal], **extra)
+        else:
+            (line, word, fs, fe, a, b, fps, rx, ry, mid, lmid, rev, base, hi) = args
+            got = cap.word_tracks(line, word, fs, fe, a, b, fps, rx, ry, mid, lmid, rev, base, hi, **{
+                {"easing": "line_easing"}.get(k, k): v for k, v in extra.items()})
+        return json.loads(json.dumps(got))
+
+    def test_there_are_enough_cases(self):
+        self.assertGreaterEqual(len(self.cases), 800)
+        self.assertEqual({c[0] for c in self.cases}, {"line", "word"})
+
+    def test_left_alone_it_is_what_it_was(self):
+        for kind, args, want in self.cases:
+            self.assertEqual(self.run_case(kind, args), want, (kind, args))
+
+    def test_chosen_as_the_style_and_normal_it_is_what_it_was(self):
+        for kind, args, want in self.cases:
+            extra = ({"easing": "STYLE", "speed": "NORMAL"} if kind == "line"
+                     else {"easing": "STYLE", "word_easing": "STYLE", "speed": "NORMAL"})
+            self.assertEqual(self.run_case(kind, args, **extra), want, (kind, args))
+
+
+class TestPlanAndReasons(unittest.TestCase):
+
+    def plan(self, style="CLEAN", **kw):
+        return cap.resolve_animation(style, **kw)
+
+    def test_each_greyed_line_says_its_real_reason(self):
+        none_ = cap.line_ease_reason(self.plan(animate="LINE", line="NONE"), "CLEAN")
+        self.assertIn("Line Animation is None", none_)
+        style_ = cap.line_ease_reason(self.plan("CLEAN", animate="LINE", line="STYLE"), "CLEAN")
+        self.assertIn("style's own line animation stands still", style_)
+        anchor = cap.line_ease_reason(self.plan("BOLD_POP", animate="BOTH", line="STYLE", word="POP"), "BOLD_POP")
+        self.assertIn("anchor", anchor)
+        self.assertNotIn("None", anchor)
+        self.assertEqual(cap.line_ease_reason(self.plan(animate="LINE", line="TYPEWRITER"), "CLEAN"), "")
+        self.assertEqual(cap.line_ease_reason(self.plan(animate="LINE", line="FADE"), "CLEAN"), "")
+        self.assertIn("Highlight", cap.words_ease_reason(self.plan(animate="WORD", word="HIGHLIGHT")))
+        self.assertIn("no Word Animation", cap.words_ease_reason(self.plan(animate="WORD", word="NONE")))
+        self.assertEqual(cap.words_ease_reason(self.plan(animate="WORD", word="POP")), "")
+
+    def test_typewriter_is_enabled_as_the_tooltip_says(self):
+        import re
+        src = (_ADDON / "captions_ops.py").read_text(encoding="utf-8")
+        tip = src[src.index('name="Line Easing"'):src.index('name="Word Easing"')]
+        self.assertIn("Typewriter's letters appear in steps, but its fade out is eased", " ".join(tip.split()).replace('" "', ""))
+        self.assertTrue(cap.line_eases(self.plan(animate="LINE", line="TYPEWRITER"), "CLEAN"))
+        self.assertIsNone(re.search(r"greyed out when[^)]*Typewriter\b[^)]*letters\)", tip))
+
+    def test_bold_pop_keeps_its_line_easing_under_word_motions(self):
+        p = cap.apply_easing(self.plan("BOLD_POP", animate="BOTH", line="STYLE", word="POP"), "BOUNCE", "BACK", None,
+                             "BOLD_POP")
+        self.assertEqual((p["ease"], p["wease"]), ("BOUNCE", "BACK"))      # kept for a fall back to Highlight
+        p = cap.apply_easing(self.plan("CLEAN", animate="BOTH", line="STYLE", word="POP"), "BOUNCE", "BACK", None,
+                             "CLEAN")
+        self.assertEqual(p["ease"], "STYLE")                                # a style with no pop: nothing to keep
+
+
+class TestSpeedClamps(unittest.TestCase):
+
+    def test_fast_is_never_longer_and_slow_never_shorter_than_normal(self):
+        for fps in (1.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 24.0, 30.0, 60.0):
+            for length in range(1, 300):
+                n, f, sl = (cap._windows(length, fps, s) for s in ("NORMAL", "FAST", "SLOW"))
+                self.assertLessEqual(f[0], n[0], (fps, length))
+                self.assertLessEqual(f[1], n[1], (fps, length))
+                self.assertGreaterEqual(sl[0], n[0], (fps, length))
+                self.assertGreaterEqual(sl[1], n[1], (fps, length))
+            for a in range(100, 180, 7):
+                words = [cap.word_tracks("NONE", "FADE_IN", 100, 190, a, a + 18, fps, 1920, 1080, (1000.0, 200.0),
+                                         (960.0, 200.0), None, (1, 1, 1, 1), (1, 0.8, 0.1, 1), None, None, s)
+                         for s in ("FAST", "NORMAL", "SLOW")]
+                spans = [(max(f for t in w for f, _v in t["keys"]) if w else 0) for w in words]
+                self.assertLessEqual(spans[0], spans[1])
+                self.assertLessEqual(spans[1], spans[2])
 
 
 # -- the strips -------------------------------------------------------------------------------
@@ -349,8 +498,8 @@ class TestTheCaption(_Modes):
             self.assertNotIn("wease", tag)
             modes = self.eased(line)
             self.assertEqual(set(modes), {"blend_alpha", "transform.offset_y"})
-            for m in modes.values():
-                self.assertTrue(all(i == "BOUNCE" for i, _e in m.values()))
+            self.assertEqual(modes["transform.offset_y"][min(modes["transform.offset_y"])][0], "BOUNCE")
+            self.assertTrue(all(i == "CUBIC" for i, _e in modes["blend_alpha"].values()))     # opacity: no bounce
 
     def test_the_word_easing_is_on_each_words_keys(self):
         self.make(animate="WORD", word_animation="POP", word_easing="ELASTIC")
@@ -360,8 +509,8 @@ class TestTheCaption(_Modes):
             for w in self.words_of(line):
                 modes = self.eased(w)
                 self.assertIn("transform.scale_x", modes)
-                self.assertTrue(all(i == "ELASTIC" for _f, (i, _e) in
-                                    ((f, v) for m in modes.values() for f, v in m.items())))
+                sc = modes["transform.scale_x"]
+                self.assertEqual(sum(1 for f, (i, _e) in sc.items() if i == "ELASTIC" and f != max(sc)), 1)
 
     def test_no_key_is_added_by_an_easing(self):
         self.make(animate="BOTH", line_animation="FADE", word_animation="HIGHLIGHT_RISE", speed="SLOW")
@@ -414,7 +563,7 @@ class TestItSurvives(_Modes):
     def assert_eased(self):
         for modes in self.last_modes_of_words():
             scale = modes["transform.scale_x"]
-            self.assertTrue(all(i == "BACK" for _f, (i, _e) in scale.items() if _f != max(scale)))
+            self.assertEqual(sum(1 for f, (i, _e) in scale.items() if i == "BACK" and f != max(scale)), 1, scale)
 
     def test_a_new_bold_and_font_through_the_refit(self):
         self.line().use_bold = True
@@ -564,6 +713,22 @@ def _used_in_the_operator_module():
     return found
 
 
+def _enum_names():
+    """``{drop-down: {entry: icon name}}`` of the Auto Captions dialog, as the dialog builds its lists."""
+    icons = cap.ICONS
+    tri = {n: {"STYLE": icons["tri"]["STYLE"], "ON": icons[n]["ON"], "OFF": icons["tri"]["OFF"]}
+           for n in ("bold", "italic")}
+    languages = {"auto": cap.language_icon("auto")}
+    languages.update({c: cap.language_icon(c) for c in cap.LANGUAGE_CODES})
+    return {"style": icons["style"], "animate": icons["animate"], "line animation": icons["line"],
+            "word animation": icons["word"], "easing": icons["easing"], "speed": icons["speed"],
+            "position": icons["position"], "letter case": icons["case"], "lines": icons["lines"],
+            "bold": tri["bold"], "italic": tri["italic"], "language": languages,
+            "speaker style": dict(icons["same"], **icons["style"]),
+            "speaker position": dict(icons["same"], **icons["position"]),
+            "font": icons["font"], "section headers": icons["section"]}
+
+
 class TestIcons(unittest.TestCase):
 
     @classmethod
@@ -588,8 +753,51 @@ class TestIcons(unittest.TestCase):
             self.assertEqual(set(icons[table]), set(keys), table)
         word = set(icons["word"])
         for key in cap.WORD_ANIMATIONS:
-            self.assertIn(key.split("_", 1)[-1] if key.startswith("HIGHLIGHT_") else key, word, key)
+            self.assertIn(key, word, key)
         self.assertEqual(set(icons["section"]), {"style", "motion", "text", "speakers"})
+
+    def test_no_two_entries_of_a_dropdown_share_an_icon_in_either_program(self):
+        fallbacks = self.shared.ICON_FALLBACKS
+        for name, entries in _enum_names().items():
+            own = {k: v for k, v in entries.items() if not v.startswith(cap.PNG_PREFIX)}
+            pictures = [v for v in entries.values() if v.startswith(cap.PNG_PREFIX)]
+            # Bforartists: the names as they are (our own pictures included: each is its own file)
+            self.assertEqual(len(set(entries.values())), len(entries), "{:s}: Bforartists names".format(name))
+            # Blender: each Bforartists-only name through its fallback; the pictures of our own are drawn from their
+            # files in every program (the built-in icon for them is only for a picture that can't be loaded)
+            resolved = [fallbacks.get(v, v) for v in own.values()]
+            self.assertEqual(len(set(resolved)), len(resolved), "{:s}: Blender icons {!r}".format(name, resolved))
+            self.assertEqual(len(set(pictures)), len(pictures))
+
+    def test_the_highlight_plus_entries_differ_from_the_plain_motion(self):
+        word = cap.ICONS["word"]
+        for m in cap.WORD_MOTIONS:
+            self.assertNotEqual(word["HIGHLIGHT_" + m], word[m], m)
+        self.assertNotEqual(word["HIGHLIGHT"], word["POP"])
+
+    def test_every_picture_of_our_own_ships(self):
+        folder = _ADDON / "icons" / "captions"
+        for name in cap.png_icon_names():
+            path = folder / "{:s}_64.png".format(name)
+            self.assertTrue(path.is_file(), name)
+            self.assertEqual(path.read_bytes()[:8], b"\x89PNG\r\n\x1a\n", name)
+        self.assertEqual(len(cap.png_icon_names()), 24)         # 4 "Highlight + ..." and 20 languages
+
+    def test_the_language_codes_are_the_preferences(self):
+        tree = ast.parse((_ADDON / "preferences.py").read_text(encoding="utf-8"))
+        codes = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "_LANGUAGES" for t in node.targets):
+                codes = tuple(e.elts[0].value for e in node.value.elts)
+        self.assertEqual(codes, cap.LANGUAGE_CODES)
+
+    def test_the_picture_names_the_loader_knows_are_the_files(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("bfacw_captions_icons", _ADDON / "captions_icons.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        self.assertEqual(mod.icon_id("lang_en"), 0)            # no Blender here: the caller uses the built-in icon
+        self.assertTrue(Path(mod.png_path("lang_en")).is_file())
 
     def test_the_easing_icons_are_the_graph_editors(self):
         self.assertEqual({k: v for k, v in cap.ICONS["easing"].items() if k != "STYLE"},

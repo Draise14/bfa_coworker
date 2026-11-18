@@ -2437,14 +2437,33 @@ def _plan_of(op: Any) -> dict[str, str]:
                                  getattr(op, "animation", None) if own else None)
 
 
-def _language_items() -> list[tuple]:
+def _picture(name: str) -> Any:
+    """The icon of the dialog's icon *name* (:data:`captions.ICONS`): the picture of our own for a ``PNG:`` name
+    (``icon_value``), else the built-in name through ``shared.icon()`` (Bforartists' own, or its Blender fallback)."""
+    if name.startswith(cap.PNG_PREFIX):
+        from . import captions_icons
+        value = captions_icons.icon_id(name[len(cap.PNG_PREFIX):])
+        return value or safe_icon(cap.PNG_FALLBACK.get(name, cap.LANGUAGE_FALLBACK))
+    return safe_icon(name)
+
+
+def _language_items(pictures: bool = False) -> list[tuple]:
     from .preferences import _LANGUAGES
-    icons = cap.ICONS["language"]
+    pick = _picture if pictures else (lambda n: safe_icon(cap.LANGUAGE_FALLBACK if n.startswith(cap.PNG_PREFIX) else n))
     items = [("auto", "Detect Automatically", "Let the transcription find the language that is spoken",
-              safe_icon(icons["auto"]), 0)]
-    items += [(code, name, "Spoken in " + name, safe_icon(icons["language"]), i + 1)
+              pick(cap.language_icon("auto")), 0)]
+    items += [(code, name, "Spoken in " + name, pick(cap.language_icon(code)), i + 1)
               for i, (code, name) in enumerate(_LANGUAGES)]
     return items
+
+
+_LANGUAGE_PICTURES: list[tuple] = []      # kept alive: Blender reads the strings of a dynamic enum later
+
+
+def _language_pictures(_self: Any, _context: Any) -> list[tuple]:
+    """Language: Detect and one badge per language (the pictures of ``icons/captions``)."""
+    _LANGUAGE_PICTURES[:] = _language_items(True)
+    return _LANGUAGE_PICTURES
 
 
 _LANGUAGE_ITEMS = _language_items()
@@ -2460,9 +2479,22 @@ _ANIM_ITEMS = [(k, a["label"], a["description"], safe_icon(_ICON["line"].get(k, 
                for i, (k, a) in enumerate(cap.ANIMATIONS.items())]
 _ANIMATE_ITEMS = [(k, a["label"], a["description"], safe_icon(_ICON["animate"].get(k, 'NONE')), i)
                   for i, (k, a) in enumerate(cap.ANIMATE.items())]
-_WORD_ITEMS = [(k, a["label"], a["description"], safe_icon(_ICON["word"].get(k.split("_", 1)[-1] if k.startswith("HIGHLIGHT_")
-                                                                           else k, 'NONE')), i)
-               for i, (k, a) in enumerate(cap.WORD_ANIMATIONS.items())]
+def _word_items_made(pictures: bool) -> list[tuple]:
+    pick = _picture if pictures else (lambda n: safe_icon(cap.PNG_FALLBACK.get(n, n)))
+    return [(k, a["label"], a["description"], pick(_ICON["word"].get(k, 'NONE')), i)
+            for i, (k, a) in enumerate(cap.WORD_ANIMATIONS.items())]
+
+
+_WORD_ITEMS = _word_items_made(False)
+_WORD_PICTURES: list[tuple] = []        # kept alive: Blender reads the strings of a dynamic enum later
+
+
+def _word_pictures(_self: Any, _context: Any) -> list[tuple]:
+    """Word Animation: "Highlight + ..." with the picture of its motion and the colour wheel."""
+    _WORD_PICTURES[:] = _word_items_made(True)
+    return _WORD_PICTURES
+
+
 _EASING_ITEMS = [(k, e["label"], e["description"], safe_icon(_ICON["easing"].get(k, 'NONE')), i)
                  for i, (k, e) in enumerate(cap.EASINGS.items())]
 _SPEED_ITEMS = [(k, e["label"], e["description"], safe_icon(_ICON["speed"].get(k, 'NONE')), i)
@@ -2551,7 +2583,7 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         name="Style", items=_STYLE_ITEMS, default="CLEAN",
         description="How the captions look: size, colours, outline, box and whether the spoken word lights up")
     language: EnumProperty(  # type: ignore[valid-type]
-        name="Language", items=_LANGUAGE_ITEMS, default="auto",
+        name="Language", items=_language_pictures,
         description="The language that is spoken, so it is transcribed right (Detect: let the transcription find it)")
     max_chars: IntProperty(  # type: ignore[valid-type]
         name="Max Characters", default=0, min=0, max=80,
@@ -2578,14 +2610,15 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         name="Line Animation", items=_ANIM_ITEMS, default="FADE",
         description="How each caption line moves in and out as a whole")
     word_animation: EnumProperty(  # type: ignore[valid-type]
-        name="Word Animation", items=_WORD_ITEMS, default="HIGHLIGHT",
+        name="Word Animation", items=_word_pictures, default=list(cap.WORD_ANIMATIONS).index("HIGHLIGHT"),
         description="What each word does at its own time: light up in the highlight colour, pop, scale, rise or "
                     "fade in (a word motion makes every word its own strip)")
     line_easing: EnumProperty(  # type: ignore[valid-type]
         name="Line Easing", items=_EASING_ITEMS, default="STYLE",
         description="How the line's move eases: the shape of its curve, with Blender's own keyframe interpolation "
                     "(no keyframe is added; the Graph Editor can still edit it). Greyed out when the line animation "
-                    "has nothing smooth to ease (None, or the typed letters of Typewriter)")
+                    "has no smooth move to ease: None, or a style whose own line stands still. Typewriter's letters "
+                    "appear in steps, but its fade out is eased")
     word_easing: EnumProperty(  # type: ignore[valid-type]
         name="Word Easing", items=_EASING_ITEMS, default="STYLE",
         description="How each word's move eases: the shape of its curve, with Blender's own keyframe interpolation "
@@ -2716,15 +2749,14 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
             sub.enabled = cap.line_eases(plan, self.style)
             sub.prop(self, "line_easing")
             if not sub.enabled:
-                _wrapped(col.column(align=True), "Nothing to ease: a Line Animation of None stands still.", 'INFO')
+                _wrapped(col.column(align=True), cap.line_ease_reason(plan, self.style), 'INFO')
         if word_row:
             col.prop(self, "word_animation")
             sub = col.row()
             sub.enabled = cap.words_ease(plan)
             sub.prop(self, "word_easing")
             if not sub.enabled:
-                _wrapped(col.column(align=True), "Nothing to ease: Highlight changes the colour in a step; pick a "
-                         "word motion (Pop, Scale, Rise, Fade In).", 'INFO')
+                _wrapped(col.column(align=True), cap.words_ease_reason(plan), 'INFO')
         sub = col.row()
         sub.enabled = cap.animates(plan)
         sub.prop(self, "speed")
@@ -2733,7 +2765,7 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
                      "caption's line strip stays as the anchor and draws nothing.", 'INFO')
         # The words: what is transcribed and how it is split.
         box = layout.box()
-        box.label(text="Text: what is said and how it is split", icon=safe_icon('SEQ_TEXT'))      # Bforartists' Text strip icon; Blender: TEXT
+        box.label(text="Text: what is said and how it is split", icon=safe_icon(cap.ICONS["section"]["text"]))
         col = box.column()
         col.use_property_split = True
         col.prop(self, "language")
@@ -3139,6 +3171,11 @@ def register() -> None:
 
 
 def unregister() -> None:
+    try:
+        from . import captions_icons
+        captions_icons.free()
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
     _watch_stop()
     for menu, draw in _HOOKED:
         try:

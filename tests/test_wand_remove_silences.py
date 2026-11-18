@@ -295,7 +295,7 @@ class TestIcons(unittest.TestCase):
 
     def test_zip_leaves_out_the_bforartists_copies(self):
         text = (_ROOT / "build_addon.py").read_text(encoding="utf-8")
-        self.assertIn('SOURCE_ONLY = ("icons/wand/bfa_src/",)', text)
+        self.assertIn('SOURCE_ONLY = ("icons/wand/bfa_src/", "icons/captions/src/")', text)
         self.assertIn("orig_name.startswith(SOURCE_ONLY)", text)
         self.assertTrue(Path(self.icons.ICON_DIR, "bfa_src").is_dir())
 

@@ -75,6 +75,16 @@ def _is_gpu_action(parent: ast.AST, node: ast.AST) -> bool:
     return isinstance(first, ast.Constant) and isinstance(first.value, str) and first.value.islower()
 
 
+def _in_assignment(parents, node, name):
+    """*node* lies inside ``name = ...`` / ``name: T = ...`` at module level."""
+    while node in parents:
+        node = parents[node]
+        target = getattr(node, "target", None) or (getattr(node, "targets", None) or [None])[0]
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and getattr(target, "id", "") == name:
+            return True
+    return False
+
+
 def _unsafe_uses(bfa_only: set[str]) -> list[str]:
     found = []
     for path in sorted(_ADDON.rglob("*.py")):
@@ -95,6 +105,8 @@ def _unsafe_uses(bfa_only: set[str]) -> list[str]:
                 continue
             if isinstance(parent, ast.Dict) and rel == "shared.py":
                 continue        # ICON_FALLBACKS itself
+            if rel == "captions.py" and _in_assignment(parents, node, "ICONS"):
+                continue        # the Auto Captions dialog's icon table: drawn through safe_icon (#605)
             if _is_gpu_action(parent, node):
                 continue
             found.append("{:s}:{:d} {:s}".format(rel, node.lineno, node.value))

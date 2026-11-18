@@ -436,6 +436,10 @@ def _context_menus(ui_chat, agent_controller):
         sys.modules[_PKG + ".ui_chat"], sys.modules[_PKG + ".agent_controller"] = ui_chat, agent_controller
         mod = _module("ui_context_menus")
     finally:
+        for name in (_PKG + ".wand", _PKG + ".wand.spec"):      # the stand-in goes again (#607)
+            sys.modules.pop(name, None)
+        if hasattr(_pkg, "wand"):
+            del _pkg.wand
         for key, value in saved.items():
             if value is None:
                 sys.modules.pop(key, None)

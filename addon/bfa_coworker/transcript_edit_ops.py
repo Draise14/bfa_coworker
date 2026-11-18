@@ -1275,7 +1275,7 @@ class BFACW_OT_transcript_make_captions(_TextOp, Operator):  # type: ignore[misc
 
     bl_idname = "bfacw.transcript_make_captions"
     bl_label = "Make Captions"
-    bl_description = agent_line(__doc__)
+    bl_description = agent_line(__doc__, also="Needs Speech set up once (Preferences) to transcribe.")
     bl_options = {'REGISTER', 'UNDO'}
 
     def invoke(self, context, _event):

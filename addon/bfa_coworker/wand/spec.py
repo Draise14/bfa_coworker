@@ -23,6 +23,7 @@ __all__ = (
     "Place",
     "SCOPES",
     "agent_line",
+    "model_line",
     "needs_agent_line",
 )
 
@@ -64,10 +65,18 @@ WAND_OPERATORS = (
 )
 
 
-def agent_line(description: str, needs: str = "") -> str:
+def agent_line(description: str, needs: str = "", also: str = "") -> str:
     """*description* with the line saying the wand works without the agent started added
-    as its last line; *needs* names the part that does need a model (then the line says so)."""
+    as its last line; *needs* names the part that does need a model (then the line says so);
+    *also* adds what else it needs, on the same line (for example Speech set up for transcribing)."""
     line = NO_AGENT_LINE if not needs else "Works without the agent started, except {:s}.".format(needs)
+    if also:
+        line = "{:s} {:s}".format(line, also)
+    return "{:s}\n{:s}".format(description.rstrip(), line)
+
+
+def model_line(description: str, line: str) -> str:
+    """For a wand whose whole job is a model's: *line* (it starts with "Needs") is the last line."""
     return "{:s}\n{:s}".format(description.rstrip(), line)
 
 

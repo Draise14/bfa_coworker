@@ -52,7 +52,7 @@ from . import reframe_follow
 from . import reframe_math as rm
 from .shared import icon
 from .wand import scene as _seq
-from .wand.spec import agent_line
+from .wand.spec import agent_line, model_line
 
 GROUP_NAME = "Coworker Reframe v1"
 GROUP_TAG = "coworker_reframe"          # custom property on the group: its layout version
@@ -806,9 +806,10 @@ class BFACW_OT_reframe_follow_subject(Operator):
     connected vision model where the subject is"""
     bl_idname = "bfacw.reframe_follow_subject"
     bl_label = "Follow Subject"
-    bl_description = agent_line(
+    bl_description = model_line(
         "Key Offset X so the frame follows the subject: samples a few frames per selected shot and asks the "
-        "connected vision model where the subject is", "finding the subject, which needs a connected vision model")
+        "connected vision model where the subject is",
+        "Needs a vision model: a Remote one, or Coworker started with a Local one that can see.")
     bl_options = {'REGISTER'}
 
     samples: IntProperty(name="Frames per Shot", default=4, min=2, max=24)  # type: ignore[valid-type]

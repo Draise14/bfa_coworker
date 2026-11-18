@@ -2498,7 +2498,7 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
     """Caption the selected sound or movie strips: styled text strips on a Captions channel, in sync with the speech"""
     bl_idname = "bfacw.auto_captions"
     bl_label = "Auto Captions"
-    bl_description = agent_line(__doc__)
+    bl_description = agent_line(__doc__, also="Needs Speech set up once (Preferences) to transcribe.")
     bl_options = {'REGISTER', 'UNDO'}
 
     style: EnumProperty(  # type: ignore[valid-type]

@@ -28,7 +28,12 @@ import unittest
 from pathlib import Path
 
 _ADDON = Path(__file__).resolve().parents[1] / "addon" / "bfa_coworker"
-_HELPERS = ("agent_line", "needs_agent_line")
+_HELPERS = ("agent_line", "needs_agent_line", "model_line")
+# Where the wands of the Captions and Reframe submenus, the transcript panel and header and the
+# right-click menu of captions are drawn: (file, classes and functions whose body draws them).
+_DRAWN_IN = (("captions_ops.py", ("BFACW_MT_captions", "_draw_context_menu")),
+             ("reframe.py", ("BFACW_MT_reframe",)),
+             ("transcript_edit_ops.py", ("BFACW_PT_transcript", "_draw_header")))
 
 
 def _load_spec():
@@ -94,6 +99,30 @@ def _wand_drawn() -> set:
     return ids
 
 
+def _drawn_in_menus(classes: dict) -> set:
+    """Operator ids drawn inside the draw code of ``_DRAWN_IN`` (``layout.operator("id")``,
+    ``layout.operator(BFACW_OT_x.bl_idname)``, ``_wand(layout, BFACW_OT_x.bl_idname, ...)``)."""
+    by_class = {node.name: idname for idname, (_p, node) in classes.items()}
+    ids = set()
+    for filename, scopes in _DRAWN_IN:
+        tree = ast.parse((_ADDON / filename).read_text(encoding="utf-8"))
+        for top in tree.body:
+            if getattr(top, "name", "") not in scopes:
+                continue
+            for node in ast.walk(top):
+                if not isinstance(node, ast.Call) or getattr(node.func, "attr", getattr(node.func, "id", "")) not in (
+                        "operator", "_wand", "_wand_op"):
+                    continue
+                for arg in node.args[:2]:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.startswith(
+                            ("bfacw.", "coworker.")):
+                        ids.add(arg.value)
+                    elif (isinstance(arg, ast.Attribute) and arg.attr == "bl_idname"
+                          and getattr(arg.value, "id", "") in by_class):
+                        ids.add(by_class[arg.value.id])
+    return ids
+
+
 class Helpers(unittest.TestCase):
     def test_plain_line_is_the_last_line(self) -> None:
         text = SPEC.agent_line("Cut the quiet parts.\n")
@@ -104,6 +133,12 @@ class Helpers(unittest.TestCase):
         text = SPEC.agent_line("Follow it.", "finding the subject, which needs a vision model")
         self.assertEqual(text.splitlines()[-1], "Works without the agent started, except finding the subject, "
                                                 "which needs a vision model.")
+
+    def test_a_model_only_wand_and_a_speech_note(self) -> None:
+        self.assertEqual(SPEC.model_line("Follow.", "Needs a vision model: x.").splitlines(),
+                         ["Follow.", "Needs a vision model: x."])
+        self.assertEqual(SPEC.agent_line("Caption.", also="Needs Speech.").splitlines()[-1],
+                         "Works without the agent started. Needs Speech.")
 
     def test_all_model_work_says_so(self) -> None:
         text = SPEC.needs_agent_line("Translate this.", "it does the translating")
@@ -131,6 +166,14 @@ class EveryWand(unittest.TestCase):
         self.assertTrue({"bfacw.translate", "bfacw.auto_captions", "bfacw.explain"} <= drawn, drawn)
         missing = sorted(drawn - set(SPEC.WAND_OPERATORS) - {i for i in drawn if i.startswith("coworker.")})
         self.assertEqual(missing, [], "drawn with a wand icon but not in wand/spec.py WAND_OPERATORS")
+
+    def test_every_operator_drawn_in_the_submenus_and_transcript_ui_is_a_wand(self) -> None:
+        drawn = _drawn_in_menus(self.classes)
+        self.assertTrue({"bfacw.captions_import_srt", "bfacw.reframe", "bfacw.reframe_follow_subject",
+                         "bfacw.transcript_apply", "bfacw.transcript_toggle", "bfacw.transcript_make_captions",
+                         "bfacw.transcript_remove_fillers", "bfacw.transcript_seek"} <= drawn, drawn)
+        self.assertEqual(sorted(drawn - set(SPEC.WAND_OPERATORS)), [],
+                         "drawn in a Coworker menu or panel but not in wand/spec.py WAND_OPERATORS")
 
     def test_the_wand_without_the_helper_is_caught(self) -> None:
         node = ast.parse('class A:\n    bl_idname = "x.y"\n    bl_description = "plain"\n').body[0]

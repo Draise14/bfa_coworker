@@ -32,7 +32,7 @@ WIDE = (1920, 1080)
 TALL = (1080, 1920)
 FPS = 30.0
 STYLES = tuple(cap.STYLES)
-PRESETS = ("NONE", "FADE", "SLIDE_UP", "TYPEWRITER", "POP")
+PRESETS = ("NONE", "FADE", "SLIDE_UP", "SLIDE_DOWN", "TYPEWRITER", "POP")
 
 
 def _measure(text, px):
@@ -766,7 +766,7 @@ class TestOperator(_LookCase):
         op.layout = layout
         op.draw(SimpleNamespace(scene=self.scene, workspace=SimpleNamespace(sequencer_scene=self.scene)))
         drawn = [x[1] for x in layout.log if x[0] == "prop"]
-        for name in ("style", "animation", "position", "margin", "speakers", "speaker_labels"):
+        for name in ("style", "animate", "position", "margin", "speakers", "speaker_labels"):
             self.assertIn(name, drawn)
 
 

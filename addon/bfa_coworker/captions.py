@@ -1182,18 +1182,22 @@ def resolve_style(name: str, res_x: float, res_y: float, position: str = "BOTTOM
 
 # -- animation presets (#542) -----------------------------------------------------------------
 
+ANIMATE_STYLE = "STYLE"
 ANIM_STYLE = "STYLE"        # the style's own: Bold Pop pops its font size, the others don't move
 ANIMATIONS: dict[str, dict[str, str]] = {
     ANIM_STYLE: {"label": "As the Style", "description": "The style's own: Bold Pop pops in, the others don't move"},
     "NONE": {"label": "None", "description": "No animation: each caption is just there"},
     "FADE": {"label": "Fade", "description": "Each caption fades in and out"},
     "SLIDE_UP": {"label": "Slide Up", "description": "Each caption rises into place as it fades in, and fades out"},
+    "SLIDE_DOWN": {"label": "Slide Down", "description": "Each caption drops into place from above as it fades in, "
+                                                         "and fades out"},
     "TYPEWRITER": {"label": "Typewriter", "description": "Each caption is typed out letter by letter (one line "
                                                          "per caption)"},
     "POP": {"label": "Pop", "description": "Each caption pops in: it grows into place with a small overshoot"},
 }
 _ANIM_ALIASES = {"": ANIM_STYLE, "DEFAULT": ANIM_STYLE, "STYLES": ANIM_STYLE, "OFF": "NONE", "NO": "NONE",
                  "STATIC": "NONE", "FADE_IN": "FADE", "FADE_IN_OUT": "FADE", "SLIDE": "SLIDE_UP", "SLIDEUP": "SLIDE_UP",
+                 "SLIDEDOWN": "SLIDE_DOWN", "DROP": "SLIDE_DOWN",
                  "TYPE": "TYPEWRITER", "TYPE_WRITER": "TYPEWRITER", "TYPING": "TYPEWRITER", "SCALE": "POP",
                  "POP_IN": "POP"}
 # The text-strip properties the presets key (relative to the strip).  Never ``location``, the
@@ -1298,12 +1302,12 @@ def animation_tracks(animation: Any, style: str, frame_start: int, frame_end: in
 
     if key == "FADE":
         fade()
-    elif key == "SLIDE_UP":
+    elif key in ("SLIDE_UP", "SLIDE_DOWN"):
         fade()
         if n_in:
             rise = round(SLIDE_DISTANCE * float(res_y), 2)
             tracks.append({"path": "transform.offset_y", "interpolation": "BEZIER", "steady": 0.0,
-                           "keys": [(fs, -rise), (fs + n_in, 0.0)]})
+                           "keys": [(fs, -rise if key == "SLIDE_UP" else rise), (fs + n_in, 0.0)]})
     elif key == "POP" and n_in:
         over = max(fs + 1, min(fs + n_in - 1, fs + int(round(n_in * POP_OVER_AT))))
         keys = [(fs, POP_FROM), (over, POP_OVER), (fs + n_in, 1.0)]
@@ -1356,6 +1360,389 @@ def animation_window(tracks: Sequence[dict]) -> tuple[int, int] | None:
     """The first and last keyed frame of *tracks* (None: no keys)."""
     frames = [f for t in tracks for f, _v in t["keys"]]
     return (min(frames), max(frames)) if frames else None
+
+
+# -- Animate: per line, per word or both (#594, Part 3) -----------------------------------------
+#
+# Today's single "animation" list is three choices: *Animate* says what moves (the line, its words,
+# both or nothing), *Line Animation* is the presets above, *Word Animation* is what each word does at
+# its own time.  A word motion (Pop, Scale, Rise, Fade In) on a visible line would leave a ghost of the
+# word under the moving copy, so with a motion the caption's line strip stays as the anchor (it keeps the
+# text, the tag and everything Edit by Transcript and the refit rely on) but draws nothing, and every
+# word is its own strip for the caption's whole time, keyed at its own time.  Highlight alone is the
+# cheap way: a coloured word strip over the visible line while the word is spoken.
+
+ANIMATE: dict[str, dict[str, str]] = {
+    "STYLE": {"label": "As the Style", "description": "The style's own: Bold Pop pops in, Word-by-word highlight "
+                                                      "lights the spoken word, the others stand still"},
+    "LINE": {"label": "Per Line", "description": "Each caption line moves as a whole (Line Animation)"},
+    "WORD": {"label": "Per Word", "description": "Each word moves or lights up at its own time (Word Animation)"},
+    "BOTH": {"label": "Both", "description": "The words move at their own time and the line moves as a whole"},
+    "NONE": {"label": "None", "description": "Nothing moves: each caption is just there"},
+}
+_ANIMATE_ALIASES = {"": "STYLE", "DEFAULT": "STYLE", "STYLES": "STYLE", "AS_THE_STYLE": "STYLE", "PER_LINE": "LINE",
+                    "LINES": "LINE", "PER_WORD": "WORD", "WORDS": "WORD", "OFF": "NONE", "NO": "NONE"}
+
+WORD_MOTIONS = ("POP", "SCALE", "RISE", "FADE_IN")
+_WORD_LABELS = {"POP": "Pop", "SCALE": "Scale", "RISE": "Rise", "FADE_IN": "Fade In"}
+_WORD_WHAT = {"POP": "pops in at its own time", "SCALE": "grows while it is spoken",
+              "RISE": "rises into place at its own time", "FADE_IN": "fades in at its own time"}
+WORD_ANIMATIONS: dict[str, dict[str, str]] = {
+    "STYLE": {"label": "As the Style", "description": "The style's own: Word-by-word highlight lights the spoken "
+                                                      "word, the others no word animation"},
+    "NONE": {"label": "None", "description": "No word animation"},
+    "HIGHLIGHT": {"label": "Highlight", "description": "The spoken word lights up in the highlight colour"},
+}
+for _m in WORD_MOTIONS:
+    WORD_ANIMATIONS[_m] = {"label": _WORD_LABELS[_m], "description": "Each word " + _WORD_WHAT[_m]}
+for _m in WORD_MOTIONS:
+    WORD_ANIMATIONS["HIGHLIGHT_" + _m] = {"label": "Highlight + " + _WORD_LABELS[_m],
+                                          "description": "The spoken word lights up and " + _WORD_WHAT[_m]}
+del _m
+_WORD_ALIASES = {"FADE": "FADE_IN", "FADEIN": "FADE_IN", "ZOOM": "SCALE", "GROW": "SCALE", "POP_IN": "POP",
+                 "SLIDE_UP": "RISE", "COLOUR": "HIGHLIGHT", "COLOR": "HIGHLIGHT", "OFF": "NONE"}
+_WORD_FILLER = {"AND", "PLUS", "WITH", "THE", "A"}
+
+WORD_MOTION_S = 0.2         # a word's motion takes about this long
+WORD_SCALE_UP = 1.2         # Scale: how big the spoken word gets
+WORD_RISE = 0.03            # Rise: how far below its place it starts, of the frame's height
+MAX_WORD_CHANNELS = 24      # the words of a caption's longest line: one channel each
+MAX_WORD_KEYS = 64          # keys on one word strip
+MAX_RUN_KEYS = 40000        # keys of one Auto Captions run
+WORD_PATHS = ("blend_alpha", "transform.offset_x", "transform.offset_y", "transform.scale_x", "transform.scale_y",
+              "color")      # what a word strip's animation may key
+DEFAULT_HIGHLIGHT = STYLES["WORD_HIGHLIGHT"]["highlight"]   # Highlight on a style that has none of its own
+
+
+def _norm(name: Any) -> str:
+    return re.sub(r"[^A-Z0-9]+", "_", str(name or "").upper()).strip("_")
+
+
+def animate_key(name: Any) -> str | None:
+    """``"per word"``, ``"Both"``, ``None``... -> an :data:`ANIMATE` key; None if unknown."""
+    key = _norm(name)
+    key = _ANIMATE_ALIASES.get(key, key)
+    return key if key in ANIMATE else None
+
+
+def word_animation_key(name: Any) -> str | None:
+    """``"Highlight + Pop"``, ``"fade in"``, ``"pop"``... -> a :data:`WORD_ANIMATIONS` key; None if unknown."""
+    key = _norm(name)
+    if key in ("", "STYLE", "AS_THE_STYLE", "DEFAULT"):
+        return "STYLE"
+    tokens = [t for t in key.split("_") if t and t not in _WORD_FILLER]
+    highlight = "HIGHLIGHT" in tokens or "COLOUR" in tokens or "COLOR" in tokens
+    rest = "_".join(t for t in tokens if t not in ("HIGHLIGHT", "COLOUR", "COLOR"))
+    rest = _WORD_ALIASES.get(rest, rest)
+    if not rest:
+        return "HIGHLIGHT" if highlight else None
+    if rest == "NONE":
+        return None if highlight else "NONE"
+    if rest not in WORD_MOTIONS:
+        return None
+    return ("HIGHLIGHT_" if highlight else "") + rest
+
+
+def word_parts(word: Any) -> tuple[bool, str | None]:
+    """``(highlight, motion)`` of a word animation key: ``("HIGHLIGHT_POP")`` -> ``(True, "POP")``."""
+    key = word_animation_key(word) or "NONE"
+    highlight = key.startswith("HIGHLIGHT")
+    motion = key[len("HIGHLIGHT_"):] if key.startswith("HIGHLIGHT_") else (key if key in WORD_MOTIONS else None)
+    return highlight, motion
+
+
+def word_mode(word: Any) -> str:
+    """How a word animation makes its words: ``"none"`` (no word strips), ``"highlight"`` (a coloured
+    word strip over the visible line) or ``"motion"`` (every word its own strip, the line strip hidden)."""
+    highlight, motion = word_parts(word)
+    if motion:
+        return "motion"
+    return "highlight" if highlight else "none"
+
+
+def resolve_animation(style: Any, animate: Any = None, line: Any = None, word: Any = None,
+                      legacy: Any = None) -> dict[str, str]:
+    """The three choices as the caption is made: ``{"animate", "line", "word", "words"}``.
+
+    *animate*, *line* (a :data:`ANIMATIONS` key) and *word* (a :data:`WORD_ANIMATIONS` key) are the artist's
+    own (None: not chosen); *legacy* is the single ``animation`` of before #594, which is the line animation
+    (it never switches the style's own word highlight off).  Left alone: the style's own (Bold Pop pops,
+    Word-by-word lights the spoken word).  Per Line: no word strips; Per Word: no line motion, Highlight
+    unless a word animation is chosen; Both: both; None: nothing."""
+    skey = style_key(style) or "CLEAN"
+    own_word = "HIGHLIGHT" if STYLES[skey]["highlight"] else "NONE"
+    a = animate_key(animate) or ANIMATE_STYLE
+    ln = animation_key(line) if line is not None else None
+    old = animation_key(legacy) if legacy is not None else None
+    if ln in (None, ANIM_STYLE) and old not in (None, ANIM_STYLE):
+        ln = old
+    wd = word_animation_key(word) if word is not None else None
+    given_word = wd not in (None, "STYLE")
+    given_line = ln not in (None, ANIM_STYLE)
+    if a == "NONE":
+        out_line, out_word = "NONE", "NONE"
+    elif a == "LINE":
+        out_line, out_word = ln or ANIM_STYLE, "NONE"
+    elif a in ("WORD", "BOTH"):
+        out_line = (ln or ANIM_STYLE) if a == "BOTH" else "NONE"
+        out_word = wd if given_word else "HIGHLIGHT"
+    else:                                   # the style's own, and whatever was chosen over it
+        out_line = ln or ANIM_STYLE
+        out_word = wd if given_word else own_word
+        if given_line and given_word:
+            a = "BOTH"
+        elif given_word:
+            a = "WORD"
+        elif given_line:
+            a = "LINE"
+    return {"animate": a, "line": out_line, "word": out_word, "words": word_mode(out_word)}
+
+
+def check_animation_params(animate: Any, line_animation: Any, word_animation: Any) -> tuple[str | None, str | None,
+                                                                                         str | None]:
+    """``add_captions``' Animate, Line Animation and Word Animation checked (None stays None: not chosen);
+    raises :class:`CaptionsError` with what's wrong."""
+    a = ln = wd = None
+    if animate is not None and str(animate).strip() != "":
+        a = animate_key(animate)
+        if a is None:
+            raise CaptionsError("Unknown animate {!r}: use one of {:s}.".format(
+                animate, ", ".join("{:s} ({:s})".format(k, v["label"]) for k, v in ANIMATE.items())))
+    if line_animation is not None and str(line_animation).strip() != "":
+        ln = animation_key(line_animation)
+        if ln is None:
+            raise CaptionsError("Unknown line_animation {!r}: use one of {:s}.".format(
+                line_animation, ", ".join("{:s} ({:s})".format(k, v["label"]) for k, v in ANIMATIONS.items())))
+    if word_animation is not None and str(word_animation).strip() != "":
+        wd = word_animation_key(word_animation)
+        if wd is None:
+            raise CaptionsError("Unknown word_animation {!r}: use one of {:s}.".format(
+                word_animation, ", ".join(WORD_ANIMATIONS)))
+    return a, ln, wd
+
+
+def plan_one_line(plan: dict[str, str]) -> bool:
+    """The plan needs each caption on one line: Typewriter crops the visible line (with word strips of
+    their own it reveals word by word, which needs no single line)."""
+    return plan["line"] == "TYPEWRITER" and plan["words"] != "motion"
+
+
+def tag_words(tag: dict, style: Any = None) -> tuple[str, str]:
+    """``(mode, word animation key)`` of a caption line's *tag*: a caption made since #594 has ``"wanim"``;
+    an older one has word strips exactly when its style is Word-by-word highlight."""
+    wanim = word_animation_key(tag.get("wanim")) if tag.get("wanim") else None
+    if wanim is None or wanim == "STYLE":
+        skey = style_key(style if style is not None else tag.get("style")) or "CLEAN"
+        wanim = "HIGHLIGHT" if STYLES[skey]["highlight"] else "NONE"
+    return word_mode(wanim), wanim
+
+
+def label_words_in(label: Any) -> int:
+    """How many words a speaker's label has (``"Ana:"``: 1)."""
+    return len(str(label or "").split())
+
+
+def word_spans(framed: dict) -> list[tuple[int, int, int]]:
+    """``(word index, frame_start, frame_end)`` for every word of a framed caption (unlike
+    :func:`highlight_windows`, a word with no time of its own is kept, as an empty span): from the word's
+    start to the next word's, inside the caption."""
+    fs, fe = framed["frame_start"], framed["frame_end"]
+    words = framed.get("words") or []
+    starts = []
+    for i, w in enumerate(words):
+        a = fs if i == 0 else min(max(int(w.get("frame", fs)), fs), fe)
+        starts.append(max(a, starts[-1]) if starts else a)
+    return [(i, a, starts[i + 1] if i + 1 < len(starts) else fe) for i, a in enumerate(starts)]
+
+
+def typewriter_frames(texts: Sequence[str], frame_start: int, frame_end: int, fps: float) -> list[int]:
+    """Typewriter on word strips: the frame each word appears, in order, typed at :data:`TYPE_CPS`
+    characters a second (at most :data:`TYPE_MAX_S`, half the caption)."""
+    total = sum(len(t) + 1 for t in texts) or 1
+    fps = max(1.0, float(fps))
+    length = int(frame_end) - int(frame_start)
+    span = min(total / TYPE_CPS * fps, TYPE_MAX_S * fps, length * 0.5)
+    out, before = [], 0
+    for t in texts:
+        out.append(int(frame_start) + int(math.floor(span * before / total)))
+        before += len(t) + 1
+    return out
+
+
+def _interp(keys: Sequence[tuple[int, float]], frame: float) -> float:
+    if frame <= keys[0][0]:
+        return float(keys[0][1])
+    for (f0, v0), (f1, v1) in zip(keys, keys[1:]):
+        if frame <= f1:
+            return float(v1) if f1 == f0 else float(v0) + (float(v1) - float(v0)) * (frame - f0) / (f1 - f0)
+    return float(keys[-1][1])
+
+
+def _product(a: Sequence[tuple[int, float]], b: Sequence[tuple[int, float]]) -> list[tuple[int, float]]:
+    """Two key lists multiplied (alpha, scale): the value of each at every frame either one is keyed."""
+    if not a:
+        return list(b)
+    if not b:
+        return list(a)
+    return [(f, round(_interp(a, f) * _interp(b, f), 4)) for f in sorted({f for f, _v in a} | {f for f, _v in b})]
+
+
+def _line_parts(animation: Any, fs: int, fe: int, fps: float, res_y: float,
+                reveal_frame: int | None) -> dict[str, list[tuple[int, float]]]:
+    """What the line animation does to one word strip, as parts: ``alpha``, ``lscale`` (the line's scale,
+    around the line's middle) and ``dy`` (pixels up)."""
+    key = animation_key(animation) or ANIM_STYLE
+    length = fe - fs
+    if key in (ANIM_STYLE, "NONE") or length < MIN_ANIMATED:
+        return {}
+    n_in, n_out = _windows(length, fps)
+    parts: dict[str, list[tuple[int, float]]] = {}
+    alpha: list[tuple[int, float]] = []
+    if key == "TYPEWRITER":
+        if reveal_frame is not None and reveal_frame - 1 >= fs:
+            alpha += [(reveal_frame - 1, 0.0), (reveal_frame, 1.0)]
+    elif key != "POP" and n_in:
+        alpha += [(fs, 0.0), (fs + n_in, 1.0)]
+    if key != "POP" and n_out:
+        alpha += [(fe - n_out, 1.0), (fe, 0.0)]
+    if alpha:
+        parts["alpha"] = alpha
+    if key in ("SLIDE_UP", "SLIDE_DOWN") and n_in:
+        rise = round(SLIDE_DISTANCE * float(res_y), 2)
+        parts["dy"] = [(fs, -rise if key == "SLIDE_UP" else rise), (fs + n_in, 0.0)]
+    if key == "POP" and n_in:
+        over = max(fs + 1, min(fs + n_in - 1, fs + int(round(n_in * POP_OVER_AT))))
+        parts["lscale"] = [(fs, POP_FROM), (over, POP_OVER), (fs + n_in, 1.0)]
+    return parts
+
+
+def _word_parts(motion: str | None, fs: int, fe: int, a: int, b: int, fps: float,
+                res_y: float) -> dict[str, list[tuple[int, float]]]:
+    """What a word motion does to one word strip whose word is spoken from *a* to *b*: ``alpha``,
+    ``scale`` (around the word's own middle) and ``dy``.  Pop, Rise and Fade In keep the word hidden until
+    it is spoken; Scale leaves it up."""
+    a = min(max(int(a), fs), fe)
+    if not motion or fe - fs < MIN_ANIMATED or fe - a < 2:
+        return {}
+    m = min(max(2, int(round(WORD_MOTION_S * max(1.0, float(fps))))), fe - a)
+    parts: dict[str, list[tuple[int, float]]] = {}
+    if motion == "FADE_IN":
+        parts["alpha"] = [(a, 0.0), (a + m, 1.0)]
+    elif motion == "RISE":
+        parts["alpha"] = [(a, 0.0), (a + m, 1.0)]
+        parts["dy"] = [(a, -round(WORD_RISE * float(res_y), 2)), (a + m, 0.0)]
+    elif motion == "POP":
+        over = max(a + 1, min(a + m - 1, a + int(round(m * POP_OVER_AT))))
+        parts["scale"] = [(a, POP_FROM), (over, POP_OVER), (a + m, 1.0)]
+        if a - 1 >= fs:
+            parts["alpha"] = [(a - 1, 0.0), (a, 1.0)]
+    elif motion == "SCALE":
+        peak = a + max(1, m // 2)
+        end = min(max(int(b), a + m), fe)
+        parts["scale"] = [(a, 1.0), (peak, WORD_SCALE_UP), (max(end, peak + 1), 1.0)]
+    return parts
+
+
+def word_tracks(line_animation: Any, word_animation: Any, frame_start: int, frame_end: int, start: int, end: int,
+                fps: float, res_x: float, res_y: float, word_middle: Sequence[float] = (0.0, 0.0),
+                line_middle: Sequence[float] = (0.0, 0.0), reveal_frame: int | None = None,
+                base_colour: Sequence[float] | None = None,
+                highlight_colour: Sequence[float] | None = None) -> list[dict[str, Any]]:
+    """The keyframes of one word strip of a caption shown from *frame_start* to *frame_end* (end exclusive)
+    whose word is spoken from *start* to *end*, as :func:`animation_tracks` describes them: the word
+    animation's motion at the word's own time, the line animation's keys on top (on each word, since the
+    line strip draws nothing), and with Highlight the word's colour at its own time (``color``).
+
+    A strip scales around the middle of the frame, so a scale (and Pop) also keys the offset that holds
+    the word's own middle (*word_middle*) or, for the line's pop, the line's middle (*line_middle*) in
+    place; both are ``(x pixels from the left, y pixels from the bottom)``.  *reveal_frame*: Typewriter's
+    frame for this word (:func:`typewriter_frames`)."""
+    fs, fe = int(frame_start), int(frame_end)
+    highlight, motion = word_parts(word_animation)
+    wp = _word_parts(motion, fs, fe, start, end, fps, res_y)
+    lp = _line_parts(line_animation, fs, fe, fps, res_y, reveal_frame)
+    tracks: list[dict[str, Any]] = []
+    alpha = _product(lp.get("alpha", []), wp.get("alpha", []))
+    if alpha:
+        tracks.append({"path": "blend_alpha", "interpolation": "BEZIER", "steady": 1.0, "keys": alpha})
+    scale = _product(lp.get("lscale", []), wp.get("scale", []))
+    dy = _product([], lp.get("dy", [])) if not wp.get("dy") else (
+        [(f, round(_interp(lp["dy"], f) + _interp(wp["dy"], f), 3)
+          ) for f in sorted({f for f, _v in lp["dy"]} | {f for f, _v in wp["dy"]})] if lp.get("dy") else wp["dy"])
+    if scale or dy:
+        frames = sorted({f for f, _v in scale} | {f for f, _v in dy})
+        c0 = (float(res_x) / 2.0, float(res_y) / 2.0)
+        ox, oy = [], []
+        for f in frames:
+            s_l = _interp(lp["lscale"], f) if lp.get("lscale") else 1.0
+            s_w = _interp(wp["scale"], f) if wp.get("scale") else 1.0
+            s = s_l * s_w
+            off = []
+            for axis in (0, 1):
+                p_w, p_l = float(word_middle[axis]), float(line_middle[axis])
+                off.append(p_l + s_l * (p_w - p_l) - s * p_w - c0[axis] * (1.0 - s))
+            ox.append((f, round(off[0], 3)))
+            oy.append((f, round(off[1] + (_interp(dy, f) if dy else 0.0), 3)))
+        if scale:
+            sk = [(f, round(_interp(scale, f), 4)) for f in frames]
+            for axis in ("transform.scale_x", "transform.scale_y"):
+                tracks.append({"path": axis, "interpolation": "BEZIER", "steady": 1.0, "keys": list(sk)})
+            if any(abs(v) > 0.01 for _f, v in ox):
+                tracks.append({"path": "transform.offset_x", "interpolation": "BEZIER", "steady": 0.0, "keys": ox})
+        if scale or dy:
+            tracks.append({"path": "transform.offset_y", "interpolation": "BEZIER", "steady": 0.0, "keys": oy})
+    if highlight and highlight_colour is not None and base_colour is not None:
+        a = min(max(int(start), fs), fe)
+        b = min(max(int(end), a), fe)
+        keys: list[tuple[int, Any]] = []
+        if a > fs:
+            keys.append((fs, tuple(base_colour)))
+        keys.append((a, tuple(highlight_colour)))
+        if b < fe and b > a:
+            keys.append((b, tuple(base_colour)))
+        if len(keys) >= 2 or (keys and a == fs):
+            tracks.append({"path": "color", "interpolation": "CONSTANT", "steady": tuple(base_colour), "keys": keys})
+    return tracks
+
+
+def word_animation_paths(line_animation: Any, word_animation: Any) -> tuple[str, ...]:
+    """The properties of a word strip the animation keys (a long caption, a word in the middle)."""
+    tracks = word_tracks(line_animation, word_animation, 0, 600, 200, 240, 30.0, 1920, 1080, (1000.0, 200.0),
+                         (960.0, 200.0), 100, (1, 1, 1, 1), (1, 0.8, 0.1, 1))
+    return tuple(t["path"] for t in tracks)
+
+
+def word_key_count(line_animation: Any, word_animation: Any, fps: float = 30.0) -> int:
+    """The most keys one word strip gets from this animation (a long caption, a word in the middle)."""
+    tracks = word_tracks(line_animation, word_animation, 0, 120, 60, 80, fps, 1920, 1080, (1000.0, 200.0),
+                         (960.0, 200.0), 60, (1, 1, 1, 1), (1, 0.8, 0.1, 1))
+    return sum(len(t["keys"]) for t in tracks)
+
+
+def check_word_plan(words_per_line: Sequence[int], line_animation: Any, word_animation: Any, fps: float = 30.0,
+                    max_channel_room: int | None = None) -> str | None:
+    """None when a caption run with word motions fits the limits, else what limit it passes and what to do:
+    every word of the longest line is a channel of its own (at most :data:`MAX_WORD_CHANNELS`, and the room
+    above the clip, *max_channel_room*), one word strip has at most :data:`MAX_WORD_KEYS` keys and a run
+    :data:`MAX_RUN_KEYS`.  Nothing is built then."""
+    if not words_per_line:
+        return None
+    widest, total = max(words_per_line), sum(words_per_line)
+    hint = " Use Highlight instead of a word motion, or fewer words per line (Max Characters)."
+    if widest > MAX_WORD_CHANNELS:
+        return ("A caption line of {:d} words would need {:d} channels, one for each word; the limit is {:d}.{:s}"
+                .format(widest, widest, MAX_WORD_CHANNELS, hint))
+    if max_channel_room is not None and widest + 1 > max_channel_room:
+        return ("The word motions need {:d} free channels above the clip (one for each word of the longest "
+                "line, {:d} words, and the caption's own) and only {:d} are left below channel {:d}.{:s}"
+                .format(widest + 1, widest, max_channel_room, MAX_CHANNEL, hint))
+    per = word_key_count(line_animation, word_animation, fps)
+    if per > MAX_WORD_KEYS:
+        return "One word would get {:d} keyframes; the limit is {:d}.{:s}".format(per, MAX_WORD_KEYS, hint)
+    if per * total > MAX_RUN_KEYS:
+        return ("The captions would get about {:d} keyframes on {:d} words; the limit is {:d}.{:s}"
+                .format(per * total, total, MAX_RUN_KEYS, hint))
+    return None
 
 
 # -- speakers (#542) ---------------------------------------------------------------------------

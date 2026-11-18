@@ -49,6 +49,9 @@ def register(mcp: FastMCP) -> None:
         size: float = 1.0,
         text_color: str | list[float] | None = None,
         highlight_color: str | list[float] | None = None,
+        animate: str | None = None,
+        line_animation: str | None = None,
+        word_animation: str | None = None,
     ) -> dict[str, object]:
         """
         Caption sound or movie strips in the Video Sequencer: their speech becomes styled
@@ -68,9 +71,9 @@ def register(mcp: FastMCP) -> None:
             transcript_path: A transcript JSON file (bfa_coworker.transcript/1) to use
                 instead of transcribing.
             replace_edited: Also replace captions changed by hand since they were made.
-            animation: STYLE (the style's own: BOLD_POP pops, the others don't move), NONE,
-                FADE, SLIDE_UP, TYPEWRITER (typed out letter by letter, one line per caption)
-                or POP.
+            animation: The single animation list of before, still accepted: the line animation
+                (STYLE, NONE, FADE, SLIDE_UP, SLIDE_DOWN, TYPEWRITER or POP).  Prefer ``animate``,
+                ``line_animation`` and ``word_animation``.
             position: BOTTOM, TOP (e.g. off the UI a tutorial shows at the bottom) or MIDDLE.
             margin: Distance from that edge in percent of the frame's height, 0-45 (0: the
                 safe area of a wide or vertical frame).
@@ -89,6 +92,19 @@ def register(mcp: FastMCP) -> None:
             text_color: The text colour: "#RRGGBB" as seen on screen, or 3-4 numbers 0-1 (Blender's
                 own values); none: the style's.
             highlight_color: The same for the spoken word of WORD_HIGHLIGHT; none: the style's.
+            animate: What moves: LINE (each caption as a whole), WORD (each word at its own time),
+                BOTH, NONE, or STYLE (the style's own: BOLD_POP pops in, WORD_HIGHLIGHT lights the
+                spoken word, the others stand still).  None: STYLE, or what ``line_animation`` /
+                ``word_animation`` imply.
+            line_animation: How a caption moves as a whole: NONE, FADE, POP, SLIDE_UP, SLIDE_DOWN or
+                TYPEWRITER (typed out; with word motions word by word) (STYLE: the style's own).
+            word_animation: What each word does at its own time: HIGHLIGHT (the spoken word lights
+                up in the highlight colour; works over the visible line, on every style), POP,
+                SCALE, RISE (a small move up), FADE_IN, or HIGHLIGHT_POP / HIGHLIGHT_SCALE /
+                HIGHLIGHT_RISE / HIGHLIGHT_FADE_IN, NONE.  With a motion every word is a strip of its
+                own (one channel each, above the caption's) and the caption's own strip stays as the
+                anchor holding the text but draws nothing; too many words per line (over 24), or too
+                many keyframes, is refused with the limit named (use HIGHLIGHT or fewer words per line).
 
         Returns:
             ``lines_created``, ``channel``, ``first_frame`` / ``last_frame``, the style,
@@ -120,6 +136,9 @@ def register(mcp: FastMCP) -> None:
                     text_color=text_color if text_color is None or isinstance(text_color, str) else tuple(text_color),
                     highlight_color=(highlight_color if highlight_color is None or isinstance(highlight_color, str)
                                      else tuple(highlight_color)),
+                    animate=animate,
+                    line_animation=line_animation,
+                    word_animation=word_animation,
                 ),
             ),
             strict_json=True,

@@ -762,8 +762,8 @@ class TestMenus(_OpsCase):
         props = [e[1] for e in layout.log if e[0] == "prop"]
         for name in ("style", "case", "font_choice", "bold", "italic", "size", "set_text_color", "text_color",
                      "set_highlight_color", "highlight_color", "position", "margin"):
-            self.assertLess(props.index(name), props.index("animation"), name)
-        self.assertLess(props.index("animation"), props.index("language"))
+            self.assertLess(props.index(name), props.index("animate"), name)
+        self.assertLess(props.index("animate"), props.index("language"))
 
     def test_the_dialogs_choices_reach_the_tool_call(self):
         op = test_captions.TestCaptionStrips._operator(self)[0]

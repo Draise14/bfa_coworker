@@ -59,9 +59,14 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   `end_frame` from the answer, not the names you read before. Captions made before are trimmed with the edit.
 - `add_captions(strips, style="CLEAN", animation="STYLE", position="BOTTOM", margin=0, speakers=False,
   speaker_labels=False, speaker_settings=None, case="STYLE", font=None, bold=None, italic=None, size=1.0,
-  text_color=None, highlight_color=None)` — Captions from the strips' speech; one undo step. Animation
-  (NONE, FADE, SLIDE_UP, TYPEWRITER, POP) and position (BOTTOM, TOP, MIDDLE; `margin` in % of the height) go
-  with any style. Style choices, each "as the style has it" when left out: `case` (AS_SPOKEN, UPPER, LOWER,
+  text_color=None, highlight_color=None, animate=None, line_animation=None, word_animation=None)` — Captions
+  from the strips' speech; one undo step. Motion: `animate` (LINE, WORD, BOTH, NONE, or STYLE: the style's
+  own) with `line_animation` (NONE, FADE, POP, SLIDE_UP, SLIDE_DOWN, TYPEWRITER) and `word_animation`
+  (HIGHLIGHT, POP, SCALE, RISE, FADE_IN, HIGHLIGHT_POP, ... or NONE); the old `animation` is the line
+  animation and still works. With a word motion every word is a strip of its own (a channel each, above
+  the caption's) and the caption's own strip draws nothing but stays the anchor with the text; over 24
+  words in a line or too many keyframes it is refused, naming the limit (use HIGHLIGHT or fewer words per
+  line). Position (BOTTOM, TOP, MIDDLE; `margin` in % of the height) goes with any style. Style choices, each "as the style has it" when left out: `case` (AS_SPOKEN, UPPER, LOWER,
   TITLE), `font` (a font's name in the file, or a font file's path), `bold`, `italic`, `size` (a scale of the
   style's), `text_color` / `highlight_color` ("#RRGGBB"); they stay with the captions. WORD_HIGHLIGHT's word
   strips follow their caption's font, bold, italic, size and position by themselves. Several speakers, each on their own sound file: `speakers=True` gives each a caption channel;

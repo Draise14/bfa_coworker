@@ -55,6 +55,7 @@ ICON_FALLBACKS = {
     "WARNING": "ERROR",             # Blender's warning triangle is ERROR
     "MAKE_SCREENSHOT": "WINDOW",
     "EXTENSION": "PLUGIN",
+    "SEQ_TEXT": "TEXT",             # the Text strip (the Auto Captions dialog's Text section)
 }
 _ICONS: frozenset[str] | None = None
 

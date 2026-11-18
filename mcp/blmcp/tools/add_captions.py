@@ -52,6 +52,9 @@ def register(mcp: FastMCP) -> None:
         animate: str | None = None,
         line_animation: str | None = None,
         word_animation: str | None = None,
+        line_easing: str | None = None,
+        word_easing: str | None = None,
+        speed: str | None = None,
     ) -> dict[str, object]:
         """
         Caption sound or movie strips in the Video Sequencer: their speech becomes styled
@@ -105,6 +108,14 @@ def register(mcp: FastMCP) -> None:
                 own (one channel each, above the caption's) and the caption's own strip stays as the
                 anchor holding the text but draws nothing; too many words per line (over 24), or too
                 many keyframes, is refused with the limit named (use HIGHLIGHT or fewer words per line).
+            line_easing: How the caption's move is shaped (Blender's own keyframe interpolation and
+                easing on the same keys, no keyframe added; editable in the Graph Editor): STYLE (the
+                curves it always had, the default), LINEAR, EASE_IN, EASE_OUT (a soft landing),
+                EASE_IN_OUT, BACK (overshoots), BOUNCE or ELASTIC.  A way out is the same curve
+                mirrored.  Typewriter's letters and the highlight colour change in steps and ignore it.
+            word_easing: The same for each word's motion (word_animation POP, SCALE, RISE, FADE_IN).
+            speed: How long the ways in and out take: FAST, NORMAL (the default) or SLOW; never more
+                than a third of a caption in, a quarter out.
 
         Returns:
             ``lines_created``, ``channel``, ``first_frame`` / ``last_frame``, the style,
@@ -139,6 +150,9 @@ def register(mcp: FastMCP) -> None:
                     animate=animate,
                     line_animation=line_animation,
                     word_animation=word_animation,
+                    line_easing=line_easing,
+                    word_easing=word_easing,
+                    speed=speed,
                 ),
             ),
             strict_json=True,

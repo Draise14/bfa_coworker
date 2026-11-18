@@ -623,6 +623,7 @@ class TestCaptionStrips(_OpsCase):
         op.replace_edited = False
         op.animation, op.position, op.margin, op.speakers, op.speaker_labels = "STYLE", "BOTTOM", 0, False, False
         op.animate, op.line_animation, op.word_animation = "STYLE", "FADE", "HIGHLIGHT"
+        op.line_easing, op.word_easing, op.speed = "STYLE", "STYLE", "NORMAL"
         op.speaker_list = _Rows()
         op.case, op.font_choice, op.font_file, op.bold, op.italic, op.size = "STYLE", "STYLE", "", "STYLE", "STYLE", 1.0
         op.set_text_color, op.text_color, op.set_highlight_color, op.highlight_color = False, (1, 1, 1, 1), False, (1, 0.8, 0.1, 1)
@@ -1120,7 +1121,8 @@ class TestTool(_OpsCase):
         # #542: the defaults are today's look; the new arguments reach the add-on in order.
         # #594: then the style choices, each "as the style has it" when left out.
         # #594 Part 3: Animate, Line Animation and Word Animation, none chosen.
-        none = ("STYLE", None, None, None, 1.0, None, None, None, None, None)
+        # #605: and Line Easing, Word Easing and Speed, none chosen.
+        none = ("STYLE", None, None, None, 1.0, None, None, None, None, None, None, None, None)
         self.assertEqual(calls[0], ("STYLE", "BOTTOM", 0, False, False, []) + none)
         self.assertEqual(calls[1], ("FADE", "TOP", 12, True, True, [{"strip": "speech", "name": "Ana"}]) + none)
         self.assertEqual(set(out._asdict()), set(toolcode.Result._fields))

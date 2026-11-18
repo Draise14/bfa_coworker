@@ -80,6 +80,14 @@ EXPECTED_TOOLS = [
 "                own (one channel each, above the caption's) and the caption's own strip stays as the\n"
 "                anchor holding the text but draws nothing; too many words per line (over 24), or too\n"
 "                many keyframes, is refused with the limit named (use HIGHLIGHT or fewer words per line).\n"
+"            line_easing: How the caption's move is shaped (Blender's own keyframe interpolation and\n"
+"                easing on the same keys, no keyframe added; editable in the Graph Editor): STYLE (the\n"
+"                curves it always had, the default), LINEAR, EASE_IN, EASE_OUT (a soft landing),\n"
+"                EASE_IN_OUT, BACK (overshoots), BOUNCE or ELASTIC.  A way out is the same curve\n"
+"                mirrored.  Typewriter's letters and the highlight colour change in steps and ignore it.\n"
+"            word_easing: The same for each word's motion (word_animation POP, SCALE, RISE, FADE_IN).\n"
+"            speed: How long the ways in and out take: FAST, NORMAL (the default) or SLOW; never more\n"
+"                than a third of a caption in, a quarter out.\n"
 "\n"
 "        Returns:\n"
 "            ``lines_created``, ``channel``, ``first_frame`` / ``last_frame``, the style,\n"
@@ -299,6 +307,42 @@ EXPECTED_TOOLS = [
                     ],
                     "default": None,
                     "title": "Word Animation"
+                },
+                "line_easing": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Line Easing"
+                },
+                "word_easing": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Word Easing"
+                },
+                "speed": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Speed"
                 }
             },
             "title": "add_captionsArguments",

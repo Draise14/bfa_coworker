@@ -233,7 +233,7 @@ class TestLimits(unittest.TestCase):
                 if word == "STYLE":
                     continue
                 self.assertLessEqual(cap.word_key_count(line, word), cap.MAX_WORD_KEYS, (line, word))
-        self.assertLessEqual(cap.word_key_count("POP", "HIGHLIGHT_POP"), 30)
+        self.assertLessEqual(cap.word_key_count("POP", "HIGHLIGHT_POP"), 40)
 
     def test_the_paths_are_the_ones_a_word_strip_may_key(self):
         for line in LINES:
@@ -257,7 +257,9 @@ class TestLimits(unittest.TestCase):
     def test_too_many_keys_in_a_run_is_refused(self):
         msg = cap.check_word_plan([20] * 400, "FADE", "HIGHLIGHT_POP")
         self.assertIn(str(cap.MAX_RUN_KEYS), msg)
-        self.assertIn("Highlight", msg)
+        self.assertIn("lighter Word Animation", msg)
+        self.assertIn("fewer clips", msg)
+        self.assertNotIn("fewer words per line", msg)
 
     def test_no_room_above_the_clip_is_refused(self):
         msg = cap.check_word_plan([10], "NONE", "POP", max_channel_room=5)
@@ -605,6 +607,179 @@ class TestMotionFollowsTheAnchor(_MotionCase):
         self.assertFalse(self.ops._edited(line))
         line.text = "reworded by hand"
         self.assertTrue(self.ops._edited(line))
+
+
+def _copy_strip(strips, src, name, left, right):
+    """A hard cut's second piece: a copy of strip *src* with its tag, over *left* to *right*."""
+    import copy
+    piece = type(src)(name, src.type, src.channel, left, right)
+    piece.__dict__.update({k: copy.copy(v) for k, v in src.__dict__.items()
+                           if k not in ("name", "left_handle", "right_handle", "_props", "keys")})
+    piece._props = {k: type(v)(dict(v)) if isinstance(v, dict) else v for k, v in src._props.items()}
+    piece.keys = list(src.keys)
+    strips.append(piece)
+    return piece
+
+
+class TestAfterACut(_MotionCase):
+    """Remove Silences moves the line's ``word_frames``; every word's keys follow them (one source of time)."""
+
+    def setUp(self):
+        super().setUp()
+        self.make(animate="WORD", word_animation="FADE_IN")
+        self.name = max(self.lines(), key=lambda ln: len(ln.text.split())).name
+
+    def line(self):
+        return self.scene.sequence_editor.strips.get(self.name)
+
+    def cut(self, k, length):
+        """A cut of *length* frames that starts at word *k*'s start, as the ripple leaves the tag and strips."""
+        line = self.line()
+        tag = line.get("bfacw_caption")
+        wf = list(tag["word_frames"])
+        pos = wf[k]
+        tag["word_frames"] = [v if v < pos else (pos if v < pos + length else v - length) for v in wf]
+        line["bfacw_caption"] = tag
+        for s in [line] + self.words_of(line):
+            s.right_handle -= length
+        return list(tag["word_frames"])
+
+    def first_alpha(self, word, since):
+        return [f for p, f, _v in word.keys[since:] if p == "blend_alpha"]
+
+    def check_cut(self, k, length):
+        line = self.line()
+        words = self.words_of(line)
+        seen = [len(w.keys) for w in words]
+        wf = self.cut(k, length)
+        self.assertTrue(self.ops.refit_captions(self.scene, [self.name]))
+        line = self.line()
+        fs, fe = line.left_handle, line.right_handle
+        for i, w in enumerate(self.words_of(line)):
+            alpha = self.first_alpha(w, seen[i])
+            want = min(fs + wf[i], fe)
+            if fe - want >= 2:
+                self.assertEqual(alpha[0], want, (k, length, i))
+            self.assertTrue(all(fs <= f <= fe for f in alpha), (k, length, i, alpha))
+
+    def test_a_cut_before_the_first_middle_and_last_word(self):
+        n = len(self.words_of(self.line()))
+        for k in (1, n // 2, n - 1):
+            self.check_cut(k, 4)
+
+    def test_a_cut_longer_than_a_word_never_shows_a_word_from_the_first_frame(self):
+        n = len(self.words_of(self.line()))
+        line = self.line()
+        self.check_cut(n - 2, 40)
+        line = self.line()
+        words = self.words_of(line)
+        last = self.first_alpha(words[-1], 0)[-6:]
+        self.assertTrue(any(f > line.left_handle + 3 for f in last))
+
+    def test_a_hard_cut_gives_each_word_to_the_piece_it_is_in(self):
+        line = self.line()
+        words = self.words_of(line)
+        mid = line.left_handle + (line.right_handle - line.left_handle) // 2
+        strips = self.scene.sequence_editor.strips
+        right = line.right_handle
+        piece = _copy_strip(strips, line, line.name + ".001", mid, right)
+        piece.get("bfacw_caption")["word_frames"] = list(line.get("bfacw_caption")["word_frames"])
+        line.right_handle = mid
+        for w in words:
+            copy = _copy_strip(strips, w, w.name + ".001", mid, right)
+            w.right_handle = mid
+            self.assertEqual(copy.get("bfacw_caption")["line"], line.name)       # both name the first anchor
+        self.assertGreaterEqual(self.ops.refit_words(self.scene), 1)
+        second = [w for w in self.words() if w.get("bfacw_caption")["line"] == piece.name]
+        first = [w for w in self.words() if w.get("bfacw_caption")["line"] == line.name]
+        self.assertEqual((len(first), len(second)), (len(words), len(words)))
+        self.assertTrue(all(w.left_handle == mid for w in second))
+        shift = mid - line.left_handle
+        self.assertEqual(piece.get("bfacw_caption")["word_frames"],
+                         [v - shift for v in line.get("bfacw_caption")["word_frames"]])
+        self.assertEqual(piece.color[3], 0.0)
+
+
+class TestNeverAClearCaptionWithoutWords(_MotionCase):
+
+    def setUp(self):
+        super().setUp()
+        self.make(animate="WORD", word_animation="POP")
+        self.line = self.lines()[0]
+        self.name = self.line.name
+
+    def lookup(self):
+        return self.scene.sequence_editor.strips.get(self.name)
+
+    def test_a_longer_text_than_the_limit_falls_back_to_highlight_and_says_why(self):
+        before = len(self.all_strips())
+        del self.ops.NOTES[:]
+        self.ops.set_caption_text(self.scene, self.lookup(), " ".join("w%d" % i for i in range(30)))
+        line = self.lookup()
+        self.assertEqual(line.color[3], 1.0)                                    # the caption draws again
+        self.assertEqual(line.get("bfacw_caption")["wanim"], "HIGHLIGHT")
+        words = self.words_of(line)
+        self.assertEqual(len(words), 30)
+        self.assertEqual({w.channel for w in words}, {line.channel + 1})
+        self.assertTrue(self.ops.NOTES and "24" in self.ops.NOTES[0], self.ops.NOTES)
+        self.assertGreater(before, 0)
+
+    def test_somebody_elses_strip_on_the_block_is_not_run_over(self):
+        widest = max(len(ln.text.split()) for ln in self.lines())
+        line = self.lookup()
+        top = line.channel + len(self.words_of(line))
+        music = _clip(self.scene, "music", "//media/music.wav", channel=top + 1, left=line.left_handle,
+                      right=line.right_handle)
+        del self.ops.NOTES[:]
+        self.ops.set_caption_text(self.scene, line, " ".join("w%d" % i for i in range(len(self.words_of(line)) + 2)))
+        line = self.lookup()
+        self.assertTrue(all(w.channel != music.channel for w in self.words_of(self.lookup())))
+        self.assertEqual(music.channel, top + 1)
+        self.assertEqual(line.color[3], 1.0)
+        self.assertIn("channel {:d}".format(music.channel), self.ops.NOTES[0])
+        self.assertGreater(widest, 0)
+
+    def test_with_no_room_even_for_highlight_it_is_plain(self):
+        with mock.patch.object(self.ops, "_block_problem", return_value="no room"):
+            self.ops.set_caption_text(self.scene, self.lookup(), "one two three")
+        line = self.lookup()
+        self.assertEqual((line.color[3], line.get("bfacw_caption")["wanim"]), (1.0, "NONE"))
+        self.assertEqual(self.words_of(line), [])
+
+    def test_the_text_that_fits_keeps_its_motion(self):
+        self.ops.set_caption_text(self.scene, self.lookup(), "one two three")
+        line = self.lookup()
+        self.assertEqual((line.color[3], len(self.words_of(line))), (0.0, 3))
+
+    def test_an_anchor_whose_words_are_all_gone_draws_again_from_the_timer_path(self):
+        for w in self.words_of(self.lookup()):
+            self.scene.sequence_editor.strips.remove(w)
+        self.assertGreaterEqual(self.ops.refit_words(self.scene), 1)
+        self.assertEqual(self.lookup().color[3], 1.0)
+        self.assertEqual(self.lookup().get("bfacw_caption")["wanim"], "NONE")
+        self.assertEqual(self.words_of(self.lookup()), [])
+
+    def test_refit_word_highlights_makes_the_words_again(self):
+        for w in self.words_of(self.lookup()):
+            self.scene.sequence_editor.strips.remove(w)
+        self.assertGreaterEqual(self.ops.refit_words(self.scene, [self.name], force=True, rebuild=True), 1)
+        line = self.lookup()
+        self.assertEqual(line.color[3], 0.0)
+        self.assertEqual([w.text for w in self.words_of(line)], line.text.split())
+
+    def test_make_vertical_never_leaves_a_piece_clear_without_words(self):
+        self.scene.render.resolution_x, self.scene.render.resolution_y = 1080, 1920
+        with mock.patch.object(self.ops, "_add_highlights", return_value=0):
+            self.ops.relayout_captions(self.scene, old_res=(1920, 1080))
+        for ln in self.lines():
+            self.assertEqual(ln.color[3], 1.0, ln.name)
+
+    def test_names_of_channels_the_artist_made_are_kept(self):
+        self.scene.sequence_editor.channels[self.lookup().channel + 1].name = "Mine"
+        self.make(animate="WORD", word_animation="RISE")
+        line = self.lines()[0]
+        self.assertEqual(self.scene.sequence_editor.channels[line.channel + 1].name, "Mine")
+        self.assertEqual(self.scene.sequence_editor.channels[line.channel + 2].name, "Captions Highlight")
 
 
 class TestDialog(_OpsCase):

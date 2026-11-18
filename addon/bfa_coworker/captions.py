@@ -1408,7 +1408,7 @@ WORD_SCALE_UP = 1.2         # Scale: how big the spoken word gets
 WORD_RISE = 0.03            # Rise: how far below its place it starts, of the frame's height
 MAX_WORD_CHANNELS = 24      # the words of a caption's longest line: one channel each
 MAX_WORD_KEYS = 64          # keys on one word strip
-MAX_RUN_KEYS = 40000        # keys of one Auto Captions run
+MAX_RUN_KEYS = 80000        # F-curve keys of one Auto Captions run (measured, #594: playback stays above 27 fps)
 WORD_PATHS = ("blend_alpha", "transform.offset_x", "transform.offset_y", "transform.scale_x", "transform.scale_y",
               "color")      # what a word strip's animation may key
 DEFAULT_HIGHLIGHT = STYLES["WORD_HIGHLIGHT"]["highlight"]   # Highlight on a style that has none of its own
@@ -1728,7 +1728,8 @@ def word_key_count(line_animation: Any, word_animation: Any, fps: float = 30.0) 
     """The most keys one word strip gets from this animation (a long caption, a word in the middle)."""
     tracks = word_tracks(line_animation, word_animation, 0, 120, 60, 80, fps, 1920, 1080, (1000.0, 200.0),
                          (960.0, 200.0), 60, (1, 1, 1, 1), (1, 0.8, 0.1, 1))
-    return sum(len(t["keys"]) for t in tracks)
+    # a colour key is four F-curve keys (red, green, blue, alpha): those are what Blender stores and evaluates
+    return sum(len(t["keys"]) * (4 if t["path"] == "color" else 1) for t in tracks)
 
 
 def check_word_plan(words_per_line: Sequence[int], line_animation: Any, word_animation: Any, fps: float = 30.0,

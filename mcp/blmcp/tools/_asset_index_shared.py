@@ -44,7 +44,8 @@ import sys
 import time
 
 # Keep this in sync with the schema written by the embedded indexer script.
-_BLMCP_INDEX_SCHEMA = 1
+# 2: indexes written by schema 1 are empty (the indexer stored no asset), so they are rebuilt.
+_BLMCP_INDEX_SCHEMA = 2
 
 
 # ---------------------------------------------------------------------------
@@ -175,8 +176,29 @@ def _entry(datablock, asset_type, blend_rel):
             entry["frame_range"] = [frame for frame in getattr(datablock, "frame_range", (0.0, 0.0))]
         except Exception:
             entry["frame_range"] = [0.0, 0.0]
-        entry["fcurves_count"] = len(getattr(datablock, "fcurves", ()))
+        entry["fcurves_count"] = _action_fcurve_count(datablock)
     return entry
+
+
+def _action_fcurve_count(action):
+    # F-Curves of the action, counted through layers / strips / channelbags (layered actions of 5.x).
+    return sum(
+        len(cb.fcurves)
+        for layer in getattr(action, "layers", ())
+        for strip in layer.strips
+        for cb in getattr(strip, "channelbags", ())
+    )
+
+
+_MARKER = [""]      # the caller's "build running" marker file; touched while the build works
+
+
+def _touch_marker():
+    if _MARKER[0]:
+        try:
+            os.utime(_MARKER[0])
+        except OSError:
+            pass
 
 
 def _load_and_collect(blend_path, base_dir):
@@ -197,7 +219,8 @@ def _load_and_collect(blend_path, base_dir):
             try:
                 with bpy.data.libraries.load(blend_path) as (data_from_src, data_to):
                     setattr(data_to, _COLLECTION_ATTR[asset_type], [name_i])
-                    loaded = getattr(data_to, _COLLECTION_ATTR[asset_type])[0]
+                # The datablocks are only loaded once the block has closed.
+                loaded = getattr(data_to, _COLLECTION_ATTR[asset_type])[0]
                 if loaded is None:
                     continue
                 entry = _entry(loaded, asset_type, blend_rel)
@@ -205,15 +228,18 @@ def _load_and_collect(blend_path, base_dir):
                 # this throwaway instance; report the library name (name_i).
                 entry["name"] = name_i
                 entries[name_i] = entry
+                _touch_marker()
                 # Drop the appended datablock so memory stays flat.
-                coll = getattr(bpy.data, _COLLECTION_ATTR[asset_type])
-                if loaded in coll:
-                    try:
-                        coll.remove(loaded)
-                    except Exception:
-                        pass
+                try:
+                    getattr(bpy.data, _COLLECTION_ATTR[asset_type]).remove(loaded)
+                except Exception:
+                    pass
             except Exception:
                 continue
+    try:
+        bpy.data.orphans_purge(do_recursive=True)     # what the assets pulled in (images, node trees...)
+    except Exception:
+        pass
     return entries
 
 
@@ -229,12 +255,14 @@ _COLLECTION_ATTR = {
 
 def main():
     args = sys.argv[sys.argv.index("--") + 1:]
-    if len(args) != 2:
+    if len(args) not in (2, 3):
         sys.stderr.write("usage: ... -- <lib_dir> <out_json>\n")
         sys.exit(2)
-    lib_dir, out_path = args
+    lib_dir, out_path = args[0], args[1]
+    marker_path = args[2] if len(args) > 2 else ""   # the caller's "build running" marker
+    _MARKER[0] = marker_path
     index = {
-        "schema": 1,
+        "schema": 2,
         "library_path": os.path.normpath(lib_dir),
         "built_at": time.time(),
         "files": {},
@@ -258,10 +286,16 @@ def main():
                 index["assets"].update(_load_and_collect(blend_path, lib_dir))
             except Exception:
                 continue
+            _touch_marker()                       # still working: keeps a second build from starting
     tmp_path = out_path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as fh:
         json.dump(index, fh, ensure_ascii=False, separators=(",", ":"))
     os.replace(tmp_path, out_path)
+    if marker_path:
+        try:
+            os.remove(marker_path)
+        except OSError:
+            pass
     sys.stderr.write("indexed {:d} assets in {:s}\n".format(
         len(index["assets"]), lib_dir))
 
@@ -427,6 +461,7 @@ def _blmcp_trigger_index_build(lib_path: str, bpy) -> tuple[bool, str]:
                 "--",
                 os.path.normpath(lib_path),
                 index_path,
+                marker_path,
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

@@ -1205,11 +1205,11 @@ class TestAssetIndex(unittest.TestCase):
         with open(self.blend, "wb") as fh:
             fh.write(b"fixture-blend")
 
-    def _write_index(self, assets, mtime_ns=None, size=None, schema=1):
+    def _write_index(self, assets, mtime_ns=None, size=None, schema=None):
         stat_i = os.stat(self.blend)
         lib_path = self._tmp.name
         index = {
-            "schema": schema,
+            "schema": self._mod._BLMCP_INDEX_SCHEMA if schema is None else schema,
             "library_path": lib_path,
             "built_at": 1.0,
             "files": {

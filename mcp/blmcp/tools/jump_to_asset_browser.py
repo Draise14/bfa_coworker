@@ -38,24 +38,35 @@ def register(mcp: FastMCP) -> None:
         Switch to (or create) the Asset Browser editor.
 
         If an Asset Browser area is already open in any workspace it is
-        reused.  Otherwise, with *allow_edits* (default), a new workspace
-        is created by duplicating the current one and converting its main
-        area into the Asset Browser - so the user's current workspace is
-        left untouched.
+        reused.  Otherwise, with *allow_edits* (default), the largest free area
+        of the current workspace is turned into an Asset Browser.  Not taken:
+        the Coworker editor, and editors whose sidebar is open (the compact
+        chat may sit there).  With no free area, or while a render, a bake or
+        another operation is running, nothing is changed and the answer says
+        why.  No workspace is created, renamed or switched; the result's
+        ``changed_area`` and message name the editor that was replaced, so it
+        can be set back.
 
         *library_name* optionally preselects the asset library shown in the
         browser (best-effort: if the name matches a configured library or a
-        built-in reference such as ``"LOCAL"`` / ``"USER"`` it is applied).
-        *catalog_path* optionally selects a catalog/folder, best-effort.
+        built-in reference ``"LOCAL"`` (Current File), ``"ESSENTIALS"`` or
+        ``"ALL"`` it is applied).
+        *catalog_path* optionally selects a catalog: a path such as
+        ``"Props/Chairs"`` (looked up in the library's ``blender_assets.cats.txt``;
+        for ``"LOCAL"`` the one next to the saved .blend) or a catalog UUID.
+        An unknown path is not applied and the nearest catalog paths come back
+        in ``nearest_catalogs``; anything that could not be applied is
+        explained in ``message``.
 
         Args:
             library_name: Asset library to select (empty = leave as-is).
             catalog_path: Catalog path or catalog UUID to select (empty = leave as-is).
-            allow_edits: Allow creating a new workspace/area when no Asset
-                Browser is open.
+            allow_edits: Allow turning an area of the current workspace into an
+                Asset Browser when none is open.
 
         Returns:
-            Status, workspace/area created or reused, and library/catalog applied.
+            Status, workspace, whether an area was converted (and which), the library and
+            catalog (path and UUID) applied, and what could not be applied.
         """
         return send_code(
             toolcode_format_call(

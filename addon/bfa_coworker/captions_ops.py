@@ -868,9 +868,6 @@ def _animate_words(scene: Any, line: Any, tag: dict, style: dict) -> int:
               if anim == "TYPEWRITER" else [None] * len(words))
     base, hi = tuple(style["props"]["color"]), _hi_colour(style)
     made = 0
-    if style["props"].get("use_box"):            # the anchor's box moves with the line animation
-        _animate(scene, line, style, anim, None)
-        line = _all(ed).get(name)
     spans = _word_spans(line, tag, words)
     for w, mid, rev, (a, b) in zip(words, mids, reveal, spans):
         tracks = cap.word_tracks(anim, wanim, fs, fe, a, b, _fps(scene), res[0], res[1], mid, centre, rev, base, hi)
@@ -890,8 +887,6 @@ def _reanimate_words(scene: Any, line: Any, tag: dict) -> bool:
     if not words:
         return False
     _clear_animation(scene, words, _WORD_CLEAR, colour=st["props"]["color"])
-    if st["props"].get("use_box") and tag.get("anim") is not None:
-        _clear_animation(scene, [line], cap.animation_paths(tag["anim"], key))
     _animate_words(scene, line, tag, st)
     return True
 
@@ -909,13 +904,12 @@ def _hi_colour(style: dict) -> tuple:
 
 def _hide_anchor(line: Any) -> None:
     """The line strip of a caption with word motions draws nothing (#594): its text is clear, and its
-    outline and shadow are off (so is its box, except in a boxed style: one box behind the whole line, which
-    moves with the line animation, and not one box per word).  It stays the caption's anchor: its text, tag, font, bold, size and
+    outline, shadow and box are off.  (Blender draws no box behind clear text, so a boxed style has no box with a
+    word motion; a box per word would cut into the letters of its neighbours, so the words have none either.)  It stays the caption's anchor: its text, tag, font, bold, size and
     place are what the words follow."""
     colour = tuple(line.color)
     line.color = (colour[0], colour[1], colour[2], 0.0)
-    keep_box = bool(getattr(line, "use_box", False))       # a boxed style: its one box behind the whole line stays
-    for prop in ("use_outline", "use_shadow") + (() if keep_box else ("use_box",)):
+    for prop in ("use_outline", "use_shadow", "use_box"):
         try:
             setattr(line, prop, False)
         except (AttributeError, TypeError, ValueError):
@@ -1079,8 +1073,6 @@ def _sig_paths(tag: dict) -> frozenset[str]:
     if cap.tag_words(tag)[0] != "motion":
         return _preset_paths(tag)
     key = cap.style_key(tag.get("style")) or "CLEAN"
-    if cap.STYLES[key]["use_box"] and tag.get("anim") is not None:     # a boxed anchor is keyed with the line
-        return frozenset(cap.animation_paths(tag["anim"], key))
     return frozenset()
 
 

@@ -406,15 +406,13 @@ class TestMotionStrips(_MotionCase):
                 self.assertTrue(all(w.right_handle - w.left_handle < line.right_handle - line.left_handle
                                     for w in words))
 
-    def test_a_boxed_caption_has_one_box_behind_the_line_not_one_per_word(self):
+    def test_a_boxed_caption_has_no_box_with_a_word_motion(self):
+        """Blender draws no box behind clear text, and a box per word cuts into its neighbours' letters."""
         self.make("BOXED", animate="BOTH", line_animation="FADE", word_animation="POP")
         for line in self.lines():
-            self.assertTrue(line.use_box)                                    # the one box
-            self.assertEqual(line.color[3], 0.0)                             # no text from the anchor
-            self.assertTrue(any(p == "blend_alpha" for p, *_ in line.keys))  # the box fades with the line
+            self.assertFalse(line.use_box)
+            self.assertEqual(line.keys, [])
             self.assertFalse(any(w.use_box for w in self.words_of(line)))
-        self.make("BOXED", animate="WORD", word_animation="POP")
-        self.assertTrue(all(ln.keys == [] and ln.use_box for ln in self.lines()))
 
     def test_per_line_makes_no_word_strips_and_keys_the_line(self):
         self.make("WORD_HIGHLIGHT", animate="LINE", line_animation="FADE")

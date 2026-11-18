@@ -880,9 +880,13 @@ def register() -> None:
         if menu is not None:
             menu.append(draw)
             _HOOKED.append((menu, draw))
+    from . import reframe_layouts           # #606: Reframe layouts
+    reframe_layouts.register()
 
 
 def unregister() -> None:
+    from . import reframe_layouts
+    reframe_layouts.unregister()
     for menu, draw in _HOOKED:
         try:
             menu.remove(draw)

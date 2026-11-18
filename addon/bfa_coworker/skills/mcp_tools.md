@@ -77,6 +77,16 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   Works in a copy of the scene by default (`in_copy`); one undo step. Change a shot's framing afterwards
   through that modifier's inputs (Properties > Strip Modifiers: Offset X / Y -1..1, Zoom, Blur Fill), not the
   strip transform.
+- `reframe_strips(layout, strips=None, swap=False)` — Change the vertical layout of the named (or selected) movie /
+  image / scene strips, after `reframe_vertical` or on any strips; one undo step. `layout`: `full` (centre fills
+  the frame), `full_blur` (whole shot over a blurred copy), `full_tracked` (follows the subject: the tracking needs
+  a vision model, the layout does not), `split_half` (two crops, 50 / 50), `split_top` (2/3 on top, 1/3 below),
+  `split_bottom` (1/3 on top, 2/3 below); `track_all` is not available yet. A split is two ordinary strips of the
+  same source (the strip, and its duplicate below on the next free channel) with crop and transform each; it
+  replaces the earlier layout, so any order of layouts ends the same as the last one alone. `swap=true` exchanges
+  top and bottom (alone with `layout=""`). The layout is stored on each strip (`coworker_layout`). Captions and
+  audio are never touched; Remove Silences and Edit by Transcript cut both parts together. It adds and removes
+  strips, so it waits while a render or bake runs.
 - `get_transcript_text(strip)` — A transcribed clip's words as they play now, one numbered line per sentence
   with its time, and a `version`. `apply_transcript_edit(strip, cut_lines=[...] + version | lines=[{line, text}] |
   text=..., dry_run=False, confirm_large_cut=False)` — Edit the clip by its text; one undo step: lines / words

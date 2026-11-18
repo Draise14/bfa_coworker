@@ -1686,6 +1686,7 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "render_vse_preview",
         "add_captions",
         "reframe_vertical",
+        "reframe_strips",             # #606
         "remove_silences",            # #539
         "get_transcript_text",        # #498: Edit by Transcript
         "apply_transcript_edit",

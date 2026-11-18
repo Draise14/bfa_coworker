@@ -63,7 +63,7 @@ DOMAINS: dict[str, frozenset[str]] = {
     "vse": frozenset({
         "jump_to_tab_by_name", "jump_to_tab_by_space_type", "get_vse_strips_summary", "get_vse_strip_detail",
         "get_vse_timeline_overview", "set_strip_frame_range", "render_vse_preview",
-        "transcribe_strip", "add_captions", "reframe_vertical", "remove_silences",
+        "transcribe_strip", "add_captions", "reframe_vertical", "reframe_strips", "remove_silences",
         "get_transcript_text", "apply_transcript_edit",
     }),
     "geometry_nodes": frozenset({

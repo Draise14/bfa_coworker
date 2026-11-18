@@ -27,3 +27,12 @@ every part drawn by us is labelled "(ours)". The style rules are in plan 4m sect
 
 The icons marked "(badge)" also carry the `wand` shapes, small, in the bottom-right
 corner: they are the tools that need Coworker's AI.
+
+## Reframe layout icons (#606)
+
+The seven `reframe_*` icons (Full Frame, Blur Fill, Tracked, the three splits, Track All) are drawn by
+`_misc/build_reframe_icons.py` from scratch, as PNGs only (no SVG), in Bforartists' palette steps: the tall
+frame uses the strip colours of `seq_strip` (outline `#320000`, lit `#fecb32`, shade `#fe9832`), the picture
+inside the colours of `image` (sky `#75b6fe`, sun `#fdfe00` / `#fec100`, hills `#3c983c` / `#1e4c1e`). No path
+is copied from a Bforartists icon: every shape is a rectangle, circle or triangle drawn by us. They carry no
+wand badge (every layout works without the agent started; the tracking of Full Frame, Tracked needs a model).

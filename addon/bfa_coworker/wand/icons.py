@@ -21,6 +21,7 @@ from __future__ import annotations
 __all__ = (
     "ICON_DIR",
     "ICON_NAMES",
+    "LAYOUT_ICON_NAMES",
     "SIZES",
     "THEMES",
     "free",
@@ -39,6 +40,10 @@ ICON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 # A familiar base glyph, with the wand badge when the tool needs Coworker's AI; "wand" is the mark.
 ICON_NAMES = ("remove_silences", "captions", "vertical", "transcribe", "tidy_nodes", "explain",
               "translate", "wand")
+# Reframe's layout icons (#606): a tall frame with the parts a layout makes, drawn in Bforartists'
+# palette by ``_misc/build_reframe_icons.py`` (PNGs only, same file scheme and loading as above).
+LAYOUT_ICON_NAMES = ("reframe_full", "reframe_full_blur", "reframe_full_tracked", "reframe_split_half",
+                     "reframe_split_top", "reframe_split_bottom", "reframe_track_all")
 THEMES = ("dark", "light")
 SIZES = (32, 64)
 
@@ -82,7 +87,7 @@ def icon_id(name: str) -> int:
                 bpy.utils.previews.remove(previews)
             previews = bpy.utils.previews.new()
             theme, size = key
-            for icon in ICON_NAMES:
+            for icon in ICON_NAMES + LAYOUT_ICON_NAMES:
                 path = png_path(icon, theme, size)
                 if os.path.isfile(path):
                     previews.load(icon, path, "IMAGE")

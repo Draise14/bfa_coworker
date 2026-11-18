@@ -1407,7 +1407,18 @@ def _strip_item(ed: Any, s: Any, path: str) -> dict[str, Any]:
     return {"name": s.name, "type": s.type, "key": source_key(path), "path": path,
             "left": _left(s), "right": _right(s), "content_start": float(_content_start(s)),
             "offset": float(getattr(s, "sound_offset", 0.0) or 0.0) if s.type == 'SOUND' else 0.0,
-            "muted": _muted(ed, s), "retimed": _retimed(s)}
+            "muted": _muted(ed, s), "retimed": _retimed(s), **_split_fields(s)}
+
+
+def _split_fields(s: Any) -> dict[str, Any]:
+    """#606: which Reframe split a movie strip is a part of (``split_group``, ``split_part``), else nothing."""
+    try:
+        tag = s.get("coworker_layout") if s.type != 'SOUND' else None
+        if tag is not None and hasattr(tag, "get") and str(tag.get("layout", "")).startswith("split"):
+            return {"split_group": str(tag.get("group", "")), "split_part": int(tag.get("part", 0) or 0)}
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return {}
 
 
 def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str | None = None,

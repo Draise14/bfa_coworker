@@ -66,6 +66,9 @@ _last_update = [0.0]
 _step_depth = [0]
 _own_until = [0.0]
 _first_seen: dict[tuple, float] = {}
+_absent_since: dict[tuple, float] = {}
+FORGET_AFTER = 1.0      # a modal that is gone this long is forgotten (a flicker is not an end)
+samples = [0, ""]       # how often sample() ran, and its last error (diagnosis)
 
 # Coworker's own long-lived modal operators (the chat's input, the mic...) never count.
 _IGNORED_PREFIXES = ("BFACW_", "bfacw.")
@@ -88,6 +91,7 @@ def reset() -> None:
     _step_depth[0] = 0
     _own_until[0] = 0.0
     _first_seen.clear()
+    _absent_since.clear()
 
 
 def note_update(*_args: Any) -> None:
@@ -144,14 +148,18 @@ def sample(window_manager: Any, now: float | None = None) -> None:
     """Stamp each modal operator the first time it is seen, forget the ones that ended.
     Cheap; called each second by a timer and by every check.  Never raises."""
     try:
+        samples[0] += 1
         now = time.monotonic() if now is None else now
         current = {key for key, _name in _modals(window_manager)}
         for key in current:
             _first_seen.setdefault(key, now)
+            _absent_since.pop(key, None)
         for key in [k for k in _first_seen if k not in current]:
-            del _first_seen[key]
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
+            if now - _absent_since.setdefault(key, now) >= FORGET_AFTER:
+                del _first_seen[key]
+                del _absent_since[key]
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        samples[1] = repr(ex)
 
 
 def _playing(window_manager: Any) -> bool:

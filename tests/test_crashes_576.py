@@ -317,9 +317,18 @@ class LongModalsAndOwnChanges(unittest.TestCase):
         wm = _wm(["TRANSFORM_OT_translate"])
         ua.check(wm, now=100.0)
         wm.windows[0].modal_operators = []
+        self.assertEqual(ua.check(wm, now=100.5)[0], "")             # gone, but not yet forgotten
         self.assertEqual(ua.check(wm, now=200.0), ("", ""))          # it ended: forgotten
         wm.windows[0].modal_operators = [_op("TRANSFORM_OT_translate")]
         self.assertEqual(ua.check(wm, now=201.0)[0], "modal")
+
+    def test_a_flicker_is_not_an_end(self):
+        wm = _wm(["WM_OT_some_file_browser"])
+        ua.sample(wm, now=10.0)
+        wm.windows[0].modal_operators = []
+        ua.sample(wm, now=10.3)                     # not listed for a moment
+        wm.windows[0].modal_operators = [_op("WM_OT_some_file_browser")]
+        self.assertEqual(ua.check(wm, now=10.0 + ua.LONG_MODAL + 1), ("", ""))   # still the old stamp
 
     def test_the_sampler_stamps_a_modal_before_any_step_asks(self):
         wm = _wm(["VIEW3D_OT_walk"])

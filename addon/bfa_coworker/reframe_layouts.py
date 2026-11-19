@@ -44,6 +44,7 @@ from . import reframe
 from .shared import icon as safe_icon
 from .wand import icons as wand_icons
 from .wand import reframe_apply as ra
+from .wand import reframe_entries as re_entries
 from .wand import reframe_layout as rl
 from .wand import scene as _seq
 from .wand import sequencer as _wand
@@ -399,42 +400,32 @@ def _layout_button(layout: Any, item: rl.Layout, current: str, *, text: str = ""
     op.layout = item.id
 
 
-def _action_buttons(layout: Any, *, text: bool) -> None:
-    layout.operator("bfacw.reframe_swap", text="Swap" if text else "", icon=safe_icon(SWAP_ICON))
-    layout.operator("bfacw.reframe_reset", text="Reset" if text else "", icon=safe_icon(RESET_ICON))
-
-
-def _draw_buttons(layout: Any, context: Any, *, wide: bool) -> None:
+def _draw_buttons(layout: Any, context: Any) -> None:
+    """The sidebar's box: two named columns."""
     current = _active_layout(context)
     # Bforartists with its toolshelf tabs on draws the Video wand icons (previews) in the toolshelf: previews
     # drawn in the sidebar at the same time leave those blank (measured, #606).  So the sidebar box uses the
     # Blender fallback icons there, and its own PNGs where the toolshelf has none (Blender, tabs off).
-    previews = not (wide and getattr(context.space_data, "show_toolshelf_tabs", False))
+    previews = not getattr(context.space_data, "show_toolshelf_tabs", False)
     items = {item.id: item for item in rl.LAYOUTS}
-    if wide:
-        for title, group in (("One picture", ("full", "full_blur", "full_tracked")),
-                             ("Split in two", ("split_half", "split_top", "split_bottom"))):
-            layout.label(text=title)
-            grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, even_rows=True, align=True)
-            grid.scale_y = 1.5
-            for layout_id in group:
-                _layout_button(grid, items[layout_id], current, text=items[layout_id].short, previews=previews)
-        row = layout.row(align=True)
-        row.scale_y = 1.5
-        row.enabled = False
-        _layout_button(row, items["track_all"], current, text="Track All", previews=previews)
-        row = layout.row(align=True)
-        _action_buttons(row, text=True)
-    else:
-        col = layout.column(align=True)
-        for item in rl.LAYOUTS:
-            if item.ready:
-                _layout_button(col, item, current)
-        _action_buttons(col, text=False)
+    for title, group in (("One picture", ("full", "full_blur", "full_tracked")),
+                         ("Split in two", ("split_half", "split_top", "split_bottom"))):
+        layout.label(text=title)
+        grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, even_rows=True, align=True)
+        grid.scale_y = 1.5
+        for layout_id in group:
+            _layout_button(grid, items[layout_id], current, text=items[layout_id].short, previews=previews)
+    row = layout.row(align=True)
+    row.scale_y = 1.5
+    row.enabled = False
+    _layout_button(row, items["track_all"], current, text="Track All", previews=previews)
+    row = layout.row(align=True)
+    row.operator("bfacw.reframe_swap", text="Swap", icon=safe_icon(SWAP_ICON))
+    row.operator("bfacw.reframe_reset", text="Reset", icon=safe_icon(RESET_ICON))
 
 
 class BFACW_PT_reframe_sidebar(Panel):
-    """The Reframe box in the Sequencer's sidebar (Blender and Bforartists)"""
+    """The Reframe box in the Sequencer's and the Preview's sidebar (Blender and Bforartists)"""
     bl_label = PANEL_LABEL
     bl_idname = "BFACW_PT_reframe_sidebar"
     bl_space_type = "SEQUENCE_EDITOR"
@@ -444,17 +435,25 @@ class BFACW_PT_reframe_sidebar(Panel):
 
     @classmethod
     def poll(cls, context: Any) -> bool:
-        return getattr(context.space_data, "view_type", "") in _wand.VIEWS
+        return re_entries.shows_in(getattr(context.space_data, "view_type", ""))
 
     def draw_header(self, _context: Any) -> None:
         self.layout.label(icon=safe_icon("FULLSCREEN_ENTER"))
 
     def draw(self, context: Any) -> None:
-        _draw_buttons(self.layout, context, wide=True)
+        _draw_buttons(self.layout, context)
+
+
+class _Sep:
+    """Stand-in for Bforartists' ``Separator`` where ``draw_entries`` is missing."""
+
+
+def _toolshelf_entries(context: Any, separator: Any) -> list[Any]:
+    return re_entries.entries(_active_layout(context), separator)
 
 
 class BFACW_PT_reframe_toolshelf(Panel):
-    """The Reframe buttons in Bforartists' toolshelf, tab Coworker"""
+    """The Reframe buttons in Bforartists' toolshelf, tab Coworker, drawn like the Video panel"""
     bl_label = PANEL_LABEL
     bl_idname = "BFACW_PT_reframe_toolshelf"
     bl_space_type = "SEQUENCE_EDITOR"
@@ -465,13 +464,25 @@ class BFACW_PT_reframe_toolshelf(Panel):
     @classmethod
     def poll(cls, context: Any) -> bool:
         space = context.space_data
-        return bool(getattr(space, "show_toolshelf_tabs", False)) and getattr(space, "view_type", "") in _wand.VIEWS
+        return bool(getattr(space, "show_toolshelf_tabs", False)) and             re_entries.shows_in(getattr(space, "view_type", ""))
 
     def draw_header(self, _context: Any) -> None:
         self.layout.label(icon=safe_icon("FULLSCREEN_ENTER"))
 
     def draw(self, context: Any) -> None:
-        _draw_buttons(self.layout, context, wide=False)
+        # Bforartists' own grid: icon buttons by the region's width, names at four columns (as the Video panel).
+        try:
+            from bl_ui import space_toolsystem_common as tools  # pylint: disable=import-error
+            draw_entries, separator = tools.draw_entries, tools.Separator
+        except (ImportError, AttributeError):
+            draw_entries = separator = None
+        if draw_entries is not None:
+            draw_entries(self.layout, context, _toolshelf_entries(context, separator))
+            return
+        col = self.layout.column(align=True)
+        for entry in _toolshelf_entries(context, _Sep):
+            if entry is not _Sep:
+                entry.draw(col, as_icon=False)
 
 
 class BFACW_MT_reframe_layout(Menu):

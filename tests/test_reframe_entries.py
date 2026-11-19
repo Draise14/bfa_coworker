@@ -139,6 +139,46 @@ class TestEntries(unittest.TestCase):
             self.assertTrue(callable(entry.draw))
 
 
+class _Col(_Layout):
+    def column(self, align=False):
+        return self
+
+
+class TestToolshelfDraw(unittest.TestCase):
+
+    def setUp(self):
+        self.saved = E._blender_icon, E.icons.icon_id
+        E._blender_icon = lambda name: "B:" + name
+        E.icons.icon_id = lambda name: 0
+
+    def tearDown(self):
+        E._blender_icon, E.icons.icon_id = self.saved
+
+    def test_it_draws_through_draw_entries_with_its_separator(self):
+        seen = []
+        sep = object()
+        tools = types.SimpleNamespace(Separator=sep, draw_entries=lambda layout, ctx, ents: seen.append(ents))
+        layout = _Col()
+        E.draw_toolshelf(layout, None, "full", tools)
+        self.assertEqual(layout.log, [])
+        self.assertEqual(seen[0].count(sep), 2)
+
+    def test_an_exception_in_draw_entries_falls_back_to_the_plain_column(self):
+        def boom(*_a):
+            raise RuntimeError("changed")
+        layout = _Col()
+        E.draw_toolshelf(layout, None, "full", types.SimpleNamespace(Separator=object(), draw_entries=boom))
+        ids = [row[0] for row in layout.log]
+        self.assertEqual(ids.count("bfacw.reframe_layout"), 7)
+        self.assertEqual(ids[-2:], ["bfacw.reframe_swap", "bfacw.reframe_reset"])
+
+    def test_without_the_helper_it_is_the_plain_column_too(self):
+        for tools in (types.SimpleNamespace(), types.SimpleNamespace(draw_entries=None, Separator=None)):
+            layout = _Col()
+            E.draw_toolshelf(layout, None, "", tools)
+            self.assertEqual(len(layout.log), 9)
+
+
 class TestViews(unittest.TestCase):
 
     def test_the_preview_alone_is_included(self):
@@ -163,8 +203,9 @@ class TestViews(unittest.TestCase):
 
     def test_the_toolshelf_draws_through_draw_entries(self):
         text = (_ADDON / "reframe_layouts.py").read_text(encoding="utf-8")
-        self.assertIn("draw_entries(self.layout, context, _toolshelf_entries(context, separator))", text)
+        self.assertIn("re_entries.draw_toolshelf(self.layout, context, _active_layout(context))", text)
         self.assertNotIn("wide=", text)
+        self.assertNotIn(chr(92) + "n", text)      # a lost line continuation (#628 review)
 
 
 if __name__ == "__main__":

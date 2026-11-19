@@ -20,6 +20,7 @@ __all__ = (
     "LayoutEntry",
     "PREVIEW_VIEWS",
     "SEPARATOR",
+    "draw_toolshelf",
     "entries",
     "shows_in",
 )
@@ -101,3 +102,26 @@ def entries(current: str = "", separator: Any = SEPARATOR) -> list[Any]:
     out.append(separator)
     out += [ActionEntry(*_SWAP), ActionEntry(*_RESET)]
     return out
+
+
+def draw_toolshelf(layout: Any, context: Any, current: str, tools: Any = None) -> None:
+    """The toolshelf panel's drawing: Bforartists' own grid (icon buttons by the region's width, names at four
+    columns, as the Video panel), else a plain column.  *tools* is ``bl_ui.space_toolsystem_common`` (found
+    when ``None``).  An exception from the helper (Bforartists changed it) falls back to the column too."""
+    if tools is None:
+        try:
+            from bl_ui import space_toolsystem_common as tools  # pylint: disable=import-error
+        except ImportError:
+            tools = None
+    draw = getattr(tools, "draw_entries", None)
+    separator = getattr(tools, "Separator", None)
+    if draw is not None and separator is not None:
+        try:
+            draw(layout, context, entries(current, separator))
+            return
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass                      # a half-drawn grid may be in the layout; the column follows it
+    col = layout.column(align=True)
+    for entry in entries(current, SEPARATOR):
+        if entry is not SEPARATOR:
+            entry.draw(col, as_icon=False)

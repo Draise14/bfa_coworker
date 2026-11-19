@@ -446,14 +446,6 @@ class BFACW_PT_reframe_sidebar(Panel):
         _draw_buttons(self.layout, context)
 
 
-class _Sep:
-    """Stand-in for Bforartists' ``Separator`` where ``draw_entries`` is missing."""
-
-
-def _toolshelf_entries(context: Any, separator: Any) -> list[Any]:
-    return re_entries.entries(_active_layout(context), separator)
-
-
 class BFACW_PT_reframe_toolshelf(Panel):
     """The Reframe buttons in Bforartists' toolshelf, tab Coworker, drawn like the Video panel"""
     bl_label = PANEL_LABEL
@@ -466,25 +458,14 @@ class BFACW_PT_reframe_toolshelf(Panel):
     @classmethod
     def poll(cls, context: Any) -> bool:
         space = context.space_data
-        return bool(getattr(space, "show_toolshelf_tabs", False)) and             re_entries.shows_in(getattr(space, "view_type", ""))
+        return (bool(getattr(space, "show_toolshelf_tabs", False))
+                and re_entries.shows_in(getattr(space, "view_type", "")))
 
     def draw_header(self, _context: Any) -> None:
         self.layout.label(icon=safe_icon("FULLSCREEN_ENTER"))
 
     def draw(self, context: Any) -> None:
-        # Bforartists' own grid: icon buttons by the region's width, names at four columns (as the Video panel).
-        try:
-            from bl_ui import space_toolsystem_common as tools  # pylint: disable=import-error
-            draw_entries, separator = tools.draw_entries, tools.Separator
-        except (ImportError, AttributeError):
-            draw_entries = separator = None
-        if draw_entries is not None:
-            draw_entries(self.layout, context, _toolshelf_entries(context, separator))
-            return
-        col = self.layout.column(align=True)
-        for entry in _toolshelf_entries(context, _Sep):
-            if entry is not _Sep:
-                entry.draw(col, as_icon=False)
+        re_entries.draw_toolshelf(self.layout, context, _active_layout(context))
 
 
 class BFACW_MT_reframe_layout(Menu):

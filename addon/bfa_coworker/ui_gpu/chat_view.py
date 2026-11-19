@@ -112,7 +112,10 @@ _ATTACHED = re.compile(r"\s*\[attached:\s*([^\]]*)\]")
 THUMB_SIZES = {"S": 2.5, "M": 4.0, "L": 7.0}
 _LIVE_MAX_LINES = 8    # the live-thinking box grows with its text up to this many lines (#452)
 _LIVE_TAIL_CHARS = 4000    # ... and lays out only the newest part of a long chain of thought
-_SCROLL_IDLE_ALPHA = 0.4   # the scrollbar's strength with the mouse away (#279)
+_SCROLL_IDLE_ALPHA = 0.75   # the scrollbar handle's strength with the mouse away (#279, #627)
+_SCROLL_IDLE_TRACK = 0.35   # the faint track's strength with the mouse away (#627)
+_SCROLL_TRACK_MIN_ALPHA = 0.5  # the default themes' scroll track (wcol_scroll inner) is fully transparent: show it at least this much
+_SCROLL_MIN_CONTRAST = 0.22  # least luminance gap between the idle handle and the chat's background
 _FRAME_LINES = 14      # code frames show this many lines (Show all for the rest)
 _RESULT_LINES = 3      # a tool's result: a few lines (often not for reading; Show all: #236)
 _RESULT_LINE_CHARS = 160   # ... each cut this short while folded (one long JSON line wraps a lot)
@@ -188,6 +191,33 @@ def _soft(color: RGBA, amount: float = 0.35) -> RGBA:
 
 def _lighten(color: RGBA, amount: float) -> RGBA:
     return (min(1.0, color[0] + amount), min(1.0, color[1] + amount), min(1.0, color[2] + amount), color[3])
+
+
+def _luma(color: RGBA) -> float:
+    return 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2]
+
+
+def _scroll_handle_color(item: RGBA, back: RGBA, text: RGBA, strength: float,
+                         min_gap: float = _SCROLL_MIN_CONTRAST) -> RGBA:
+    """The theme's scrollbar handle colour, moved toward the text colour only as far as needed (#627).
+
+    Rule: the handle as drawn (the colour at *strength* over the chat's background) must differ
+    from the background in luminance (Rec. 709 weights) by at least *min_gap*.  If the theme's
+    colour does so already it is returned unchanged; otherwise it is mixed toward the panel text
+    colour (light on a dark theme, dark on a light one) by the least amount that reaches the gap,
+    or all the way to the text colour when even that cannot.  The alpha is kept."""
+    lb, li, lt = _luma(back), _luma(item), _luma(text)
+    sign = 1.0 if lt >= lb else -1.0
+    d_item = strength * (li - lb) * sign
+    if d_item >= min_gap:
+        return item
+    d_text = strength * (lt - lb) * sign
+    if d_text <= min_gap or d_text <= d_item:
+        t = 1.0
+    else:
+        t = (min_gap - d_item) / (d_text - d_item)
+    return (item[0] + (text[0] - item[0]) * t, item[1] + (text[1] - item[1]) * t,
+            item[2] + (text[2] - item[2]) * t, item[3])
 
 
 def _think_tail(text: str) -> str:
@@ -1141,10 +1171,12 @@ class ChatView:
     # -- scrollbar: like Blender's region scrollbars (View2D) ---------------------------
     @staticmethod
     def _bar_widths(style: Style) -> tuple[float, float]:
-        """(thin, full) widths: V2D_SCROLL_MIN_WIDTH and V2D_SCROLL_WIDTH -- in UI scale only,
+        """(thin, full) widths: the thin one is a little wider than Blender's V2D_SCROLL_MIN_WIDTH so it
+        is easy to see (#627); the full one, V2D_SCROLL_WIDTH, is the room reserved for the bar and
+        the text's width, so it must not change -- in UI scale only,
         like Blender's region scrollbars: the chat's or the panel's zoom doesn't fatten it (#279)."""
         px = style.ui_scale
-        return 5.0 * px + 2.0 * px, 0.45 * 20.0 * px + 2.0 * px
+        return 7.0 * px + 2.0 * px, 0.45 * 20.0 * px + 2.0 * px
 
     def _bar_geometry(self, style: Style, rect: Rect) -> tuple[Rect, Rect, float] | None:
         """(track, handle, scroll per handle pixel) at full width, or None when all fits."""
@@ -1200,30 +1232,31 @@ class ChatView:
             unit = 20.0 * style.ui_scale
             fade_in, fade_out = 5.0 * unit, 6.5 * unit
             alpha = 1.0 if dist <= fade_in else max(0.0, 1.0 - (dist - fade_in) / (fade_out - fade_in))
-        alpha = max(alpha, _SCROLL_IDLE_ALPHA)
+        near = alpha                                  # 0 with the mouse away .. 1 close / dragging
+        handle_alpha = _SCROLL_IDLE_ALPHA + (1.0 - _SCROLL_IDLE_ALPHA) * near
+        track_alpha = _SCROLL_IDLE_TRACK + (1.0 - _SCROLL_IDLE_TRACK) * near
         canvas.hit_areas.append((track, "scroll_track"))
         canvas.hit_areas.append((handle, "scroll_handle"))
-        if alpha <= 0.0:
-            return
         thin, full = self._bar_widths(style)
         width = full if (over or dragging) else thin
         x = track.right - width
 
-        def faded(color: RGBA, strength: float = alpha) -> RGBA:
+        def faded(color: RGBA, strength: float) -> RGBA:
             return (color[0], color[1], color[2], color[3] * strength)
 
-        # With the mouse away only a thin, faint handle shows, like a region's scrollbar;
-        # the track and outlines fade in as the mouse comes near.
-        near = (alpha - _SCROLL_IDLE_ALPHA) / (1.0 - _SCROLL_IDLE_ALPHA)
+        # With the mouse away a faint track and a clear handle show (#627); the outlines fade
+        # in as the mouse comes near.
         radius = colors.roundness * width / 2
+        track_color = (colors.inner[0], colors.inner[1], colors.inner[2],
+                       max(colors.inner[3], _SCROLL_TRACK_MIN_ALPHA))
+        canvas.fill(Rect(x, track.y, width, track.h), faded(track_color, track_alpha), radius)
         if near > 0.0:
-            canvas.fill(Rect(x, track.y, width, track.h), faded(colors.inner, near), radius)
             canvas.stroke(Rect(x, track.y, width, track.h), faded(colors.outline, near), radius)
-        item = colors.item
+        item = _scroll_handle_color(colors.item, style.back, style.text, _SCROLL_IDLE_ALPHA)
         if dragging:
             item = _lighten(item, 0.2)
         elif over and handle.contains(*state.mouse):
             item = _lighten(item, 0.1)
-        canvas.fill(Rect(x, handle.y, width, handle.h), faded(item), radius)
+        canvas.fill(Rect(x, handle.y, width, handle.h), faded(item, handle_alpha), radius)
         if near > 0.0:
             canvas.stroke(Rect(x, handle.y, width, handle.h), faded(colors.outline, near), radius)

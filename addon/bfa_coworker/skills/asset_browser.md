@@ -11,13 +11,18 @@ Lists all configured asset libraries with their names, paths, and blend file cou
 **Returns:** List of libraries with `name`, `path`, and `blend_file_count`.
 
 ### `list_asset_catalogs`
-Shows the directory structure of asset libraries, with counts of each asset type
-per folder. Use this to understand how assets are organized before searching.
+Lists the catalogs of asset libraries, read from each library's
+`blender_assets.cats.txt` (the same file `jump_to_asset_browser` reads). Folders on
+disk are not catalogs. Use this to see how assets are filed before searching, and to
+get a catalog path for `jump_to_asset_browser(catalog_path=...)`.
 
 **Parameters:**
-- `library_name` (optional): Limit to a specific library.
+- `library_name` (optional): Limit to a specific library (`LOCAL` = the current file, `ESSENTIALS` = the built-in library).
 
-**Returns:** Catalogs with paths, blend file counts, and asset type counts per directory.
+**Returns:** `catalogs` with `path` and `uuid` (plus `assets`, `counts` and up to 10
+`asset_names` once the library's index is built), `libraries` (catalog count, assets
+without a catalog) and a `message`. A library without a catalog file answers with an
+empty list and says so.
 
 ### `search_assets`
 Search across asset libraries by name, tag, or type.
@@ -64,7 +69,8 @@ Get detailed tags and metadata for an asset, including node group editor type.
 - `asset_name` (required): Name of the asset to inspect.
 - `asset_type` (optional): Type hint. Auto-detected if omitted.
 
-**Returns:** Tags, editor type, color tag, description, and metadata.
+**Returns:** Tags, editor type, color tag, description, metadata, and the asset's
+`catalog` (path) and `catalog_id` (UUID); both empty when the asset has no catalog.
 
 ### `place_asset_in_scene`
 Place a `COLLECTION` or `OBJECT` asset at an explicit world transform. Use this
@@ -180,7 +186,7 @@ best when socket names are short, plain nouns.
 ## Workflow: Assigning Materials from Asset Libraries
 
 ```python
-# 1. Browse library structure
+# 1. See which catalogs the library has (its catalog file, not its folders)
 list_asset_catalogs(library_name="My Assets")
 
 # 2. Search for materials
@@ -236,11 +242,11 @@ place_asset_in_scene(
 
 ## Catalog Path Conventions
 
-Asset libraries use directory structures for organization:
-- `Materials/` — Material assets
-- `NodeGroups/` — Geometry/shader node groups
-- `Objects/` — Mesh and object assets
-- `Worlds/` — World/environment assets
-- `Collections/` — Collection assets
+Catalogs are named in the library's `blender_assets.cats.txt`; `list_asset_catalogs`
+answers with those paths and their UUIDs. They are not the folders of the library on
+disk, and the two do not have to match: never pass a folder name as a catalog.
+Catalog paths are slash-separated and nest (`Props/Chairs` is inside `Props`). Two
+catalogs may share a path; both are listed, and a path picks the first one.
 
-Use `list_asset_catalogs` to see the actual structure of each library.
+Use `list_asset_catalogs` to see the catalogs of each library, and
+`get_asset_tags` to see which catalog an asset is in.

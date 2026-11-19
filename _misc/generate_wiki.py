@@ -3973,7 +3973,7 @@ The MCP server provides **{len(tools)} tools** for interacting with Blender.
 | Tool | Purpose |
 |------|---------|
 | `get_asset_libraries` | List configured asset libraries |
-| `list_asset_catalogs` | List catalogs within an asset library |
+| `list_asset_catalogs` | List the catalogs (paths and UUIDs) named in an asset library's catalog file |
 | `search_assets` | Search asset libraries by name/tag/type (index-backed) |
 | `get_asset_tags` | Read an asset's full metadata (tags, description, license, …) |
 | `load_asset_in_context` | Load an asset (material, node group, action, …) into the scene |

@@ -22,9 +22,25 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _TOOLS = os.path.join(_ROOT, "mcp", "blmcp", "tools")
 
 
+def _expand_includes(path, source):
+    """Splice ``# @include_begin`` blocks, mirroring ``tools_helpers``."""
+    out, skip = [], False
+    for line in source.splitlines(True):
+        if line.startswith("# @include_begin: "):
+            name = line[len("# @include_begin: "):].rstrip()
+            with open(os.path.join(os.path.dirname(path), name), "r", encoding="utf-8") as fh:
+                out.append(fh.read() + chr(10))
+            skip = True
+        elif skip:
+            skip = not line.startswith("# @include_end")
+        else:
+            out.append(line)
+    return "".join(out)
+
+
 def _load_path(path, name):
     with open(path, "r", encoding="utf-8") as fh:
-        source = fh.read()
+        source = _expand_includes(path, fh.read())
     module = types.ModuleType(name)
     exec(compile(source, path, "exec"), module.__dict__)  # pylint: disable=exec-used
     return module

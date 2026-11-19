@@ -17,7 +17,7 @@ What this buys:
   instead of appending datablocks into the live session (no junk in
   ``bpy.data``, no undo steps, no append renames).
 - The index captures the full Asset Details region metadata -- tags,
-  description, author, copyright, license, catalog, color tag and
+  description, author, copyright, license, catalog UUID, color tag and
   ``preferred_import_method`` (``APPEND`` / ``LINK`` / ``PACK``) plus
   per-type facts (node counts, socket interface for node groups) -- so
   ``load_asset_in_context`` can honor an asset's self-declared import
@@ -45,7 +45,10 @@ import time
 
 # Keep this in sync with the schema written by the embedded indexer script.
 # 2: indexes written by schema 1 are empty (the indexer stored no asset), so they are rebuilt.
-_BLMCP_INDEX_SCHEMA = 2
+# 3: an entry's "catalog" (a UUID, the null UUID for no catalog) became "catalog_id" ("" for no catalog)
+#    and "catalog_simple_name", and "is_asset" tells assets from the other datablocks of the .blend files
+#    (the index lists every datablock: search and load find them by name); the catalog's path is read from the library's catalog file when answering.
+_BLMCP_INDEX_SCHEMA = 3
 
 
 # ---------------------------------------------------------------------------
@@ -77,16 +80,15 @@ def _str_attr(asset_data, attr):
     return str(value)
 
 
-def _catalog_name(asset_data):
-    # AssetMetaData has catalog_id; catalog_simple_name appeared in 4.x.
-    simple = _str_attr(asset_data, "catalog_simple_name")
-    if simple:
-        return simple
-    catalog_id = _str_attr(asset_data, "catalog_id")
-    if catalog_id:
-        # Last path component, e.g. "tree/foliage/My Tree" -> "My Tree".
-        return catalog_id.rsplit("/", 1)[-1]
-    return ""
+_NULL_CATALOG_UUID = "00000000-0000-0000-0000-000000000000"
+
+
+def _catalog_id(asset_data):
+    # The catalog's UUID; "" for an asset without a catalog (Blender stores the null UUID then).
+    value = _str_attr(asset_data, "catalog_id").strip()
+    if value.lower() == _NULL_CATALOG_UUID:
+        return ""
+    return value
 
 
 def _preferred_method(asset_data):
@@ -130,6 +132,7 @@ def _node_interface(ng):
 
 def _entry(datablock, asset_type, blend_rel):
     asset_data = _asset_data(datablock)
+    catalog_id = _catalog_id(asset_data) if asset_data else ""
     entry = {
         "name": datablock.name,
         "type": asset_type,
@@ -139,7 +142,9 @@ def _entry(datablock, asset_type, blend_rel):
         "author": _str_attr(asset_data, "author") if asset_data else "",
         "copyright": _str_attr(asset_data, "copyright") if asset_data else "",
         "license": _str_attr(asset_data, "license") if asset_data else "",
-        "catalog": _catalog_name(asset_data) if asset_data else "",
+        "is_asset": bool(asset_data),
+        "catalog_id": catalog_id,
+        "catalog_simple_name": _str_attr(asset_data, "catalog_simple_name") if catalog_id else "",
         "color_tag": _str_attr(datablock, "color_tag") or "NONE",
     }
     preferred, use_preferred = _preferred_method(asset_data) if asset_data else ("", False)
@@ -262,7 +267,7 @@ def main():
     marker_path = args[2] if len(args) > 2 else ""   # the caller's "build running" marker
     _MARKER[0] = marker_path
     index = {
-        "schema": 2,
+        "schema": 3,
         "library_path": os.path.normpath(lib_dir),
         "built_at": time.time(),
         "files": {},

@@ -33,7 +33,12 @@ _HELPERS = ("agent_line", "needs_agent_line", "model_line")
 # right-click menu of captions are drawn: (file, classes and functions whose body draws them).
 _DRAWN_IN = (("captions_ops.py", ("BFACW_MT_captions", "_draw_context_menu")),
              ("reframe.py", ("BFACW_MT_reframe",)),
-             ("transcript_edit_ops.py", ("BFACW_PT_transcript", "_draw_header")))
+             ("transcript_edit_ops.py", ("BFACW_PT_transcript", "_draw_header")),
+             # the Reframe sidebar box, the toolshelf box and the Strip menu entries draw through these
+             # (``layout.operator("bfacw.reframe_layout", icon_value=...)``: icon_value, not a wand-icon helper)
+             ("reframe_layouts.py", ("BFACW_PT_reframe_sidebar", "BFACW_PT_reframe_toolshelf",
+                                     "BFACW_MT_reframe_layout", "_layout_button", "_action_buttons",
+                                     "_draw_buttons")))
 
 
 def _load_spec():
@@ -171,9 +176,17 @@ class EveryWand(unittest.TestCase):
         drawn = _drawn_in_menus(self.classes)
         self.assertTrue({"bfacw.captions_import_srt", "bfacw.reframe", "bfacw.reframe_follow_subject",
                          "bfacw.transcript_apply", "bfacw.transcript_toggle", "bfacw.transcript_make_captions",
-                         "bfacw.transcript_remove_fillers", "bfacw.transcript_seek"} <= drawn, drawn)
+                         "bfacw.transcript_remove_fillers", "bfacw.transcript_seek",
+                         "bfacw.reframe_layout", "bfacw.reframe_swap", "bfacw.reframe_reset"} <= drawn, drawn)
         self.assertEqual(sorted(drawn - set(SPEC.WAND_OPERATORS)), [],
                          "drawn in a Coworker menu or panel but not in wand/spec.py WAND_OPERATORS")
+
+    def test_a_reframe_operator_missing_from_the_registry_is_caught(self) -> None:
+        drawn = _drawn_in_menus(self.classes)
+        for idname in ("bfacw.reframe_layout", "bfacw.reframe_swap", "bfacw.reframe_reset"):
+            self.assertIn(idname, drawn)
+            without = set(SPEC.WAND_OPERATORS) - {idname}
+            self.assertEqual(sorted(drawn - without), [idname], idname)
 
     def test_the_wand_without_the_helper_is_caught(self) -> None:
         node = ast.parse('class A:\n    bl_idname = "x.y"\n    bl_description = "plain"\n').body[0]

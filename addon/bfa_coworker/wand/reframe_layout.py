@@ -61,6 +61,8 @@ import math
 from dataclasses import dataclass
 from typing import NamedTuple
 
+from .spec import agent_line, model_line
+
 
 @dataclass(frozen=True)
 class Layout:
@@ -71,7 +73,7 @@ class Layout:
 
     id: str
     label: str
-    description: str
+    text: str
     parts: tuple[tuple[int, int], ...]          # (numerator, denominator) of the frame's height, top first
     modifier: str = ""
     tracked: bool = False
@@ -79,39 +81,47 @@ class Layout:
     fallback: str = "NONE"
     ready: bool = True
     short: str = ""                            # the button's own text
+    needs: str = ""                            # the part that needs a model (the tooltip's last line says so)
+    line: str = ""                             # or the whole last line, for a layout that is model work
 
+    @property
+    def description(self) -> str:
+        """The tooltip: *text*, then its last line (#607)."""
+        if self.line:
+            return model_line(self.text, self.line)
+        return agent_line(self.text, self.needs)
 
-_WORKS = "Works without the agent started."
 
 LAYOUTS: tuple[Layout, ...] = (
     Layout("full", "Full Frame",
            "One picture filling the whole frame: the centre of the shot, cropped to fit, nothing stretched. "
-           "Pan and zoom it afterwards in the Reframe modifier.\n" + _WORKS,
+           "Pan and zoom it afterwards in the Reframe modifier.",
            ((1, 1),), "CROP", False, "reframe_full", "FULLSCREEN_ENTER"),
     Layout("full_blur", "Full Frame, Blur Fill",
-           "The whole shot fitted inside the frame, over a blurred, dimmed copy of itself.\n" + _WORKS,
+           "The whole shot fitted inside the frame, over a blurred, dimmed copy of itself.",
            ((1, 1),), "BLUR_FILL", False, "reframe_full_blur", "IMAGE_BACKGROUND"),
     Layout("full_tracked", "Full Frame, Tracked",
            "One picture filling the frame that follows the subject: it samples a few frames and keys the pan "
-           "from where a vision model sees the subject.\nWorks without the agent started, except the tracking, "
-           "which needs a connected vision-capable model.",
-           ((1, 1),), "CROP", True, "reframe_full_tracked", "TRACKER"),
+           "from where a vision model sees the subject.",
+           ((1, 1),), "CROP", True, "reframe_full_tracked", "TRACKER",
+           needs="the tracking, which needs a connected vision-capable model"),
     Layout("split_half", "Split, Half and Half",
            "Two crops of the same footage, one above the other, 50 / 50. Each is an ordinary strip you can move "
-           "in the preview.\n" + _WORKS,
+           "in the preview.",
            ((1, 2), (1, 2)), "", False, "reframe_split_half", "SPLIT_HORIZONTAL"),
     Layout("split_top", "Split, Top Bias",
            "Two crops of the same footage: two thirds on top, one third below. Each is an ordinary strip you can "
-           "move in the preview.\n" + _WORKS,
+           "move in the preview.",
            ((2, 3), (1, 3)), "", False, "reframe_split_top", "ALIGN_TOP"),
     Layout("split_bottom", "Split, Bottom Bias",
            "Two crops of the same footage: one third on top, two thirds below. Each is an ordinary strip you can "
-           "move in the preview.\n" + _WORKS,
+           "move in the preview.",
            ((1, 3), (2, 3)), "", False, "reframe_split_bottom", "ALIGN_BOTTOM"),
     Layout("track_all", "Track All",
            "In a split, every part follows its own subject. Until then the parts keep a fixed crop you can "
-           "move.\nNeeds subject finding (coming).",
-           ((1, 2), (1, 2)), "", True, "reframe_track_all", "TRACKING", False),
+           "move.",
+           ((1, 2), (1, 2)), "", True, "reframe_track_all", "TRACKING", False,
+           line="Needs subject finding (coming)."),
 )
 _SHORT = {'full': 'Full Frame', 'full_blur': 'Blur Fill', 'full_tracked': 'Tracked', 'split_half': 'Half and Half', 'split_top': 'Top Bias', 'split_bottom': 'Bottom Bias', 'track_all': 'Track All'}
 LAYOUTS = tuple(Layout(**{**item.__dict__, "short": _SHORT[item.id]}) for item in LAYOUTS)

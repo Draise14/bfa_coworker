@@ -55,7 +55,7 @@ class LayoutEntry:
     greyed out when the layout isn't built yet (Track All)."""
 
     __slots__ = ("item", "pressed", "poll", "enabled")
-    operator = "bfacw.reframe_layout"
+    operator = "bfacw.reframe_layout"      # (the draw below names it too, as the tooltip test reads it)
 
     def __init__(self, item: rl.Layout, pressed: bool = False):
         self.item, self.pressed, self.poll, self.enabled = item, pressed, True, item.ready
@@ -70,9 +70,9 @@ class LayoutEntry:
                                   "depress": self.pressed}
         value = icons.icon_id(self.item.icon) if self.item.icon else 0
         if value:
-            op = host.operator(self.operator, icon_value=value, **kwargs)
+            op = host.operator("bfacw.reframe_layout", icon_value=value, **kwargs)
         else:
-            op = host.operator(self.operator, icon=_blender_icon(self.item.fallback), **kwargs)
+            op = host.operator("bfacw.reframe_layout", icon=_blender_icon(self.item.fallback), **kwargs)
         op.layout = self.item.id
 
 

@@ -371,6 +371,144 @@ class TestTopEdge(_Surface):
         self.assertEqual(self.box.max_lines, ib._MAX_VISIBLE_LINES)
 
 
+class TestSizedByHand(_Surface):
+    """#626: a size set by hand is the size the box keeps; a double-click goes back to growing."""
+
+    def lines(self):
+        return self.box._visible
+
+    def double_click_edge(self):
+        s = self.surface
+        edge = _hit(s, "input_resize")
+        x, y = edge.x + edge.w / 2, edge.y + edge.h / 2
+        for _ in range(2):
+            s.on_press(x, y)
+            s.on_release(x, y)
+        _draw(s)
+
+    drag_edge = TestTopEdge.drag_edge
+
+    def test_never_sized_grows_with_the_text_as_before(self):
+        self.assertFalse(self.box.sized)
+        self.assertEqual(self.lines(), ib._MIN_VISIBLE_LINES)
+        self.fill("one\ntwo\nthree")
+        self.assertEqual(self.lines(), 3)
+        self.fill(FORTY)
+        self.assertEqual(self.lines(), ib._MAX_VISIBLE_LINES)
+
+    def test_sized_then_short_text_keeps_the_size(self):
+        self.drag_edge(st.Style().line_height * 4)
+        self.assertTrue(self.box.sized)
+        want = ib._MIN_VISIBLE_LINES + 4
+        for text in ("", "one", "one\ntwo\nthree"):
+            self.fill(text)
+            self.assertEqual(self.lines(), want, repr(text))
+        self.assertEqual(self.box.max_lines, want)
+
+    def test_sized_then_long_text_scrolls_inside_it(self):
+        self.drag_edge(st.Style().line_height * 2)
+        self.fill()
+        self.assertEqual(self.lines(), ib._MIN_VISIBLE_LINES + 2)
+        self.assertTrue(self.box.can_scroll())
+        self.assertTrue(_caret_shown(self.box))
+
+    def test_the_bottom_stays_put_and_the_box_grows_up(self):
+        bottom = self.box.rect.y
+        self.drag_edge(st.Style().line_height * 3)
+        self.fill("")
+        self.assertAlmostEqual(self.box.rect.y, bottom)
+        self.assertGreater(self.box.rect.top, bottom + 3 * st.Style().line_height)
+
+    def test_ctrl_up_and_down_size_it_by_hand(self):
+        self.fill("one")
+        _key(self.box, "UP_ARROW", ctrl=True)
+        self.assertTrue(self.box.sized)
+        self.assertEqual(self.box.max_lines, 3)                       # from the 2 lines it showed
+        self.fill("")
+        self.assertEqual(self.lines(), 3)
+        _key(self.box, "UP_ARROW", ctrl=True)
+        _draw(self.surface)
+        self.assertEqual(self.lines(), 4)
+        _key(self.box, "DOWN_ARROW", ctrl=True)
+        _draw(self.surface)
+        self.assertEqual(self.lines(), 3)
+
+    def test_a_double_click_on_the_edge_grows_with_the_text_again(self):
+        self.drag_edge(st.Style().line_height * 4)
+        self.fill("one")
+        self.assertEqual(self.lines(), ib._MIN_VISIBLE_LINES + 4)
+        self.double_click_edge()
+        self.assertFalse(self.box.sized)
+        self.assertEqual(self.lines(), ib._MIN_VISIBLE_LINES)   # "one": the minimum
+        self.assertEqual(self.box.max_lines, ib._MIN_VISIBLE_LINES + 4)              # the limit is kept
+        self.fill(FORTY)
+        self.assertEqual(self.lines(), ib._MIN_VISIBLE_LINES + 4)
+
+    def test_the_double_click_neither_drags_nor_moves_focus_nor_the_caret(self):
+        self.fill("hello")
+        self.box.model.select_all()
+        h0 = self.box.rect.h
+        self.double_click_edge()
+        self.assertTrue(self.box.focused)
+        self.assertIsNone(self.surface.pressed)
+        self.assertFalse(self.box.resizing)
+        self.assertEqual(self.box.model.selected_text(), "hello")
+        self.assertAlmostEqual(self.box.rect.h, h0)
+        self.assertFalse(self.box.sized)                              # a click alone never sizes
+
+    def test_the_cap_wins_without_changing_the_kept_size(self):
+        kept = {"lines": 60, "sized": True}
+        s = sf.ChatSurface(clock=_Clock())
+        s.box.on_lines = lambda n: kept.update(lines=n)
+        s.box.on_sized = lambda b: kept.update(sized=b)
+        s.box.max_lines, s.box.sized = kept["lines"], kept["sized"]
+        for text in ("", FORTY):
+            s.box.model.set_text(text)
+            _draw(s)
+            self.assertEqual(s.box._visible, s.box.line_cap)
+        self.assertLess(s.box.line_cap, 60)
+        self.assertEqual(kept, {"lines": 60, "sized": True})
+
+    def test_the_host_keeps_it_across_a_restart(self):
+        kept = {"lines": 6, "sized": False}
+
+        def start():
+            s = sf.ChatSurface(clock=_Clock())
+            s.box.on_lines = lambda n: kept.update(lines=n)
+            s.box.on_sized = lambda b: kept.update(sized=b)
+            s.box.max_lines, s.box.sized = kept["lines"], kept["sized"]       # as chat_editor does each frame
+            s.box.focused = True
+            _draw(s)
+            return s
+
+        s = start()
+        _key(s.box, "UP_ARROW", ctrl=True)
+        _key(s.box, "UP_ARROW", ctrl=True)
+        self.assertEqual(kept, {"lines": 4, "sized": True})
+        s = start()                                                   # a new session
+        self.assertEqual(s.box._visible, 4)
+        s.box.model.set_text("hi")
+        _draw(s)
+        self.assertEqual(s.box._visible, 4)
+        s.box.reset_size()
+        self.assertEqual(kept["sized"], False)
+        self.assertEqual(start().box._visible, 2)
+
+    def test_the_tooltip_says_how_to_go_back(self):
+        self.assertIn("Double-click", sf.tip_for("input_resize"))
+
+    def test_the_preferences_and_the_host_carry_the_flag(self):
+        import pathlib
+        addon = pathlib.Path(__file__).resolve().parent.parent / "addon" / "bfa_coworker"
+        prefs = (addon / "preferences.py").read_text(encoding="utf-8")
+        editor = (addon / "chat_editor.py").read_text(encoding="utf-8")
+        for name in ("chat_input_sized_sidebar", "chat_input_sized_editor"):
+            i = prefs.index(name + ": BoolProperty")
+            self.assertIn("default=False", prefs[i:i + 400])
+            self.assertIn(name, editor)
+        self.assertIn("box.on_sized", editor)
+
+
 class TestRemembered(unittest.TestCase):
 
     def test_the_box_shows_what_the_host_keeps(self):

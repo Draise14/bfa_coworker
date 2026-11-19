@@ -200,6 +200,19 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         description="Most lines the Coworker editor's input grows to before it scrolls (drag its top edge)",
         default=6, min=2, max=60,
     )
+    # #626: whether the height above was set by hand (then the input keeps exactly that many
+    # lines whatever its text) or it still grows with the text (a fresh install; a double-click
+    # on the input's top edge goes back to this).
+    chat_input_sized_sidebar: BoolProperty(  # type: ignore[valid-type]
+        name="Sidebar Input Sized By Hand",
+        description="The sidebar chat's input keeps the height you dragged instead of growing with its text",
+        default=False,
+    )
+    chat_input_sized_editor: BoolProperty(  # type: ignore[valid-type]
+        name="Editor Input Sized By Hand",
+        description="The Coworker editor's input keeps the height you dragged instead of growing with its text",
+        default=False,
+    )
 
     # -- Long requests (auto-continue) -----------------------------
 

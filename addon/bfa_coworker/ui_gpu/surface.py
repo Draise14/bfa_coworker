@@ -88,7 +88,7 @@ TIPS: dict[str, str] = {
     "input": "Your message: Enter sends, Shift+Enter is a new line, @ mentions, / runs an agent command",
     "queue": "Queue this message: it goes when the running turn ends",
     "resize": "Drag to make the chat taller or shorter",
-    "input_resize": "Drag to make the input taller or shorter (Ctrl+Up / Ctrl+Down while typing)",
+    "input_resize": "Drag to make the input taller or shorter (Ctrl+Up / Ctrl+Down while typing). Double-click: grow with the text again",
     "scroll_track": "Click to page up or down",
     "scroll_handle": "Drag to scroll the chat",
     "approve:once": "Allow this one step (the next one asks again)",
@@ -359,6 +359,10 @@ class ChatSurface:
             self.pressed = "input"            # a drag selects (#451)
             return True
         if widget == "input_resize":
+            if double:              # back to growing with the text (#626); no drag, focus stays
+                self.box.reset_size()
+                self.pressed = None
+                return True
             self.box.begin_resize()
         self.pressed = widget
         return True

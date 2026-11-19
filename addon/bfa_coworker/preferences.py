@@ -1005,7 +1005,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
         items=[
             # The numbers are the items' positions before 4K / 8K went (#631): Blender stores
             # an enum as that number, so the kept presets still read as themselves.
-            ("16384", "16K", "16384 tokens -- the smallest that works for agent work", 2),
+            ("16384", "16K", "16384 tokens -- the smallest offered; tight for agent work", 2),
             ("32768", "32K", "32768 tokens -- recommended default", 3),
             ("65536", "64K", "65536 tokens -- long conversations, needs lots of memory", 4),
             ("131072", "128K", "131072 tokens -- only on high-end hardware", 5),

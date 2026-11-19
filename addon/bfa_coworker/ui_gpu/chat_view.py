@@ -114,7 +114,7 @@ _LIVE_MAX_LINES = 8    # the live-thinking box grows with its text up to this ma
 _LIVE_TAIL_CHARS = 4000    # ... and lays out only the newest part of a long chain of thought
 _SCROLL_IDLE_ALPHA = 0.75   # the scrollbar handle's strength with the mouse away (#279, #627)
 _SCROLL_IDLE_TRACK = 0.35   # the faint track's strength with the mouse away (#627)
-_SCROLL_TRACK_MIN_ALPHA = 0.5  # the default themes' scroll track (wcol_scroll inner) is fully transparent: show it at least this much
+_SCROLL_TRACK_MIN_ALPHA = 0.5  # the default themes' scroll track (wcol_scroll inner) is fully transparent: show it this much
 _SCROLL_MIN_CONTRAST = 0.22  # least luminance gap between the idle handle and the chat's background
 _FRAME_LINES = 14      # code frames show this many lines (Show all for the rest)
 _RESULT_LINES = 3      # a tool's result: a few lines (often not for reading; Show all: #236)
@@ -201,17 +201,20 @@ def _scroll_handle_color(item: RGBA, back: RGBA, text: RGBA, strength: float,
                          min_gap: float = _SCROLL_MIN_CONTRAST) -> RGBA:
     """The theme's scrollbar handle colour, moved toward the text colour only as far as needed (#627).
 
-    Rule: the handle as drawn (the colour at *strength* over the chat's background) must differ
-    from the background in luminance (Rec. 709 weights) by at least *min_gap*.  If the theme's
-    colour does so already it is returned unchanged; otherwise it is mixed toward the panel text
-    colour (light on a dark theme, dark on a light one) by the least amount that reaches the gap,
-    or all the way to the text colour when even that cannot.  The alpha is kept."""
+    Rule: the handle as drawn (its colour at *strength*, times its own alpha, blended over the chat's
+    background) must differ from the background in luminance (Rec. 709 weights) by at least *min_gap*,
+    on either side of the background.  If it does, the theme's colour is returned unchanged; otherwise
+    it is mixed toward the panel text colour (light on a dark theme, dark on a light one) by the least
+    amount that reaches the gap, or all the way to the text colour when even that cannot.  The alpha
+    is kept."""
     lb, li, lt = _luma(back), _luma(item), _luma(text)
-    sign = 1.0 if lt >= lb else -1.0
-    d_item = strength * (li - lb) * sign
-    if d_item >= min_gap:
+    weight = strength * item[3]
+    d_item = weight * (li - lb)
+    if abs(d_item) >= min_gap:
         return item
-    d_text = strength * (lt - lb) * sign
+    sign = 1.0 if lt >= lb else -1.0
+    d_item *= sign
+    d_text = weight * (lt - lb) * sign
     if d_text <= min_gap or d_text <= d_item:
         t = 1.0
     else:
@@ -1248,7 +1251,7 @@ class ChatView:
         # in as the mouse comes near.
         radius = colors.roundness * width / 2
         track_color = (colors.inner[0], colors.inner[1], colors.inner[2],
-                       max(colors.inner[3], _SCROLL_TRACK_MIN_ALPHA))
+                       colors.inner[3] if colors.inner[3] > 0.0 else _SCROLL_TRACK_MIN_ALPHA)
         canvas.fill(Rect(x, track.y, width, track.h), faded(track_color, track_alpha), radius)
         if near > 0.0:
             canvas.stroke(Rect(x, track.y, width, track.h), faded(colors.outline, near), radius)

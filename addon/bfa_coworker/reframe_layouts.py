@@ -48,14 +48,11 @@ from .wand import reframe_entries as re_entries
 from .wand import reframe_layout as rl
 from .wand import scene as _seq
 from .wand import sequencer as _wand
+from .wand.spec import agent_line, model_line
 
 CATEGORY = "Coworker"
 PANEL_LABEL = "Reframe"
 SWAP_ICON, RESET_ICON = "ARROW_LEFTRIGHT", "LOOP_BACK"
-SWAP_TIP = ("Swap the top and bottom of a split: what the top part shows goes to the bottom and the other way "
-            "round.\nWorks without the agent started.")
-RESET_TIP = ("Put the selected strips back to their layout's default framing: a split part to the centre of the "
-             "picture, a Full Frame strip centred with no keys.\nWorks without the agent started.")
 # Strip properties a duplicate takes over (it is a faithful copy: only crop and transform are the layout's).
 _COPIED = ("blend_type", "blend_alpha", "color_multiply", "color_saturation", "mute", "use_flip_x", "use_flip_y",
            "alpha_mode", "multiply_alpha", "use_deinterlace", "use_float", "color_tag", "use_reverse_frames",
@@ -336,9 +333,12 @@ class BFACW_OT_reframe_layout(Operator):
     @classmethod
     def description(cls, _context: Any, properties: Any) -> str:
         try:
-            return rl.layout(properties.layout).description
+            item = rl.layout(properties.layout)
         except (KeyError, AttributeError):
             return cls.__doc__ or ""
+        if item.line:
+            return model_line(item.text, item.line)
+        return agent_line(item.text, item.needs)
 
     def execute(self, context: Any) -> set[str]:
         scene = _seq.sequencer_scene(context)
@@ -350,7 +350,8 @@ class BFACW_OT_reframe_swap(Operator):
     """Swap the top and bottom of the selected split"""
     bl_idname = "bfacw.reframe_swap"
     bl_label = "Swap"
-    bl_description = SWAP_TIP
+    bl_description = agent_line("Swap the top and bottom of a split: what the top part shows goes to the bottom "
+                                "and the other way round.")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
@@ -370,7 +371,8 @@ class BFACW_OT_reframe_reset(Operator):
     """Put the selected strips back to their layout's default framing"""
     bl_idname = "bfacw.reframe_reset"
     bl_label = "Reset Framing"
-    bl_description = RESET_TIP
+    bl_description = agent_line("Put the selected strips back to their layout's default framing: a split part to "
+                                "the centre of the picture, a Full Frame strip centred with no keys.")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod

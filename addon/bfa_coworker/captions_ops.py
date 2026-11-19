@@ -80,6 +80,7 @@ from . import captions as cap
 from .captions import CaptionsError
 from .shared import icon as safe_icon
 from .wand import scene as _seq
+from .wand.spec import agent_line
 
 _NAME_RE = re.compile(r"^cap_(\d{4,})$")
 
@@ -2497,6 +2498,7 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
     """Caption the selected sound or movie strips: styled text strips on a Captions channel, in sync with the speech"""
     bl_idname = "bfacw.auto_captions"
     bl_label = "Auto Captions"
+    bl_description = agent_line(__doc__, also="Needs Speech set up once (Preferences) to transcribe.")
     bl_options = {'REGISTER', 'UNDO'}
 
     style: EnumProperty(  # type: ignore[valid-type]
@@ -2879,6 +2881,7 @@ class BFACW_OT_captions_import_srt(Operator, ImportHelper):  # type: ignore[misc
     """Import an SRT subtitle file as styled caption strips at its cue times"""
     bl_idname = "bfacw.captions_import_srt"
     bl_label = "Import SRT"
+    bl_description = agent_line(__doc__)
     bl_options = {'REGISTER', 'UNDO'}
 
     filename_ext = ".srt"
@@ -2912,6 +2915,7 @@ class BFACW_OT_captions_export_srt(Operator, ExportHelper):  # type: ignore[misc
     """Export the captions (the Captions channel, hand edits too) as an SRT subtitle file"""
     bl_idname = "bfacw.captions_export_srt"
     bl_label = "Export SRT"
+    bl_description = agent_line(__doc__)
 
     filename_ext = ".srt"
     filter_glob: StringProperty(default="*.srt", options={'HIDDEN'})  # type: ignore[valid-type]
@@ -2946,9 +2950,10 @@ class BFACW_OT_captions_refit_words(Operator):  # type: ignore[misc]
     """Put the word highlights of Word-by-word captions back on their words, from the caption's current font, bold, italic, size, alignment, wrap width and position"""
     bl_idname = "bfacw.captions_refit_words"
     bl_label = "Refit Word Highlights"
-    bl_description = ("Put the word highlights of Word-by-word captions back on their words: after the caption's "
-                      "font, bold, italic, size, alignment, wrap width, position or text changed. This happens by "
-                      "itself a moment after the change; this is the manual way. Selected captions, else all")
+    bl_description = agent_line("Put the word highlights of Word-by-word captions back on their words: after the "
+                                "caption's font, bold, italic, size, alignment, wrap width, position or text changed. "
+                                "This happens by itself a moment after the change; this is the manual way. Selected "
+                                "captions, else all")
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod

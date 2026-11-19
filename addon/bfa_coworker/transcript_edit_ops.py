@@ -56,6 +56,7 @@ from bpy.types import Operator, Panel  # pylint: disable=import-error
 from . import transcript_edit as te
 from .shared import icon as safe_icon
 from .wand import scene as _seq_scene
+from .wand.spec import agent_line
 
 CATEGORY = "Coworker"
 WHAT = "Edit by Transcript"
@@ -825,6 +826,7 @@ class BFACW_OT_open_transcript(Operator):  # type: ignore[misc]
 
     bl_idname = "bfacw.open_transcript"
     bl_label = "Edit Transcript"
+    bl_description = agent_line(__doc__)
     bl_options = {'REGISTER', 'UNDO'}
 
     transcript_path: StringProperty(name="Transcript File", subtype='FILE_PATH', options={'SKIP_SAVE'},  # type: ignore[valid-type]
@@ -881,6 +883,7 @@ class BFACW_OT_transcript_apply(_TextOp, Operator):  # type: ignore[misc]
 
     bl_idname = "bfacw.transcript_apply"
     bl_label = "Apply"
+    bl_description = agent_line(__doc__)
     bl_options = {'REGISTER', 'UNDO'}
 
     confirmed: BoolProperty(name="Confirmed", default=False, options={'SKIP_SAVE', 'HIDDEN'})  # type: ignore[valid-type]
@@ -920,6 +923,7 @@ class BFACW_OT_transcript_refresh(_TextOp, Operator):  # type: ignore[misc]
 
     bl_idname = "bfacw.transcript_refresh"
     bl_label = "Refresh from Timeline"
+    bl_description = agent_line(__doc__)
     bl_options = {'REGISTER', 'UNDO'}
 
     def invoke(self, context, _event):
@@ -952,6 +956,7 @@ class BFACW_OT_transcript_jump_to_playhead(_TextOp, Operator):  # type: ignore[m
 
     bl_idname = "bfacw.transcript_jump_to_playhead"
     bl_label = "Jump to Playhead"
+    bl_description = agent_line(__doc__)
 
     def execute(self, context):
         text = self.text(context)
@@ -1039,6 +1044,7 @@ class BFACW_OT_transcript_seek(_TextOp, Operator):  # type: ignore[misc]
 
     bl_idname = "bfacw.transcript_seek"
     bl_label = "Play from Line"
+    bl_description = agent_line(__doc__)
 
     line: IntProperty(name="Line", default=-1, options={'SKIP_SAVE'})  # type: ignore[valid-type]
     play: BoolProperty(name="Play", default=True, options={'SKIP_SAVE'},  # type: ignore[valid-type]
@@ -1080,14 +1086,15 @@ class BFACW_OT_transcript_toggle(_TextOp, Operator):  # type: ignore[misc]
 
     bl_idname = "bfacw.transcript_toggle"
     bl_label = "Transcript Option"
+    bl_description = agent_line(__doc__)
 
     option: StringProperty(options={'SKIP_SAVE'})  # type: ignore[valid-type]
 
     @classmethod
     def description(cls, _context, props):
-        return {"live": "Live: apply the text by itself a moment after you stop typing (each apply is one undo step)",
-                "follow": "Follow: a click on a line moves the playhead there, and the text scrolls along "
-                          "with playback"}.get(props.option, cls.__doc__)
+        return agent_line({"live": "Live: apply the text by itself a moment after you stop typing (each apply is one undo step)",
+                           "follow": "Follow: a click on a line moves the playhead there, and the text scrolls along "
+                                     "with playback"}.get(props.option, cls.__doc__))
 
     def execute(self, context):
         text = self.text(context)
@@ -1138,6 +1145,7 @@ class BFACW_OT_transcript_remove_fillers(_TextOp, Operator):  # type: ignore[mis
 
     bl_idname = "bfacw.transcript_remove_fillers"
     bl_label = "Remove Filler Words"
+    bl_description = agent_line(__doc__)
     bl_options = {'REGISTER', 'UNDO'}
 
     phrases: BoolProperty(name="Also “you know”, “I mean”, “like”...", default=False,  # type: ignore[valid-type]
@@ -1233,6 +1241,7 @@ class BFACW_OT_transcript_remove_silences(_TextOp, Operator):  # type: ignore[mi
 
     bl_idname = "bfacw.transcript_remove_silences"
     bl_label = "Remove Silences"
+    bl_description = agent_line(__doc__)
     bl_options = {'REGISTER', 'UNDO'}
 
     def invoke(self, context, event):
@@ -1266,6 +1275,7 @@ class BFACW_OT_transcript_make_captions(_TextOp, Operator):  # type: ignore[misc
 
     bl_idname = "bfacw.transcript_make_captions"
     bl_label = "Make Captions"
+    bl_description = agent_line(__doc__, also="Needs Speech set up once (Preferences) to transcribe.")
     bl_options = {'REGISTER', 'UNDO'}
 
     def invoke(self, context, _event):

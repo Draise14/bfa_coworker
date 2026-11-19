@@ -41,7 +41,7 @@ from typing import Any
 
 import bpy  # pylint: disable=import-error
 
-from . import agent_controller, mcp_to_blender_server
+from . import agent_controller, magic_wording, mcp_to_blender_server
 from .shared import CHAT_MODE_ITEMS, HARNESS_PRESET_ITEMS, icon as safe_icon, is_bforartists
 from .ui_gpu import draw_trace, input_capture, render
 from .ui_gpu import layout as gpu_layout
@@ -111,6 +111,13 @@ def _status(context: Any) -> TopBar:
     return top
 
 
+def _chat_mode_buttons() -> tuple[tuple[str, str, str], ...]:
+    """The chat-mode buttons (id, label, icon); the Coworker mode wears the wizard with
+    Magic Wording on (#608).  Its name stays: a mode is something you search for."""
+    return tuple((item[0], item[1], magic_wording.agent_icon(item[3]) if item[0] == "AGENT" else item[3])
+                 for item in CHAT_MODE_ITEMS)
+
+
 def _mode_status(context: Any) -> TopBar:
     """Mode, status and Start / Stop, worded like the panel chat."""
     from . import ui_chat
@@ -141,7 +148,7 @@ def _mode_status(context: Any) -> TopBar:
         return TopBar(mode_label="External Agent", mode_icon=_mode_icon("EXTERNAL_AGENT"), status=status,
                       status_icon=icon,
                       running=running, start_label="Connect",
-                      chat_modes=tuple((item[0], item[1], item[3]) for item in CHAT_MODE_ITEMS),
+                      chat_modes=_chat_mode_buttons(),
                       chat_mode=getattr(props, "chat_mode", ""))
     local = prefs is not None and prefs.operating_mode == "LOCAL_LLM"
     status = getattr(props, "chat_status", "") or ""
@@ -164,7 +171,7 @@ def _mode_status(context: Any) -> TopBar:
     return TopBar(mode_label="Local LLM" if local else "Remote API",
                   mode_icon=_mode_icon("LOCAL_LLM" if local else "REMOTE_API"),
                   status=status, status_icon=icon, running=ok, error=bool(state.error),
-                  chat_modes=tuple((item[0], item[1], item[3]) for item in CHAT_MODE_ITEMS),
+                  chat_modes=_chat_mode_buttons(),
                   chat_mode=getattr(props, "chat_mode", ""))
 
 
@@ -300,7 +307,7 @@ def _surface(region: Any, compact: bool) -> ChatSurface:
         surface = ChatSurface(compact=compact,
                               box=InputBox(provider=_mentions, categories=_mention_categories(),
                                            command_provider=_commands))
-        surface.view.agent_icon = AGENT_ICON
+        surface.view.agent_icon = AGENT_ICON       # drawn through magic_wording.agent_icon (#608)
         surface.view.image_size = _image_size
         _SURFACES[key] = (surface, region)
         return surface
@@ -369,8 +376,8 @@ def _sync_box(surface: ChatSurface, props: Any, busy: bool, running: bool, harne
             ("attach_menu", "IMAGE_DATA"), ("attach_render", "RENDER_STILL"), ("attach_screen", "MAKE_SCREENSHOT"),
         ) if t is not None)
     box.busy = busy
-    box.placeholder = ("Ask Coworker..." if running else
-                       "Start Coworker to chat (Start, above)" if not harness else "")
+    box.placeholder = magic_wording.agent_label(
+        "Ask Coworker..." if running else "Start Coworker to chat (Start, above)" if not harness else "")
 
 
 def _view_zoom(region: Any) -> float:

@@ -2961,10 +2961,11 @@ class BFACW_OT_agent_approve(Operator):  # type: ignore[misc]
 
     @classmethod
     def description(cls, _context, properties) -> str:
-        return {"once": "Let the agent run this tool this one time",
-                "always": "Let the agent run this tool without asking again, until you stop the agent",
-                "deny": "Don't run it: the agent is told no and carries on without it"}.get(
-                    properties.choice, cls.__doc__)
+        return _magic.agent_label({
+            "once": "Let the agent run this tool this one time",
+            "always": "Let the agent run this tool without asking again, until you stop the agent",
+            "deny": "Don't run it: the agent is told no and carries on without it"}.get(
+                properties.choice, cls.__doc__))
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         from . import risky_steps, threads
@@ -4021,6 +4022,10 @@ class BFACW_OT_agent_start(Operator):  # type: ignore[misc]
     bl_label = "Start Coworker"
     bl_description = "Start the Coworker agent: MCP bridge, MCP server, and LLM backend"
 
+    @classmethod
+    def description(cls, _context, _properties) -> str:
+        return _magic.agent_label(cls.bl_description)
+
     # Restart (#564) brings the Local server back only if it ran before; Start always loads it.
     with_local_model: BoolProperty(default=True, options={'HIDDEN', 'SKIP_SAVE'})  # type: ignore[valid-type]
 
@@ -4410,6 +4415,10 @@ class BFACW_OT_agent_stop(Operator):  # type: ignore[misc]
     bl_label = "Stop Coworker"
     bl_description = "Stop the Coworker agent and all subprocesses"
 
+    @classmethod
+    def description(cls, _context, _properties) -> str:
+        return _magic.agent_label(cls.bl_description)
+
     def execute(self, context: bpy.types.Context) -> set[str]:
         wm = context.window_manager
         props = wm.bfacw_chat_props  # type: ignore[attr-defined]
@@ -4474,6 +4483,10 @@ class BFACW_OT_agent_restart(Operator):  # type: ignore[misc]
     bl_idname = "bfacw.agent_restart"
     bl_label = "Restart Coworker"
     bl_description = "Stop all components and restart the Coworker agent"
+
+    @classmethod
+    def description(cls, _context, _properties) -> str:
+        return _magic.agent_label(cls.bl_description)
 
     def execute(self, context: bpy.types.Context) -> set[str]:
         wm = context.window_manager
@@ -4898,7 +4911,7 @@ class BFACW_PT_chat_compact(Panel):  # type: ignore[misc]
         return not bpy.app.background and _compact_sidebar(context)
 
     def draw_header(self, _context: bpy.types.Context) -> None:
-        self.layout.label(text="", icon=_AGENT_ICON)
+        self.layout.label(text="", **_magic.agent_icon_args(_AGENT_ICON))
 
     def draw(self, context: bpy.types.Context) -> None:
         from . import chat_editor as _ce
@@ -5868,7 +5881,7 @@ class BFACW_PT_chat_status(Panel):  # type: ignore[misc]
         if state.mcp_server_running or (is_harness and mcp_to_blender_server.is_running()):
             restart_row = layout.row()
             restart_row.scale_y = 0.8
-            restart_row.operator("bfacw.agent_restart", icon="LOOP_BACK", text="Restart Coworker")
+            restart_row.operator("bfacw.agent_restart", icon="LOOP_BACK", text=_magic.agent_label("Restart Coworker"))
 
         # -- Mode indicator --
         external = prefs.operating_mode == "EXTERNAL_AGENT"
@@ -6056,7 +6069,7 @@ class BFACW_PT_mode_popover(Panel):  # type: ignore[misc]
         if running:
             hint = layout.row()
             hint.scale_y = 0.75
-            hint.label(text="Stop Coworker to switch modes", icon='INFO')
+            hint.label(text=_magic.agent_label("Stop Coworker to switch modes"), icon='INFO')
         mode = prefs.operating_mode
         if mode == "EXTERNAL_AGENT":
             if _acp is not None and _acp.connected:
@@ -6826,6 +6839,7 @@ def register() -> None:
 
 
 def unregister() -> None:
+    _magic.free_agent_icon()
     # Save history -- unless it's already been emptied (add-on cleanup on quit):
     # never overwrite the saved chat with nothing.
     if _has_user_messages():

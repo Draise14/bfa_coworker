@@ -1253,9 +1253,9 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
 
     magic_wording: BoolProperty(  # type: ignore[valid-type]
         name="Magic Wording",
-        description=("Show helper chats as mages, wizards and magicians, and a word about magic while "
-                     "the model thinks. Only what you see changes: what is sent to the model stays "
-                     "as it is. Off: plain \"Helper\" and \"Thinking\""),
+        description=("Show the agent as a Wizard, helper chats as mages, wizards and magicians, and a word "
+                     "about magic while the model thinks. Only what you see changes: what is sent to the model stays "
+                     "as it is. Off: plain \"Coworker\", \"Helper\" and \"Thinking\""),
         default=True,
         update=_update_magic_wording,
     )

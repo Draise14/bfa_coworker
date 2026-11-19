@@ -604,10 +604,10 @@ class ChatView:
                             if isinstance(m.get("turn_seconds"), (int, float))), None)
             # Always Coworker, with its hat, whichever engine or agent did the work: the chat's
             # voice is Coworker's (the status line says which app is connected).
-            who = "Coworker"
+            who = magic_wording.agent_label("Coworker")      # "Wizard" with Magic Wording (#608)
             label = who + ("  |  " + fmt_duration(seconds) if seconds is not None and seconds >= 1 else "")
             row_top = top
-            top = self._icon_line(canvas, x, top, self.agent_icon, label, _soft(style.text, 0.2))
+            top = self._icon_line(canvas, x, top, magic_wording.agent_icon(self.agent_icon), label, _soft(style.text, 0.2))
             done = canvas.icon_size()
             canvas.icon(self._first_line_icon(canvas, x + width - done, row_top, style.line_height),
                         "CHECKMARK", style.text)
@@ -732,7 +732,7 @@ class ChatView:
         if started:
             label += "  |  " + fmt_duration(time.time() - started)
         reasoning = _think_tail(str(getattr(live, "reasoning_text", "") or ""))
-        top = self._icon_line(canvas, x, top, self.agent_icon, label, _soft(style.text, 0.15))
+        top = self._icon_line(canvas, x, top, magic_wording.agent_icon(self.agent_icon), label, _soft(style.text, 0.15))
         if not reasoning:
             self._think_h.pop(idx, None)
             self._think_blocks.pop(idx, None)
@@ -972,7 +972,7 @@ class ChatView:
                 is_open = key in self.expanded
                 cut = len(body) > _ENTRY_CHARS and not is_open
                 shown = body[:_ENTRY_CHARS].rstrip() + "..." if cut else body
-                top = self._icon_line(canvas, row_x, row_top, self.agent_icon,
+                top = self._icon_line(canvas, row_x, row_top, magic_wording.agent_icon(self.agent_icon),
                                       "{:s}: {:s}".format(label, shown), _soft(style.text),
                                       row_w - style.line_height - pad * 0.5)
                 self._copy_button(canvas, row_x + row_w, row_top, "copythink:{:d}:{:d}".format(idx, n), body,

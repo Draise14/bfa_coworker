@@ -258,7 +258,7 @@ The `_BFACW_Preferences` class (extends `bpy.types.AddonPreferences`) contains a
 | `model_preset`              | Enum   | Curated model preset selector                        |
 | `model_preset_info`         | String | Read-only preset metadata display                    |
 | `existing_model_path`       | String | Absolute path to an existing .gguf file              |
-| `local_ctx_size`            | Int    | Context window size (4096–262144)                    |
+| `local_ctx_size`            | Int    | Context window size (16384–262144)                    |
 | `local_max_tokens`          | Int    | Max output tokens (512–131072)                       |
 | `hf_token`                  | String | HuggingFace token for gated models (password-masked) |
 | `remote_api_url`            | String | Remote API base URL                                  |

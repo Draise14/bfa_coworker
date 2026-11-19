@@ -383,6 +383,7 @@ class TestRestoreAfterRegister(unittest.TestCase):
         self.st = modules[self._PKG + ".settings_transfer"]
         self.st.restore_once.side_effect = lambda prefs, config_dir: self._restored(prefs)
         self.st.save.side_effect = lambda *args: self.events.append("save") or True
+        self.st.migrate_ctx_prefs.return_value = False      # (#631) nothing to move up here
         patcher = mock.patch.dict(sys.modules, modules)
         patcher.start()
         self.addCleanup(patcher.stop)

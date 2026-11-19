@@ -376,7 +376,7 @@ class TestFilesThatHoldASecret(unittest.TestCase):
         self.assertEqual([Path(c.args[0]).name for c in private.call_args_list], ["install.json"])
 
     def test_settings_backup_keeps_secrets_apart_and_private(self):
-        prefs = _Prefs(remote_api_key=API_KEY, hf_token=HF_TOKEN, gen_remote_key=GEN_KEY, local_ctx_size=8192)
+        prefs = _Prefs(remote_api_key=API_KEY, hf_token=HF_TOKEN, gen_remote_key=GEN_KEY, local_ctx_size=24576)
         with mock.patch("builtins.print") as out, mock.patch.object(st.os, "open", wraps=os.open) as opened:
             self.assertTrue(st.save(prefs, self.dir.name, "1.1.42"))
         out.assert_not_called()                                 # never logs the file
@@ -385,14 +385,14 @@ class TestFilesThatHoldASecret(unittest.TestCase):
         self.assertEqual(payload["format"], 2)
         self.assertEqual(payload["secrets"], {"gen_remote_key": GEN_KEY, "hf_token": HF_TOKEN,
                                               "remote_api_key": API_KEY})
-        self.assertEqual(payload["settings"], {"local_ctx_size": 8192})
+        self.assertEqual(payload["settings"], {"local_ctx_size": 24576})
         if os.name != "nt":
             self.assertEqual(os.stat(st.settings_path(self.dir.name)).st_mode & 0o777, 0o600)
         # ...and a fresh install gets them back.
         new = _Prefs(remote_api_key="", hf_token="", gen_remote_key="", local_ctx_size=4096)
         self.assertEqual(set(st.restore_once(new, self.dir.name)),
                          {"remote_api_key", "hf_token", "gen_remote_key", "local_ctx_size"})
-        self.assertEqual((new.remote_api_key, new.hf_token, new.local_ctx_size), (API_KEY, HF_TOKEN, 8192))
+        self.assertEqual((new.remote_api_key, new.hf_token, new.local_ctx_size), (API_KEY, HF_TOKEN, 24576))
 
     def test_a_secret_that_fails_to_restore_is_named_not_quoted(self):
         new = _Prefs(remote_api_key="", local_ctx_size=4096)

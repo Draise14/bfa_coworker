@@ -289,7 +289,7 @@ _SCREENSHOT_TOKENS = 1500
 # server's real window cannot be read (``/props`` unreachable) and no value
 # is configured.  Trimming slightly is always better than sending an
 # unbounded prompt that the server answers with a raw HTTP 400.
-_DEFAULT_LOCAL_CTX_FALLBACK = 8192
+_DEFAULT_LOCAL_CTX_FALLBACK = 16384
 
 # Reduced verbatim window used by a *forced* compaction (context-overflow
 # recovery).  Smaller than MAX_WINDOW_TURNS so an over-budget prompt has
@@ -311,7 +311,7 @@ _MIN_REPLY_TOKENS = 256
 _USEFUL_REPLY_TOKENS = 1024
 _MIN_THINKING_TOKENS = 256
 # Context sizes the Local preferences offer (the Context Window buttons).
-_CTX_SIZES = (8192, 16384, 32768, 65536, 131072, 262144)
+_CTX_SIZES = (16384, 32768, 65536, 131072, 262144)
 # The domains an editor's chat works in: ranked as related when a request has
 # to be made smaller (#544).  Bforartists and Blender share these editor kinds.
 _EDITOR_DOMAINS: dict[str, frozenset[str]] = {

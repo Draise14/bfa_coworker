@@ -57,7 +57,7 @@ def register(mcp: FastMCP) -> None:
           framing (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,
           set_strip_frame_range, render_vse_preview, transcribe_strip, remove_silences,
           add_captions, get_transcript_text, apply_transcript_edit, reframe_vertical,
-          jump_to_tab_by_name, jump_to_tab_by_space_type)
+          reframe_strips, jump_to_tab_by_name, jump_to_tab_by_space_type)
 
         Load only what the request needs; the basic tools (scene, code, docs,
         screenshots, plan, questions, bake_textures, render_viewport_to_path,

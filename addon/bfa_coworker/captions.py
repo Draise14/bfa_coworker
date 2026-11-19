@@ -705,9 +705,9 @@ def plan_strips(items: Sequence[dict]) -> tuple[list[dict], dict[str, str], dict
     """Which of the selected media strips *items* get their own captions.
 
     *items*: ``{"name", "type": "SOUND"|"MOVIE", "key" (the media file), "left", "right",
-    "muted", "retimed"}``.  A movie strip is heard through a selected sound strip of the same
-    file over its time (its own sound, connected or not): it takes that strip's outcome and is
-    not captioned twice.  A movie with no such sound strip is captioned itself.  Muted and
+    "muted", "retimed", and for a Reframe split's parts ``"split_group"`` / ``"split_part"``}``.
+    A movie strip is heard through a selected sound strip of the same file over its time (its
+    own sound, connected or not): it takes that strip's outcome and is not captioned twice.  A movie with no such sound strip is captioned itself.  Muted and
     retimed strips are skipped.
 
     Returns ``(todo, skipped, partners)``: the strips to caption (sounds first, then in time
@@ -722,6 +722,14 @@ def plan_strips(items: Sequence[dict]) -> tuple[list[dict], dict[str, str], dict
                      and s["left"] < it["right"] and it["left"] < s["right"]]
             if heard:
                 partners[it["name"]] = heard
+                continue
+            # #606: the second part of a Reframe split shows the same picture and plays the same
+            # speech as its first part: captioned once, through the first part.
+            first = next((o["name"] for o in items if it.get("split_part") and o is not it and not o.get("split_part")
+                          and o.get("split_group") == it.get("split_group") and o["key"] == it["key"]
+                          and o["left"] < it["right"] and it["left"] < o["right"]), None)
+            if first is not None:
+                partners[it["name"]] = [first]
                 continue
         if it.get("muted"):
             skipped[it["name"]] = SKIP_MUTED

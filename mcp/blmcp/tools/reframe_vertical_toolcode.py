@@ -75,6 +75,8 @@ def main(params: Params) -> Any:
               where, done["resolution"][0], done["resolution"][1],
               "Centre Crop" if mode == "CROP" else "Blur Fill", len(changed),
               ", {:d} kept their framing".format(len(kept)) if kept else "")
+    if done.get("left_alone"):
+        msg += " Left alone (parts of a split, use reframe_strips): {:s}.".format(", ".join(done["left_alone"][:20]))
     captions = done.get("captions") or {}
     if captions.get("message"):
         msg += " Captions: {:s}.".format(captions["message"])

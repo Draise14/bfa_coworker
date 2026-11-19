@@ -45,6 +45,7 @@ __all__ = (
     "jobs_tick",
     "post_question",
     "question_state",
+    "reframe_strips",
     "reframe_vertical",
     "scene_digest",
     "start_job",
@@ -662,6 +663,13 @@ def scene_digest(since: str = "") -> dict[str, Any]:
     if since:
         head["note"] = "The earlier hash is too old to compare; here is the whole summary."
     return head
+
+
+def reframe_strips(layout: str = "", strips: list[str] | None = None, swap: bool = False) -> dict[str, Any]:
+    """Reframe's layouts for *strips* (the selected ones when empty) in the Sequencer's scene (#606), one
+    undo step (``reframe_layouts.tool_reframe_strips``).  Main thread only."""
+    from . import reframe_layouts
+    return reframe_layouts.tool_reframe_strips(layout, strips, swap)
 
 
 def reframe_vertical(strips: list[str] | None = None, mode: str = "CROP", in_copy: bool = True,

@@ -1060,7 +1060,8 @@ OTHERS = (
 # Of those, the ones that open no dialog (no "..." in the Strip menu).
 NO_DIALOG = frozenset({"bfacw.open_transcript"})
 # Their submenus in the section: (menu, wand icon or "", Blender icon).
-SUBMENUS = (("BFACW_MT_captions", "captions", "FONT_DATA"), ("BFACW_MT_reframe", "", "VIEW_PAN"))
+SUBMENUS = (("BFACW_MT_captions", "captions", "FONT_DATA"), ("BFACW_MT_reframe", "", "VIEW_PAN"),
+            ("BFACW_MT_reframe_layout", "reframe_split_half", "SPLIT_HORIZONTAL"))
 
 
 def _registered(name: str) -> bool:

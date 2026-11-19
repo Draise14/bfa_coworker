@@ -2168,7 +2168,7 @@ EXPECTED_TOOLS = [
 "          framing (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,\n"
 "          set_strip_frame_range, render_vse_preview, transcribe_strip, remove_silences,\n"
 "          add_captions, get_transcript_text, apply_transcript_edit, reframe_vertical,\n"
-"          jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
+"          reframe_strips, jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
 "\n"
 "        Load only what the request needs; the basic tools (scene, code, docs,\n"
 "        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"
@@ -2352,6 +2352,72 @@ EXPECTED_TOOLS = [
                 "output_id"
             ],
             "title": "read_tool_outputArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "reframe_strips",
+        "description": "\n"
+"        Change the vertical layout of movie, image or scene strips (Reframe), one undo step.\n"
+"        This changes the scene (strips are added and removed), so it waits while a render or\n"
+"        bake runs.\n"
+"\n"
+"        Replaces whatever layout a strip had (a split's second strip, a blur, follow keys) with\n"
+"        the new one; going through several layouts ends with the same strips as the last one\n"
+"        alone. A split is two ordinary strips of the same source, the top one (the strip itself)\n"
+"        and its duplicate below, each with its own crop and transform, so either can be moved.\n"
+"        Captions, their word strips and the audio are never touched; Remove Silences and Edit by\n"
+"        Transcript cut both parts together. Each strip's layout is stored on it\n"
+"        (``coworker_layout``).\n"
+"\n"
+"        Args:\n"
+"            layout: ``full`` (the shot's centre fills the frame), ``full_blur`` (the whole shot\n"
+"                over a blurred copy), ``full_tracked`` (follows the subject; the layout is made\n"
+"                without a model, the tracking needs a vision-capable one), ``split_half`` (two\n"
+"                crops, 50 / 50), ``split_top`` (two thirds on top, one third below),\n"
+"                ``split_bottom`` (one third on top, two thirds below). ``track_all`` (each part of\n"
+"                a split follows its own subject) needs subject finding and is not available yet.\n"
+"                Empty with ``swap=true``: only swap. Empty without it: read, answer each strip's\n"
+"                current layout in ``layouts`` and change nothing.\n"
+"            strips: Strip names (a split's either part stands for both). Empty: the selected strips.\n"
+"            swap: Exchange which framing of the picture is shown top and bottom in the splits named\n"
+"                (after building ``layout`` when one is given).\n"
+"\n"
+"        Returns:\n"
+"            ``status`` (ok / nothing / error), ``message``, ``layout``, ``changed`` (strips given\n"
+"            the layout), ``created`` / ``removed`` (strip names), ``unchanged`` (already in that\n"
+"            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``tracking``, ``layouts`` (read mode: strip ->\n"
+"            {layout, part, partner}; layout is \"\" when it has none) and ``scene``.\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "layout": {
+                    "default": "",
+                    "title": "Layout",
+                    "type": "string"
+                },
+                "strips": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Strips"
+                },
+                "swap": {
+                    "default": False,
+                    "title": "Swap",
+                    "type": "boolean"
+                }
+            },
+            "title": "reframe_stripsArguments",
             "type": "object"
         }
     },

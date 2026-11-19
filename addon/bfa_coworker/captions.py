@@ -1231,14 +1231,27 @@ def one_line(animation: Any) -> bool:
     return animation_key(animation) == "TYPEWRITER"
 
 
-def _windows(length: int, fps: float) -> tuple[int, int]:
+def _windows(length: int, fps: float, speed: Any = None) -> tuple[int, int]:
     """Frames for the way in and the way out of a caption *length* frames long: about
-    :data:`FADE_IN_S` / :data:`FADE_OUT_S`, at most a third / a quarter of the caption; 0 when
-    that leaves fewer than 2 frames (no animation that way)."""
+    :data:`FADE_IN_S` / :data:`FADE_OUT_S` (times the *speed* factor, :func:`speed_factor`), at most a third / a
+    quarter of the caption whatever the speed (#583); 0 when that leaves fewer than 2 frames (no animation that
+    way).  A Fast or Slow caption keeps at least 2 frames of window where the caption has room for them, but Fast is
+    never longer than Normal and Slow never shorter (at a very low frame rate the 2 frame minimum would say so)."""
     fps = max(1.0, float(fps))
-    n_in = min(int(round(FADE_IN_S * fps)), length // 3)
-    n_out = min(int(round(FADE_OUT_S * fps)), length // 4)
-    return (n_in if n_in >= 2 else 0), (n_out if n_out >= 2 else 0)
+    k = speed_factor(speed)
+
+    def frames(factor: float) -> tuple[int, int]:
+        n_in, n_out = int(round(FADE_IN_S * factor * fps)), int(round(FADE_OUT_S * factor * fps))
+        if factor != 1.0:
+            n_in, n_out = max(n_in, 2), max(n_out, 2)
+        n_in, n_out = min(n_in, length // 3), min(n_out, length // 4)
+        return (n_in if n_in >= 2 else 0), (n_out if n_out >= 2 else 0)
+    n_in, n_out = frames(k)
+    if k < 1.0:
+        n_in, n_out = (min(a, b) for a, b in zip((n_in, n_out), frames(1.0)))
+    elif k > 1.0:
+        n_in, n_out = (max(a, b) for a, b in zip((n_in, n_out), frames(1.0)))
+    return n_in, n_out
 
 
 def reveal_crops(text: str, measure: Callable[[str, float], float], font_px: float, res_x: float,
@@ -1262,10 +1275,296 @@ def reveal_crops(text: str, measure: Callable[[str, float], float], font_px: flo
     return out
 
 
+# -- easing and speed (#605) -------------------------------------------------------------------
+#
+# Easing is Blender's own: the keyframe's ``interpolation`` and ``easing`` on the keys the animation has
+# already, so it costs no key and stays editable in the Graph Editor.  A track that must stay CONSTANT
+# (Typewriter's crop steps, the highlight colour) ignores it.  Blender applies a key's interpolation and
+# easing to the segment *after* the key, so an entrance (a way in) gets "Ease Out" to slow down as it arrives,
+# and an exit (a way out) is that curve mirrored in time: its easing is swapped (In <-> Out), so the exit
+# starts gently the way the entrance ends.
+
+EASING_STYLE = "STYLE"
+EASINGS: dict[str, dict[str, str]] = {
+    EASING_STYLE: {"label": "As the Style", "description": "The curves the animation always had (smooth Bezier "
+                                                          "in and out)"},
+    "LINEAR": {"label": "Linear", "description": "A constant speed: no slowing down or speeding up"},
+    "EASE_IN": {"label": "Ease In", "description": "Starts slowly and speeds up (a cubic curve)"},
+    "EASE_OUT": {"label": "Ease Out", "description": "Starts fast and slows down as it arrives (a cubic curve): "
+                                                    "a soft landing"},
+    "EASE_IN_OUT": {"label": "Ease In and Out", "description": "Slow at both ends, fast in the middle (a cubic "
+                                                              "curve)"},
+    "BACK": {"label": "Back", "description": "Overshoots a little past its place and comes back"},
+    "BOUNCE": {"label": "Bounce", "description": "Lands and bounces, like a ball"},
+    "ELASTIC": {"label": "Elastic", "description": "Overshoots and wobbles in place, like a spring"},
+}
+# The Blender keyframe ``(interpolation, easing)`` of each choice for a way in; a way out gets the easing mirrored.
+# Ease In / Out / In and Out use the cubic curve: it is clearly different from the Bezier of "As the Style" yet
+# not as extreme as quartic or exponential (Sine is too close to Bezier to tell apart on a 6 frame move).
+EASING_TYPES: dict[str, tuple[str, str]] = {
+    "LINEAR": ("LINEAR", "AUTO"),
+    "EASE_IN": ("CUBIC", "EASE_IN"),
+    "EASE_OUT": ("CUBIC", "EASE_OUT"),
+    "EASE_IN_OUT": ("CUBIC", "EASE_IN_OUT"),
+    "BACK": ("BACK", "EASE_OUT"),
+    "BOUNCE": ("BOUNCE", "EASE_OUT"),
+    "ELASTIC": ("ELASTIC", "EASE_OUT"),
+}
+_EASING_MIRROR = {"EASE_IN": "EASE_OUT", "EASE_OUT": "EASE_IN"}
+_EASING_ALIASES = {"": EASING_STYLE, "DEFAULT": EASING_STYLE, "STYLES": EASING_STYLE, "AS_THE_STYLE": EASING_STYLE,
+                   "OFF": EASING_STYLE, "NONE": EASING_STYLE, "EASEIN": "EASE_IN", "EASEOUT": "EASE_OUT",
+                   "EASE_IN_AND_OUT": "EASE_IN_OUT", "IN_OUT": "EASE_IN_OUT", "IN": "EASE_IN", "OUT": "EASE_OUT",
+                   "EASE": "EASE_IN_OUT", "EASEINOUT": "EASE_IN_OUT", "OVERSHOOT": "BACK", "SPRING": "ELASTIC",
+                   "SMOOTH": "EASE_IN_OUT"}
+SPEED_NORMAL = "NORMAL"
+SPEEDS: dict[str, dict[str, Any]] = {
+    "FAST": {"label": "Fast", "factor": 0.6, "description": "Short moves (0.6 times as long as Normal)"},
+    SPEED_NORMAL: {"label": "Normal", "factor": 1.0, "description": "The moves as they always were: about a "
+                                                                   "quarter of a second in, a fifth out"},
+    "SLOW": {"label": "Slow", "factor": 1.8, "description": "Long, calm moves (1.8 times as long as Normal; "
+                                                           "never more than a third of the caption in, a quarter "
+                                                           "out)"},
+}
+_SPEED_ALIASES = {"": SPEED_NORMAL, "DEFAULT": SPEED_NORMAL, "STYLE": SPEED_NORMAL, "AS_THE_STYLE": SPEED_NORMAL,
+                  "QUICK": "FAST", "SNAPPY": "FAST", "SHORT": "FAST", "LONG": "SLOW", "SOFT": "SLOW",
+                  "CALM": "SLOW", "MEDIUM": SPEED_NORMAL, "STANDARD": SPEED_NORMAL}
+
+
+# -- the icons of the Auto Captions dialog (#605) ------------------------------------------------
+#
+# One icon for every entry of every drop-down and for every section header, none shared inside one drop-down.
+# The names are Blender's own or, where Bforartists has a better one, Bforartists' (``CARET_NEXT_WORD``, ``MOVE_UP``,
+# ``MOVE_DOWN``, ``CARET_NEXT_CHAR``, ``SET_UPPERCASE``, ``SET_LOWERCASE``, ``SET_STRING_CASE``, ``MESH_LINE``,
+# ``SEQ_TEXT``): the dialog draws every name through ``shared.icon()``, whose ``ICON_FALLBACKS`` give Blender a
+# distinct built-in icon for each of them.  ``"PNG:<name>"`` is an icon of our own (``icons/captions/<name>_64.png``,
+# made by ``_misc/build_caption_icons.py``: a badge per language, and the motion's icon with Bforartists' colour
+# wheel for "Highlight + ..."); ``PNG_FALLBACK`` is the built-in icon used if the picture can't be loaded.
+# Here, not in the operator, so a test without Blender can check them.
+ICONS: dict[str, dict[str, str]] = {
+    "section": {"style": "FONT_DATA", "motion": "ANIM", "text": "SEQ_TEXT", "speakers": "OUTLINER_DATA_SPEAKER"},
+    "style": {"CLEAN": "OUTLINER_OB_FONT", "BOLD_POP": "BOLD", "WORD_HIGHLIGHT": "CARET_NEXT_WORD",
+              "BOXED": "MESH_PLANE"},
+    "animate": {"STYLE": "PRESET", "LINE": "ALIGN_JUSTIFY", "WORD": "FONTPREVIEW", "BOTH": "ANIM_DATA",
+                "NONE": "CANCEL"},
+    "line": {"STYLE": "PRESET", "NONE": "CANCEL", "FADE": "MOD_OPACITY", "SLIDE_UP": "MOVE_UP",
+             "SLIDE_DOWN": "MOVE_DOWN", "TYPEWRITER": "CARET_NEXT_CHAR", "POP": "ZOOM_IN"},
+    "word": {"STYLE": "PRESET", "NONE": "CANCEL", "HIGHLIGHT": "COLOR", "POP": "PARTICLES",
+             "SCALE": "FULLSCREEN_ENTER", "RISE": "TRIA_UP_BAR", "FADE_IN": "IMAGE_ALPHA",
+             "HIGHLIGHT_POP": "PNG:hl_pop", "HIGHLIGHT_SCALE": "PNG:hl_scale", "HIGHLIGHT_RISE": "PNG:hl_rise",
+             "HIGHLIGHT_FADE_IN": "PNG:hl_fade_in"},
+    "easing": {"STYLE": "IPO_BEZIER", "LINEAR": "IPO_LINEAR", "EASE_IN": "IPO_EASE_IN", "EASE_OUT": "IPO_EASE_OUT",
+               "EASE_IN_OUT": "IPO_EASE_IN_OUT", "BACK": "IPO_BACK", "BOUNCE": "IPO_BOUNCE",
+               "ELASTIC": "IPO_ELASTIC"},
+    "speed": {"FAST": "FF", "NORMAL": "PLAY", "SLOW": "TIME"},
+    "position": {"BOTTOM": "ANCHOR_BOTTOM", "TOP": "ANCHOR_TOP", "MIDDLE": "ANCHOR_CENTER"},
+    "case": {"STYLE": "PRESET", "AS_SPOKEN": "PLAY_SOUND", "UPPER": "SET_UPPERCASE", "LOWER": "SET_LOWERCASE",
+             "TITLE": "SET_STRING_CASE"},
+    "lines": {"STYLE": "PRESET", "1": "MESH_LINE", "2": "SPLIT_HORIZONTAL"},
+    "language": {"auto": "AUTO"},       # and "PNG:lang_<code>" for each language (:func:`language_icon`)
+    "tri": {"STYLE": "PRESET", "ON": "CHECKMARK", "OFF": "CHECKBOX_DEHLT"},
+    "bold": {"ON": "BOLD"},
+    "italic": {"ON": "ITALIC"},
+    "font": {"STYLE": "PRESET", "FONT": "FONT_DATA", "FILE": "FILE_FONT"},
+    "same": {"SAME": "LINKED"},
+}
+PNG_PREFIX = "PNG:"
+PNG_FALLBACK = {"PNG:hl_pop": "COLORSET_01_VEC", "PNG:hl_scale": "COLORSET_02_VEC", "PNG:hl_rise": "COLORSET_03_VEC",
+                "PNG:hl_fade_in": "COLORSET_04_VEC"}
+LANGUAGE_FALLBACK = "WORLD_DATA"
+LANGUAGE_CODES = ("en", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "uk", "tr", "ar", "hi", "id", "vi", "th",
+                  "zh_hans", "zh_hant", "ja", "ko")      # preferences._LANGUAGES (a test keeps them equal)
+
+
+def language_icon(code: str) -> str:
+    """The icon of a language of the Language list: ``"AUTO"`` for Detect Automatically, else its own badge."""
+    return ICONS["language"]["auto"] if code == "auto" else PNG_PREFIX + "lang_" + str(code)
+
+
+def png_icon_names() -> list[str]:
+    """Every picture the dialog ships (``icons/captions/<name>_64.png``)."""
+    names = [n[len(PNG_PREFIX):] for t in ICONS.values() for n in t.values() if n.startswith(PNG_PREFIX)]
+    return sorted(names + ["lang_" + c for c in LANGUAGE_CODES])
+
+
+def ui_icon_names() -> set[str]:
+    """Every built-in icon name the Auto Captions dialog and its drop-downs use (before ``shared.icon()``'s
+    fallback); the pictures of our own are :func:`png_icon_names`."""
+    names = {name for table in ICONS.values() for name in table.values() if not name.startswith(PNG_PREFIX)}
+    names.update(PNG_FALLBACK.values())
+    names.add(LANGUAGE_FALLBACK)
+    return names
+
+
+def easing_key(name: Any) -> str | None:
+    """``"ease out"``, ``"Bounce"``, ``None``... -> an :data:`EASINGS` key; None if unknown."""
+    key = re.sub(r"[^A-Z0-9]+", "_", str(name or "").upper()).strip("_")
+    key = _EASING_ALIASES.get(key, key)
+    return key if key in EASINGS else None
+
+
+def speed_key(name: Any) -> str | None:
+    """``"slow"``, ``"Fast"``, ``None``... -> a :data:`SPEEDS` key; None if unknown."""
+    key = re.sub(r"[^A-Z0-9]+", "_", str(name or "").upper()).strip("_")
+    key = _SPEED_ALIASES.get(key, key)
+    return key if key in SPEEDS else None
+
+
+def speed_factor(speed: Any) -> float:
+    """How long the ways in and out are compared with Normal (1.0 for an unknown or missing speed)."""
+    return float(SPEEDS[speed_key(speed) or SPEED_NORMAL]["factor"])
+
+
+def tag_easing(tag: Any) -> tuple[str, str, str]:
+    """``(line easing, word easing, speed)`` of a caption line's *tag*: a caption made before #605 has none of
+    the three and reads As the Style, As the Style, Normal."""
+    tag = tag if isinstance(tag, dict) else {}
+    return (easing_key(tag.get("ease")) or EASING_STYLE, easing_key(tag.get("wease")) or EASING_STYLE,
+            speed_key(tag.get("speed")) or SPEED_NORMAL)
+
+
+def check_easing_params(line_easing: Any, word_easing: Any, speed: Any) -> tuple[str | None, str | None, str | None]:
+    """``add_captions``' Line Easing, Word Easing and Speed checked (None stays None: not chosen); raises
+    :class:`CaptionsError` with what's wrong."""
+    out: list[str | None] = []
+    for value, what, lookup, table in ((line_easing, "line_easing", easing_key, EASINGS),
+                                       (word_easing, "word_easing", easing_key, EASINGS),
+                                       (speed, "speed", speed_key, SPEEDS)):
+        if value is None or str(value).strip() == "":
+            out.append(None)
+            continue
+        key = lookup(value)
+        if key is None:
+            raise CaptionsError("Unknown {:s} {!r}: use one of {:s}.".format(
+                what, value, ", ".join("{:s} ({:s})".format(k, v["label"]) for k, v in table.items())))
+        out.append(key)
+    return out[0], out[1], out[2]
+
+
+def line_eases(plan: dict[str, str], style: Any = None) -> bool:
+    """The plan's line animation has a smooth (not CONSTANT) track for an easing to shape: Fade, Slide Up /
+    Down, Pop and Typewriter's way out, and the style's own pop (Bold Pop) when the line itself is keyed."""
+    if plan.get("line") == ANIM_STYLE:
+        return bool(STYLES.get(style_key(style) or "", {}).get("pop")) and plan.get("words") != "motion"
+    return plan.get("line") in ("FADE", "SLIDE_UP", "SLIDE_DOWN", "POP", "TYPEWRITER")
+
+
+def _own_pop(plan: dict[str, str], style: Any) -> bool:
+    """The line animation is the style's own and the style pops (Bold Pop's font-size pop)."""
+    return plan.get("line") == ANIM_STYLE and bool(STYLES.get(style_key(style) or "", {}).get("pop"))
+
+
+def line_ease_reason(plan: dict[str, str], style: Any = None) -> str:
+    """Why Line Easing has nothing to shape for *plan* (empty when it has something): the real reason, for the
+    dialog's line under the greyed row."""
+    if line_eases(plan, style):
+        return ""
+    if plan.get("line") == "NONE":
+        return "Nothing to ease: the Line Animation is None, so the line stands still."
+    if _own_pop(plan, style):
+        return ("Nothing to ease here: with Word Animation motions the caption's own piece is only the anchor of "
+                "its words, so the style's pop is not made (the Line Animation keys the words).")
+    return "Nothing to ease: this style's own line animation stands still (pick a Line Animation)."
+
+
+def words_ease_reason(plan: dict[str, str]) -> str:
+    """Why Word Easing has nothing to shape for *plan* (empty when it has something)."""
+    if words_ease(plan):
+        return ""
+    if plan.get("words") == "highlight":
+        return "Nothing to ease: Highlight changes the colour in a step; pick a word motion (Pop, Scale, Rise, Fade In)."
+    return "Nothing to ease: there is no Word Animation motion."
+
+
+def words_ease(plan: dict[str, str]) -> bool:
+    """The plan's word animation moves words (Pop, Scale, Rise, Fade In): Highlight is a CONSTANT colour change."""
+    return plan.get("words") == "motion"
+
+
+def animates(plan: dict[str, str]) -> bool:
+    """The plan has a way in or out that Speed can change: a line animation with windows (Fade, Slide, Pop,
+    Typewriter's way out) or a word motion."""
+    return plan.get("line") in ("FADE", "SLIDE_UP", "SLIDE_DOWN", "POP", "TYPEWRITER") or words_ease(plan)
+
+
+def apply_easing(plan: dict[str, str], line_easing: Any = None, word_easing: Any = None, speed: Any = None,
+                 style: Any = None) -> dict[str, str]:
+    """*plan* (:func:`resolve_animation`) with ``ease``, ``wease`` and ``speed`` set: what was chosen where it
+    has something to shape, else As the Style / Normal (so the tag only holds what counts)."""
+    out = dict(plan)
+    le, we = easing_key(line_easing) or EASING_STYLE, easing_key(word_easing) or EASING_STYLE
+    # Bold Pop's own pop is kept for a later fall back from word motions to Highlight (the pop is made again then)
+    out["ease"] = le if (line_eases(plan, style) or _own_pop(plan, style)) else EASING_STYLE
+    out["wease"] = we if words_ease(plan) else EASING_STYLE
+    sp = speed_key(speed) or SPEED_NORMAL
+    out["speed"] = sp if animates(plan) else SPEED_NORMAL
+    return out
+
+
+_OVERSHOOT = ("BACK", "BOUNCE", "ELASTIC")
+
+
+def _curve(easing: Any, path: str, exit_: bool, lands: bool, leaves: bool) -> tuple[str, str] | None:
+    """The Blender ``(interpolation, easing)`` of one key's segment for easing choice *easing* (None: As the Style).
+
+    *exit_*: the key starts a way out (its easing is mirrored).  Back, Bounce and Elastic overshoot or dip, which
+    belongs to a position or a scale that *lands* on its rest value (*lands*) or leaves it on a way out (*leaves*);
+    an opacity, and a segment that only passes on the way, get the plain cubic ease out (in) instead: an opacity
+    must never dip below or above what it is."""
+    pair = EASING_TYPES.get(easing_key(easing) or EASING_STYLE)
+    if pair is None:
+        return None
+    interp, ease = pair
+    if interp in _OVERSHOOT:
+        if path == "blend_alpha" or not (lands or leaves):
+            return "CUBIC", "EASE_IN" if exit_ else "EASE_OUT"
+        return interp, "EASE_IN" if (exit_ and not lands) else "EASE_OUT"
+    if exit_:
+        ease = _EASING_MIRROR.get(ease, ease)
+    return interp, ease
+
+
+def _ease_keys(keys: Sequence[tuple[int, Any]], easing: Any, exit_from: int | None = None, path: str = "",
+               steady: Any = None) -> list[tuple[int, str, str]]:
+    """``(frame, interpolation, easing)`` of every key of a track for easing choice *easing* (:func:`_curve`); the
+    keys from frame *exit_from* on are a way out.  *steady*: the track's value at rest (where a segment lands).
+    ``[]`` for As the Style."""
+    out: list[tuple[int, str, str]] = []
+
+    def at_rest(v: Any) -> bool:
+        try:
+            return steady is not None and abs(float(v) - float(steady)) < 1e-6
+        except (TypeError, ValueError):
+            return False
+    for i, (f, v) in enumerate(keys):
+        if i + 1 == len(keys) and out:              # the last key has no segment after it: as the one before it
+            out.append((int(f),) + out[-1][1:])
+            break
+        nxt = keys[i + 1][1] if i + 1 < len(keys) else v
+        exit_ = exit_from is not None and int(f) >= exit_from
+        curve = _curve(easing, path, exit_, at_rest(nxt) and not at_rest(v),
+                       exit_ and at_rest(v) and not at_rest(nxt))
+        if curve is None:
+            return []
+        out.append((int(f), curve[0], curve[1]))
+    return out
+
+
+def _eased(track: dict[str, Any], easing: Any, exit_from: int | None = None) -> dict[str, Any]:
+    """*track* with its ``"easing"`` entry (a list of ``(frame, interpolation, easing)`` for the keys) when it is a
+    smooth track and *easing* is not As the Style; a CONSTANT track stays as it is."""
+    if track.get("interpolation", "BEZIER") != "BEZIER":
+        return track
+    eased = _ease_keys(track["keys"], easing, exit_from, track["path"], track.get("steady"))
+    if eased:
+        track["easing"] = eased
+    return track
+
+
 def animation_tracks(animation: Any, style: str, frame_start: int, frame_end: int, fps: float,
                      res_x: float, res_y: float, font_size: float = 0.0, lines: int = 1,
                      anchor_y: str = "BOTTOM", location: Sequence[float] = (0.5, 0.09),
-                     reveal: Sequence[tuple[int, int]] | None = None) -> list[dict[str, Any]]:
+                     reveal: Sequence[tuple[int, int]] | None = None, easing: Any = None,
+                     speed: Any = None) -> list[dict[str, Any]]:
     """The keyframes of animation *animation* for a caption in style *style* shown from
     *frame_start* to *frame_end* (end exclusive) -- a description, applied by ``captions_ops``.
 
@@ -1276,7 +1575,9 @@ def animation_tracks(animation: Any, style: str, frame_start: int, frame_end: in
     (:data:`MIN_ANIMATED`); the way in takes at most a third of it, the way out a quarter.
     *font_size*, *lines*, *anchor_y* and *location*: the caption's layout (Pop grows around its
     middle, :func:`pop_middle`; Bold Pop's own pop scales its font size).  *reveal*: :func:`reveal_crops` of its
-    line, for Typewriter (none: no typewriter)."""
+    line, for Typewriter (none: no typewriter).  *easing* (:data:`EASINGS`, #605): the shape of the smooth tracks, as an
+    optional ``"easing"`` entry per track (``(frame, interpolation, easing)`` for each key, on the keys the
+    animation has: no key is added); *speed* (:data:`SPEEDS`): how long the ways in and out are."""
     key = animation_key(animation) or ANIM_STYLE
     fs, fe = int(frame_start), int(frame_end)
     length = fe - fs
@@ -1284,12 +1585,14 @@ def animation_tracks(animation: Any, style: str, frame_start: int, frame_end: in
         st = STYLES.get(style_key(style) or "", {})
         if not st.get("pop") or length < STYLE_POP_FRAMES + 2 or font_size <= 0:
             return []
-        return [{"path": "font_size", "interpolation": "BEZIER", "steady": float(font_size),
-                 "keys": [(fs, float(font_size) * STYLE_POP_FROM), (fs + STYLE_POP_FRAMES, float(font_size))]}]
+        return [_eased({"path": "font_size", "interpolation": "BEZIER", "steady": float(font_size),
+                        "keys": [(fs, float(font_size) * STYLE_POP_FROM), (fs + STYLE_POP_FRAMES, float(font_size))]},
+                       easing)]
     if key == "NONE" or length < MIN_ANIMATED:
         return []
-    n_in, n_out = _windows(length, fps)
+    n_in, n_out = _windows(length, fps, speed)
     tracks: list[dict[str, Any]] = []
+    out_at = fe - n_out if n_out else None      # the way out starts here: its easing is mirrored
 
     def fade(with_in: bool = True) -> None:
         keys: list[tuple[int, float]] = []
@@ -1298,7 +1601,8 @@ def animation_tracks(animation: Any, style: str, frame_start: int, frame_end: in
         if n_out:
             keys += [(fe - n_out, 1.0), (fe, 0.0)]
         if keys:
-            tracks.append({"path": "blend_alpha", "interpolation": "BEZIER", "steady": 1.0, "keys": keys})
+            tracks.append(_eased({"path": "blend_alpha", "interpolation": "BEZIER", "steady": 1.0, "keys": keys},
+                                 easing, out_at))
 
     if key == "FADE":
         fade()
@@ -1306,21 +1610,22 @@ def animation_tracks(animation: Any, style: str, frame_start: int, frame_end: in
         fade()
         if n_in:
             rise = round(SLIDE_DISTANCE * float(res_y), 2)
-            tracks.append({"path": "transform.offset_y", "interpolation": "BEZIER", "steady": 0.0,
-                           "keys": [(fs, -rise if key == "SLIDE_UP" else rise), (fs + n_in, 0.0)]})
+            tracks.append(_eased({"path": "transform.offset_y", "interpolation": "BEZIER", "steady": 0.0,
+                                  "keys": [(fs, -rise if key == "SLIDE_UP" else rise), (fs + n_in, 0.0)]}, easing))
     elif key == "POP" and n_in:
         over = max(fs + 1, min(fs + n_in - 1, fs + int(round(n_in * POP_OVER_AT))))
         keys = [(fs, POP_FROM), (over, POP_OVER), (fs + n_in, 1.0)]
         for axis in ("transform.scale_x", "transform.scale_y"):
-            tracks.append({"path": axis, "interpolation": "BEZIER", "steady": 1.0, "keys": list(keys)})
+            tracks.append(_eased({"path": axis, "interpolation": "BEZIER", "steady": 1.0, "keys": list(keys)},
+                                 easing))
         # A strip scales around the frame's centre (its transform origin, 0.5 / 0.5): an offset
         # that follows the scale keeps the caption's own middle where it is.  (The origin can't
         # be set to the caption instead: on a text strip it is measured on the text's box, live
         # check #542.)  Captions are centred across, so only the height moves.
         middle = pop_middle(lines, font_size, res_y, anchor_y, location)
         shift = (middle - 0.5) * float(res_y)
-        tracks.append({"path": "transform.offset_y", "interpolation": "BEZIER", "steady": 0.0,
-                       "keys": [(f, round(shift * (1.0 - v), 3)) for f, v in keys]})
+        tracks.append(_eased({"path": "transform.offset_y", "interpolation": "BEZIER", "steady": 0.0,
+                              "keys": [(f, round(shift * (1.0 - v), 3)) for f, v in keys]}, easing))
     elif key == "TYPEWRITER" and reveal:
         steps = list(reveal)
         span = min(len(steps) / TYPE_CPS * max(1.0, float(fps)), TYPE_MAX_S * max(1.0, float(fps)), length * 0.5)
@@ -1600,14 +1905,14 @@ def _prune(keys: Sequence[tuple[int, Any]]) -> list[tuple[int, Any]]:
 
 
 def _line_parts(animation: Any, fs: int, fe: int, fps: float, res_y: float,
-                reveal_frame: int | None) -> dict[str, list[tuple[int, float]]]:
+                reveal_frame: int | None, speed: Any = None) -> dict[str, list[tuple[int, float]]]:
     """What the line animation does to one word strip, as parts: ``alpha``, ``lscale`` (the line's scale,
     around the line's middle) and ``dy`` (pixels up)."""
     key = animation_key(animation) or ANIM_STYLE
     length = fe - fs
     if key in (ANIM_STYLE, "NONE") or length < MIN_ANIMATED:
         return {}
-    n_in, n_out = _windows(length, fps)
+    n_in, n_out = _windows(length, fps, speed)
     parts: dict[str, list[tuple[int, float]]] = {}
     alpha: list[tuple[int, float]] = []
     if key == "TYPEWRITER":
@@ -1629,14 +1934,18 @@ def _line_parts(animation: Any, fs: int, fe: int, fps: float, res_y: float,
 
 
 def _word_parts(motion: str | None, fs: int, fe: int, a: int, b: int, fps: float,
-                res_y: float) -> dict[str, list[tuple[int, float]]]:
+                res_y: float, speed: Any = None) -> dict[str, list[tuple[int, float]]]:
     """What a word motion does to one word strip whose word is spoken from *a* to *b*: ``alpha``,
     ``scale`` (around the word's own middle) and ``dy``.  Pop, Rise and Fade In keep the word hidden until
     it is spoken; Scale leaves it up."""
     a = min(max(int(a), fs), fe)
     if not motion or fe - fs < MIN_ANIMATED or fe - a < 2:
         return {}
-    m = min(max(2, int(round(WORD_MOTION_S * max(1.0, float(fps))))), fe - a)
+    k = speed_factor(speed)
+    m = max(2, int(round(WORD_MOTION_S * k * max(1.0, float(fps)))))
+    normal = max(2, int(round(WORD_MOTION_S * max(1.0, float(fps)))))
+    m = min(m, normal) if k < 1.0 else (max(m, normal) if k > 1.0 else m)       # Fast never longer than Normal
+    m = min(m, fe - a)
     parts: dict[str, list[tuple[int, float]]] = {}
     if motion == "FADE_IN":
         parts["alpha"] = [(a, 0.0), (a + m, 1.0)]
@@ -1659,7 +1968,8 @@ def word_tracks(line_animation: Any, word_animation: Any, frame_start: int, fram
                 fps: float, res_x: float, res_y: float, word_middle: Sequence[float] = (0.0, 0.0),
                 line_middle: Sequence[float] = (0.0, 0.0), reveal_frame: int | None = None,
                 base_colour: Sequence[float] | None = None,
-                highlight_colour: Sequence[float] | None = None) -> list[dict[str, Any]]:
+                highlight_colour: Sequence[float] | None = None, line_easing: Any = None, word_easing: Any = None,
+                speed: Any = None) -> list[dict[str, Any]]:
     """The keyframes of one word strip of a caption shown from *frame_start* to *frame_end* (end exclusive)
     whose word is spoken from *start* to *end*, as :func:`animation_tracks` describes them: the word
     animation's motion at the word's own time, the line animation's keys on top (on each word, since the
@@ -1668,11 +1978,61 @@ def word_tracks(line_animation: Any, word_animation: Any, frame_start: int, fram
     A strip scales around the middle of the frame, so a scale (and Pop) also keys the offset that holds
     the word's own middle (*word_middle*) or, for the line's pop, the line's middle (*line_middle*) in
     place; both are ``(x pixels from the left, y pixels from the bottom)``.  *reveal_frame*: Typewriter's
-    frame for this word (:func:`typewriter_frames`)."""
+    frame for this word (:func:`typewriter_frames`).  *line_easing* and *word_easing* (:data:`EASINGS`) shape the keys of
+    the line animation and of the word motion (a key inside the word motion's own span gets the word's; no key is
+    added), *speed* (:data:`SPEEDS`) the length of their windows; a colour track stays CONSTANT."""
     fs, fe = int(frame_start), int(frame_end)
     highlight, motion = word_parts(word_animation)
-    wp = _word_parts(motion, fs, fe, start, end, fps, res_y)
-    lp = _line_parts(line_animation, fs, fe, fps, res_y, reveal_frame)
+    wp = _word_parts(motion, fs, fe, start, end, fps, res_y, speed)
+    lp = _line_parts(line_animation, fs, fe, fps, res_y, reveal_frame, speed)
+    # Which easing a segment gets (a segment runs from a key to the next): the line animation's where the line
+    # animation changes that property on it (during the line's way in and out, whoever else moves there: the
+    # line's wins on a shared property, so every word of a caption moves the same way), else the word motion's
+    # where the word motion changes it, else none (the key stays as before).
+    l_exit = None
+    if lp and animation_key(line_animation) != "POP":
+        _n_in, n_out = _windows(fe - fs, fps, speed)
+        l_exit = fe - n_out if n_out else None
+    w_exit = (wp["scale"][1][0] if wp.get("scale") and motion == "SCALE" else None)
+    parts_of = {"blend_alpha": ("alpha",), "transform.scale_x": ("lscale", "scale"),
+                "transform.scale_y": ("lscale", "scale"), "transform.offset_x": ("lscale", "scale"),
+                "transform.offset_y": ("dy", "lscale", "scale")}
+
+    def moving(parts: dict[str, list[tuple[int, float]]], path: str, f: int, g: int) -> str | None:
+        """The part of *parts* that changes *path* on the segment f..g (None: none does)."""
+        for name in parts_of.get(path, ()):
+            part = parts.get(name)
+            if part and abs(_interp(part, g) - _interp(part, f)) > 1e-9:
+                return name
+        return None
+
+    def easing_of(path: str, keys: Sequence[tuple[int, Any]], _steady: Any) -> list[tuple[int, str, str]]:
+        line_on = easing_key(line_easing) not in (None, EASING_STYLE)
+        word_on = easing_key(word_easing) not in (None, EASING_STYLE)
+        # the line's parts are named for the line (lscale), the word's scale is read as the scale
+        wpar = {("lscale" if k == "scale" else k): v for k, v in wp.items()}
+        out: list[tuple[int, str, str]] = []
+        for i, (f, _v) in enumerate(keys):
+            g = keys[i + 1][0] if i + 1 < len(keys) else None
+            if g is None:
+                if out:
+                    out.append((int(f),) + out[-1][1:])
+                continue
+            name = moving(lp, path, f, g)
+            if name:
+                choice, exit_from, part = (line_easing if line_on else None), l_exit, lp[name]
+            else:
+                name = moving(wpar, path, f, g)
+                if not name:
+                    continue
+                choice, exit_from, part = (word_easing if word_on else None), w_exit, wpar[name]
+            # where the segment lands is read from the animation's own part (a word waiting for its time sits
+            # scaled down, so the track's own value is not its rest)
+            rest = 0.0 if name == "dy" else 1.0
+            seg = _ease_keys([(f, _interp(part, f)), (g, _interp(part, g))], choice, exit_from, path, rest)
+            if seg:
+                out.append(seg[0])
+        return out
     tracks: list[dict[str, Any]] = []
     alpha = _product(lp.get("alpha", []), wp.get("alpha", []))
     if alpha:
@@ -1714,7 +2074,15 @@ def word_tracks(line_animation: Any, word_animation: Any, frame_start: int, fram
             keys.append((b, tuple(base_colour)))
         if len(keys) >= 2 or (keys and a == fs):
             tracks.append({"path": "color", "interpolation": "CONSTANT", "steady": tuple(base_colour), "keys": keys})
-    return [dict(t, keys=_prune(t["keys"])) for t in tracks]
+    out = []
+    for t in tracks:
+        t = dict(t, keys=_prune(t["keys"]))
+        if t["interpolation"] == "BEZIER":
+            eased = easing_of(t["path"], t["keys"], t.get("steady"))
+            if eased:
+                t["easing"] = eased
+        out.append(t)
+    return out
 
 
 def word_animation_paths(line_animation: Any, word_animation: Any) -> tuple[str, ...]:

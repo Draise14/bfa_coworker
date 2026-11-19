@@ -38,6 +38,9 @@ class Params(NamedTuple):
     animate: str | None = None
     line_animation: str | None = None
     word_animation: str | None = None
+    line_easing: str | None = None
+    word_easing: str | None = None
+    speed: str | None = None
 
 
 class Result(NamedTuple):
@@ -58,6 +61,9 @@ class Result(NamedTuple):
     animation: str | None = None
     animate: str | None = None
     word_animation: str | None = None
+    line_easing: str | None = None
+    word_easing: str | None = None
+    speed: str | None = None
     position: str | None = None
     speakers: list[dict[str, Any]] | None = None
     note: str | None = None
@@ -80,5 +86,5 @@ def main(params: Params) -> Result:
                                 params.speakers, params.speaker_labels, list(params.speaker_settings or ()),
                                 params.case, params.font, params.bold, params.italic, params.size,
                                 params.text_color, params.highlight_color, params.animate, params.line_animation,
-                                params.word_animation)
+                                params.word_animation, params.line_easing, params.word_easing, params.speed)
     return Result(**{k: v for k, v in out.items() if k in Result._fields})

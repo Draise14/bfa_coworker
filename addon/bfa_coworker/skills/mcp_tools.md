@@ -59,14 +59,20 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   `end_frame` from the answer, not the names you read before. Captions made before are trimmed with the edit.
 - `add_captions(strips, style="CLEAN", animation="STYLE", position="BOTTOM", margin=0, speakers=False,
   speaker_labels=False, speaker_settings=None, case="STYLE", font=None, bold=None, italic=None, size=1.0,
-  text_color=None, highlight_color=None, animate=None, line_animation=None, word_animation=None)` — Captions
+  text_color=None, highlight_color=None, animate=None, line_animation=None, word_animation=None,
+  line_easing=None, word_easing=None, speed=None)` — Captions
   from the strips' speech; one undo step. Motion: `animate` (LINE, WORD, BOTH, NONE, or STYLE: the style's
   own) with `line_animation` (NONE, FADE, POP, SLIDE_UP, SLIDE_DOWN, TYPEWRITER) and `word_animation`
   (HIGHLIGHT, POP, SCALE, RISE, FADE_IN, HIGHLIGHT_POP, ... or NONE); the old `animation` is the line
   animation and still works. With a word motion every word is a strip of its own (a channel each, above
   the caption's) and the caption's own strip draws nothing but stays the anchor with the text; over 24
   words in a line or too many keyframes it is refused, naming the limit (use HIGHLIGHT or fewer words per
-  line). Position (BOTTOM, TOP, MIDDLE; `margin` in % of the height) goes with any style. Style choices, each "as the style has it" when left out: `case` (AS_SPOKEN, UPPER, LOWER,
+  line). Easing and speed of those moves: `line_easing` / `word_easing` (STYLE, LINEAR, EASE_IN, EASE_OUT,
+  EASE_IN_OUT, BACK, BOUNCE, ELASTIC; Blender's own keyframe interpolation on the same keys, so no keyframe
+  is added and the Graph Editor still edits it; a way out is the curve mirrored; steps such as Typewriter's
+  letters and the highlight colour ignore it) and `speed` (FAST, NORMAL, SLOW: the length of the ways in and
+  out, never more than a third of a caption in, a quarter out); left out: the curves it always had.
+  Position (BOTTOM, TOP, MIDDLE; `margin` in % of the height) goes with any style. Style choices, each "as the style has it" when left out: `case` (AS_SPOKEN, UPPER, LOWER,
   TITLE), `font` (a font's name in the file, or a font file's path), `bold`, `italic`, `size` (a scale of the
   style's), `text_color` / `highlight_color` ("#RRGGBB"); they stay with the captions. WORD_HIGHLIGHT's word
   strips follow their caption's font, bold, italic, size and position by themselves. Several speakers, each on their own sound file: `speakers=True` gives each a caption channel;

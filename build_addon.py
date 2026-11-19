@@ -46,7 +46,7 @@ VENDOR_VENV_DIR = os.path.join(VENDOR_DIR, "python_env")
 DIST_DIR = os.path.join(SCRIPT_DIR, "releases")
 # Folders of the add-on that stay out of the built zip: the copies of Bforartists' icon
 # SVGs the operator icons are composed from (#563; the composed SVGs and PNGs ship).
-SOURCE_ONLY = ("icons/wand/bfa_src/",)
+SOURCE_ONLY = ("icons/wand/bfa_src/", "icons/captions/src/")
 
 # Find Blender executable.
 def find_blender() -> str:

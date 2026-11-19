@@ -457,6 +457,7 @@ def _look_params(p: dict[str, Any]) -> dict[str, Any]:
     """The #542 arguments of :func:`add_captions` out of a job's *params*."""
     return {"animation": p.get("animation", cap.ANIM_STYLE), "animate": p.get("animate"),
             "line_animation": p.get("line_animation"), "word_animation": p.get("word_animation"),
+            "line_easing": p.get("line_easing"), "word_easing": p.get("word_easing"), "speed": p.get("speed"),
             "position": p.get("position", "BOTTOM"),
             "margin": float(p.get("margin", 0.0) or 0.0), "speakers": bool(p.get("speakers", False)),
             "speaker_settings": list(p.get("speaker_settings") or ()),
@@ -614,10 +615,19 @@ def _set(owner: Any, prop: str, value: float) -> None:
     setattr(owner, prop, int(round(value)) if isinstance(current, int) and not isinstance(current, bool) else value)
 
 
-_PENDING_MODES: dict[str, dict[str, str]] | None = None   # a run in progress: name -> {path: interpolation}
+_PENDING_MODES: dict[str, dict[str, Any]] | None = None   # a run in progress: name -> {path: interpolation}
+# (an eased track, #605: {frame: (interpolation, easing)} instead of the interpolation's name)
 
 
-def _set_modes(scene: Any, name: str, modes: dict[str, str]) -> None:
+def _track_mode(track: dict) -> Any:
+    """What :func:`_set_modes` is given for *track*: its interpolation, or, for an eased track, the
+    ``(interpolation, easing)`` of each key by frame."""
+    if track.get("easing") and track.get("interpolation", "BEZIER") == "BEZIER":
+        return {int(f): (i, e) for f, i, e in track["easing"]}
+    return track.get("interpolation", "BEZIER")
+
+
+def _set_modes(scene: Any, name: str, modes: dict[str, Any]) -> None:
     """The interpolation of strip *name*'s new keys: at once, or, in a run that keys many strips
     (:func:`_batch_modes`), noted and set in one pass over the action at its end (a scan of the whole action
     per strip is quadratic in the number of strips)."""
@@ -627,7 +637,7 @@ def _set_modes(scene: Any, name: str, modes: dict[str, str]) -> None:
     _apply_modes(scene, {name: modes})
 
 
-def _apply_modes(scene: Any, wanted: dict[str, dict[str, str]]) -> None:
+def _apply_modes(scene: Any, wanted: dict[str, dict[str, Any]]) -> None:
     ad = getattr(scene, "animation_data", None)
     action = ad.action if ad is not None else None
     if action is None or not wanted:
@@ -646,7 +656,10 @@ def _apply_modes(scene: Any, wanted: dict[str, dict[str, str]]) -> None:
                     if mode is None:
                         continue
                     for k in getattr(fc, "keyframe_points", ()):
-                        k.interpolation = mode
+                        if isinstance(mode, str):
+                            k.interpolation = mode
+                        else:       # an eased track (#605): each key's own interpolation and easing, by frame
+                            k.interpolation, k.easing = mode.get(int(round(k.co[0])), ("BEZIER", "AUTO"))
                     if hasattr(fc, "update"):
                         fc.update()
 
@@ -701,7 +714,7 @@ def _key_tracks(scene: Any, strips: list, tracks: list[dict]) -> int:
                 _set(owner, prop, t["steady"])
             except (AttributeError, TypeError, ValueError, RuntimeError):
                 continue
-        _set_modes(scene, s.name, {t["path"]: t.get("interpolation", "BEZIER") for t in tracks})
+        _set_modes(scene, s.name, {t["path"]: _track_mode(t) for t in tracks})
     return made
 
 
@@ -786,9 +799,10 @@ def _animate(scene: Any, line: Any, style: dict, animation: str, words: list | N
         measure = _measure(line.font or _font()) or cap.measure_fallback
         widest = max(lines, key=lambda ln: measure(ln, float(line.font_size)))
         reveal = cap.reveal_crops(widest, measure, float(line.font_size), render.resolution_x, line.location[0])
+    ease, _wease, speed = cap.tag_easing(tag_of(line))      # #605: none in a tag from before: As the Style, Normal
     tracks = cap.animation_tracks(animation, style["key"], _left(line), _right(line), _fps(scene),
                                   render.resolution_x, render.resolution_y, float(line.font_size), len(lines),
-                                  str(getattr(line, "anchor_y", "BOTTOM")), tuple(line.location), reveal)
+                                  str(getattr(line, "anchor_y", "BOTTOM")), tuple(line.location), reveal, ease, speed)
     if not tracks:
         if not words_only:
             _remember_keys(scene, line, ())
@@ -864,6 +878,7 @@ def _animate_words(scene: Any, line: Any, tag: dict, style: dict) -> int:
     fs, fe = _left(line), _right(line)
     _mode, wanim = cap.tag_words(tag, style["key"])
     anim = cap.animation_key(tag.get("anim")) or cap.ANIM_STYLE
+    ease, wease, speed = cap.tag_easing(tag)
     mids, centre = _word_middles(line, words, _line_measure(line), res)
     reveal = (cap.typewriter_frames([str(w.text) for w in words], fs, fe, _fps(scene))
               if anim == "TYPEWRITER" else [None] * len(words))
@@ -871,7 +886,8 @@ def _animate_words(scene: Any, line: Any, tag: dict, style: dict) -> int:
     made = 0
     spans = _word_spans(line, tag, words)
     for w, mid, rev, (a, b) in zip(words, mids, reveal, spans):
-        tracks = cap.word_tracks(anim, wanim, fs, fe, a, b, _fps(scene), res[0], res[1], mid, centre, rev, base, hi)
+        tracks = cap.word_tracks(anim, wanim, fs, fe, a, b, _fps(scene), res[0], res[1], mid, centre, rev, base, hi,
+                                 ease, wease, speed)
         made += _key_tracks(scene, [w], tracks)
     return made
 
@@ -1216,7 +1232,7 @@ def _line_tag(source: str, style: str, chars: int, lines: int, scene: Any, frame
     return tag
 
 
-_LOOK_KEYS = ("anim", "wanim", "position", "margin", "speaker", "label", "choices")
+_LOOK_KEYS = ("anim", "wanim", "ease", "wease", "speed", "position", "margin", "speaker", "label", "choices")
 
 
 def _look_tag(tag: dict) -> dict[str, Any]:
@@ -1237,7 +1253,8 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
            above: int, targets: list[tuple] | None = None, replace_edited: bool = False,
            animation: str = cap.ANIM_STYLE, lanes: dict[str, dict] | None = None,
            font: Any = None, animate: Any = None, line_animation: Any = None,
-           word_animation: Any = None) -> dict[str, Any]:
+           word_animation: Any = None, line_easing: Any = None, word_easing: Any = None,
+           speed: Any = None) -> dict[str, Any]:
     """Text strips for framed captions: one per caption (and the word strips), on the
     *Captions* channel above *above*; the earlier captions of the same sources go.
 
@@ -1250,7 +1267,9 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
     ``{key: {"name", "style" (resolved), "chars", "lines", "label", "channel",
     "highlight_channel"}}``: each speaker's captions on a channel of their own, in their style;
     None: every source on the *Captions* channel in *style*.  *font*: the artist's own font (#594;
-    None: the bundled Inter)."""
+    None: the bundled Inter).  #605: *line_easing*, *word_easing* (:data:`captions.EASINGS`) and *speed*
+    (:data:`captions.SPEEDS`): how the moves are shaped and how long they take (kept in the tag, so every later
+    re-keying keeps them)."""
     ed = scene.sequence_editor
     keys = {key for key, _framed in groups}
     old = [s for s in _owned(ed, keys) if (tag_of(s) or {}).get("role") == "line"]
@@ -1294,7 +1313,8 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
     # The animation of each lane (a speaker may have a style of their own), and the word motions' limits,
     # before anything is removed or made (over a limit: nothing changes).
     def plan_of(lane: dict) -> dict[str, str]:
-        return cap.resolve_animation(lane["style"]["key"], animate, line_animation, word_animation, animation)
+        return cap.apply_easing(cap.resolve_animation(lane["style"]["key"], animate, line_animation, word_animation,
+                                                      animation), line_easing, word_easing, speed, lane["style"]["key"])
     fps = _fps(scene)
     for lane, lane_groups in plan:
         lp = plan_of(lane)
@@ -1348,7 +1368,10 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
         measure = _measure(font) if lp["words"] != "none" else None
         if lp["words"] != "none" and measure is None:
             notes.append("The bundled font couldn't be measured here, so there are no word highlights.")
-        look = {"anim": lp["line"], "wanim": lp["word"], "position": st.get("position", "BOTTOM"), "margin": st.get("margin", 0.0),
+        look = {"anim": lp["line"], "wanim": lp["word"],
+                "ease": lp["ease"] if lp["ease"] != cap.EASING_STYLE else None,       # #605: none = As the Style
+                "wease": lp["wease"] if lp["wease"] != cap.EASING_STYLE else None,
+                "speed": lp["speed"] if lp["speed"] != cap.SPEED_NORMAL else None, "position": st.get("position", "BOTTOM"), "margin": st.get("margin", 0.0),
                 "speaker": lane["name"], "label": lane["label"], "choices": st.get("choices")}
         lane_made = 0
         for key, framed in lane_groups:
@@ -1378,6 +1401,9 @@ def _place(scene: Any, groups: list[tuple[str, list[dict]]], style: dict, chars:
               "animation": cap.ANIMATIONS[picked[0][4]["line"]]["label"],
               "animate": cap.ANIMATE[picked[0][4]["animate"]]["label"],
               "word_animation": cap.WORD_ANIMATIONS[picked[0][4]["word"]]["label"],
+              "line_easing": cap.EASINGS[picked[0][4]["ease"]]["label"],
+              "word_easing": cap.EASINGS[picked[0][4]["wease"]]["label"],
+              "speed": cap.SPEEDS[picked[0][4]["speed"]]["label"],
               "position": style.get("position", "BOTTOM")}
     if speakers:
         result["speakers"] = speakers
@@ -1416,7 +1442,8 @@ def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str 
                  replace_edited: bool = False, animation: str = cap.ANIM_STYLE, position: str = "BOTTOM",
                  margin: float = 0.0, speakers: bool = False, speaker_settings: Any = (),
                  speaker_labels: bool = False, choices: dict[str, Any] | None = None, animate: Any = None,
-                 line_animation: Any = None, word_animation: Any = None) -> dict[str, Any]:
+                 line_animation: Any = None, word_animation: Any = None, line_easing: Any = None,
+                 word_easing: Any = None, speed: Any = None) -> dict[str, Any]:
     """Caption *sources* (sound / movie strips) in *style*; the result for the artist / the tool.
 
     Every selected strip gets the captions of the part of its media it shows (#538); the
@@ -1438,7 +1465,11 @@ def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str 
 
     #594: *animate* (:data:`captions.ANIMATE`), *line_animation* (:data:`captions.ANIMATIONS`) and
     *word_animation* (:data:`captions.WORD_ANIMATIONS`) say what moves and how (:func:`captions.resolve_animation`);
-    *animation* is the single list of before, the line animation, and works as it did."""
+    *animation* is the single list of before, the line animation, and works as it did.
+
+    #605: *line_easing* and *word_easing* (:data:`captions.EASINGS`) shape the keys of the line animation and of the
+    word motion with Blender's own keyframe interpolation and easing (no key is added); *speed*
+    (:data:`captions.SPEEDS`) is how long the ways in and out take.  Left out: As the Style, Normal."""
     ed = scene.sequence_editor
     if ed is None:
         raise CaptionsError("The scene “{:s}” has no strips.".format(scene.name))
@@ -1447,6 +1478,9 @@ def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str 
     line_animation = cap.animation_key(line_animation) if line_animation is not None else None
     word_animation = cap.word_animation_key(word_animation) if word_animation is not None else None
     anim_args = (animate, line_animation, word_animation, animation)
+    ease_args = (cap.easing_key(line_easing) if line_easing is not None else None,
+                 cap.easing_key(word_easing) if word_easing is not None else None,
+                 cap.speed_key(speed) if speed is not None else None)
     plan0 = cap.resolve_animation(style, *anim_args)
     res = (scene.render.resolution_x, scene.render.resolution_y)
     choices = dict(choices or {})
@@ -1534,7 +1568,7 @@ def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str 
                and outcome.get(it["name"]) in ("captioned", cap.SKIP_NO_SPEECH)]
     above = max(s.channel for s in _media_strips(sources))      # above every selected clip, kept or not
     result = _place(scene, groups, st, chars, lines, above, targets, replace_edited, animation, lanes, font,
-                    animate, line_animation, word_animation)
+                    animate, line_animation, word_animation, *ease_args)
     firsts = [next(it["name"] for it in items if it["key"] == k) for k, _f in groups]
     result.update(sources=firsts, language=next((x for x in langs if x), None), max_chars=chars, max_lines=lines,
                   strips_captioned=captioned, strips_skipped=skipped)
@@ -2278,6 +2312,11 @@ def _look_text(result: dict) -> str:
         parts.append(anim)
     if word and word not in (cap.WORD_ANIMATIONS["STYLE"]["label"], cap.WORD_ANIMATIONS["NONE"]["label"]):
         parts.append("words: " + word)
+    for what, key in (("easing", "line_easing"), ("word easing", "word_easing")):
+        if result.get(key) and result[key] != cap.EASINGS[cap.EASING_STYLE]["label"]:
+            parts.append("{:s}: {:s}".format(what, result[key]))
+    if result.get("speed") and result["speed"] != cap.SPEEDS[cap.SPEED_NORMAL]["label"]:
+        parts.append("speed: " + result["speed"].lower())
     if result.get("position") and result["position"] != "BOTTOM":
         parts.append(cap.POSITIONS[result["position"]]["label"].lower())
     return ", ".join(p for p in parts if p)
@@ -2305,17 +2344,20 @@ def tool_add_captions(strips: Any = None, style: str = "CLEAN", language: str | 
                       speaker_settings: Any = None, case: Any = None, font: Any = None, bold: Any = None,
                       italic: Any = None, size: Any = None, text_color: Any = None,
                       highlight_color: Any = None, animate: Any = None, line_animation: Any = None,
-                      word_animation: Any = None) -> dict[str, Any]:
+                      word_animation: Any = None, line_easing: Any = None, word_easing: Any = None,
+                      speed: Any = None) -> dict[str, Any]:
     """``add_captions`` (MCP): a result dict, ``status`` ``"ok"`` or ``"error"`` + ``message``.
     *margin* in percent of the frame's height (#542); *case*, *font*, *bold*, *italic*, *size*,
     *text_color* and *highlight_color* are the style choices of #594 (none: as the style has it);
     *animate*, *line_animation* and *word_animation* (#594) are what moves and how: *animation* is the
-    single list of before and still works (it is the line animation)."""
+    single list of before and still works (it is the line animation); *line_easing*, *word_easing* and *speed*
+    (#605) shape the moves (:data:`captions.EASINGS`, :data:`captions.SPEEDS`)."""
     try:
         names, key, lang = cap.check_tool_params(strips, style, language)
         anim, pos, margin_frac = cap.check_look_params(animation, position, margin)
         choices = cap.check_style_params(case, font, bold, italic, size, text_color, highlight_color)
         animate_k, line_k, word_k = cap.check_animation_params(animate, line_animation, word_animation)
+        line_e, word_e, speed_k = cap.check_easing_params(line_easing, word_easing, speed)
         per_speaker, settings = cap.check_speakers(speakers, speaker_settings)
         scene = seq_scene()
         ed = scene.sequence_editor
@@ -2337,7 +2379,8 @@ def tool_add_captions(strips: Any = None, style: str = "CLEAN", language: str | 
         result = add_captions(scene, found, key, lang, transcript_path or "", replace_edited=bool(replace_edited),
                               animation=anim, position=pos, margin=margin_frac, speakers=per_speaker,
                               speaker_settings=settings, speaker_labels=bool(speaker_labels), choices=choices,
-                              animate=animate_k, line_animation=line_k, word_animation=word_k)
+                              animate=animate_k, line_animation=line_k, word_animation=word_k,
+                              line_easing=line_e, word_easing=word_e, speed=speed_k)
         result["message"] = "{:d} caption lines on channel {:d} ({:s}), frames {:d}-{:d}, {:s}.".format(
             result["lines_created"], result["channel"], _look_text(result), result["first_frame"],
             result["last_frame"],
@@ -2358,15 +2401,18 @@ def tool_add_captions(strips: Any = None, style: str = "CLEAN", language: str | 
 
 # -- operators and menus ---------------------------------------------------------------
 
-_STYLE_ITEMS = [(k, s["label"], s["description"]) for k, s in cap.STYLES.items()]
+_STYLE_ITEMS = [(k, s["label"], s["description"], safe_icon(cap.ICONS["style"].get(k, 'NONE')), i)
+                for i, (k, s) in enumerate(cap.STYLES.items())]
 
 
 def _lines_items_for(count: int) -> list[tuple]:
     """The Lines drop-down for a style that uses *count* lines: every entry says what it counts."""
+    icons = cap.ICONS["lines"]
     return [("STYLE", "As the Style ({:d} Line{:s})".format(count, "" if count == 1 else "s"),
-             "Use the number of lines the style has", 'PRESET', 0),
-            ("1", "1 Line", "Every caption on one line (the words are split into more captions)", 'NONE', 1),
-            ("2", "2 Lines", "Up to two lines per caption", 'NONE', 2)]
+             "Use the number of lines the style has", safe_icon(icons["STYLE"]), 0),
+            ("1", "1 Line", "Every caption on one line (the words are split into more captions)",
+             safe_icon(icons["1"]), 1),
+            ("2", "2 Lines", "Up to two lines per caption", safe_icon(icons["2"]), 2)]
 
 
 _LINES_BY_COUNT = {1: _lines_items_for(1), 2: _lines_items_for(2)}
@@ -2392,11 +2438,33 @@ def _plan_of(op: Any) -> dict[str, str]:
                                  getattr(op, "animation", None) if own else None)
 
 
-def _language_items() -> list[tuple[str, str, str]]:
+def _picture(name: str) -> Any:
+    """The icon of the dialog's icon *name* (:data:`captions.ICONS`): the picture of our own for a ``PNG:`` name
+    (``icon_value``), else the built-in name through ``shared.icon()`` (Bforartists' own, or its Blender fallback)."""
+    if name.startswith(cap.PNG_PREFIX):
+        from . import captions_icons
+        value = captions_icons.icon_id(name[len(cap.PNG_PREFIX):])
+        return value or safe_icon(cap.PNG_FALLBACK.get(name, cap.LANGUAGE_FALLBACK))
+    return safe_icon(name)
+
+
+def _language_items(pictures: bool = False) -> list[tuple]:
     from .preferences import _LANGUAGES
-    items = [("auto", "Detect Automatically", "Let the transcription find the language that is spoken")]
-    items += [(code, name, "Spoken in " + name) for code, name in _LANGUAGES]
+    pick = _picture if pictures else (lambda n: safe_icon(cap.LANGUAGE_FALLBACK if n.startswith(cap.PNG_PREFIX) else n))
+    items = [("auto", "Detect Automatically", "Let the transcription find the language that is spoken",
+              pick(cap.language_icon("auto")), 0)]
+    items += [(code, name, "Spoken in " + name, pick(cap.language_icon(code)), i + 1)
+              for i, (code, name) in enumerate(_LANGUAGES)]
     return items
+
+
+_LANGUAGE_PICTURES: list[tuple] = []      # kept alive: Blender reads the strings of a dynamic enum later
+
+
+def _language_pictures(_self: Any, _context: Any) -> list[tuple]:
+    """Language: Detect and one badge per language (the pictures of ``icons/captions``)."""
+    _LANGUAGE_PICTURES[:] = _language_items(True)
+    return _LANGUAGE_PICTURES
 
 
 _LANGUAGE_ITEMS = _language_items()
@@ -2406,44 +2474,56 @@ def _lines_value(value: str) -> int:
     return 0 if value == "STYLE" else int(value)
 
 
-_ANIM_ICONS = {cap.ANIM_STYLE: 'PRESET', "NONE": 'X', "FADE": 'IMAGE_ALPHA', "SLIDE_UP": 'TRIA_UP',
-               "SLIDE_DOWN": 'TRIA_DOWN', "TYPEWRITER": 'TEXT', "POP": 'ZOOM_IN'}
-_ANIMATE_ICONS = {"STYLE": 'PRESET', "LINE": 'ALIGN_JUSTIFY', "WORD": 'SMALL_CAPS', "BOTH": 'ANIM', "NONE": 'X'}
-_WORD_ICONS = {"STYLE": 'PRESET', "NONE": 'X', "HIGHLIGHT": 'COLOR', "POP": 'ZOOM_IN', "SCALE": 'FULLSCREEN_ENTER',
-               "RISE": 'TRIA_UP', "FADE_IN": 'IMAGE_ALPHA'}
-_POSITION_ICONS = {"BOTTOM": 'ANCHOR_BOTTOM', "TOP": 'ANCHOR_TOP', "MIDDLE": 'ANCHOR_CENTER'}
-_CASE_ICONS = {cap.STYLE_CASE: 'PRESET', "AS_SPOKEN": 'TEXT', "UPPER": 'SMALL_CAPS', "LOWER": 'FONT_DATA',
-               "TITLE": 'SORTALPHA'}
-# Icons through safe_icon (a Blender icon in every build; none of them is Bforartists-only), one per entry.
-_ANIM_ITEMS = [(k, a["label"], a["description"], safe_icon(_ANIM_ICONS.get(k, 'NONE')), i)
+# Icons through safe_icon, one per entry; the names are in captions.ICONS (a test checks every one resolves on Blender 5.2).
+_ICON = cap.ICONS
+_ANIM_ITEMS = [(k, a["label"], a["description"], safe_icon(_ICON["line"].get(k, 'NONE')), i)
                for i, (k, a) in enumerate(cap.ANIMATIONS.items())]
-_ANIMATE_ITEMS = [(k, a["label"], a["description"], safe_icon(_ANIMATE_ICONS.get(k, 'NONE')), i)
+_ANIMATE_ITEMS = [(k, a["label"], a["description"], safe_icon(_ICON["animate"].get(k, 'NONE')), i)
                   for i, (k, a) in enumerate(cap.ANIMATE.items())]
-_WORD_ITEMS = [(k, a["label"], a["description"], safe_icon(_WORD_ICONS.get(k.split("_", 1)[-1] if k.startswith("HIGHLIGHT_")
-                                                                       else k, 'NONE')), i)
-               for i, (k, a) in enumerate(cap.WORD_ANIMATIONS.items())]
-_POSITION_ITEMS = [(k, p["label"], p["description"], safe_icon(_POSITION_ICONS.get(k, 'NONE')), i)
+def _word_items_made(pictures: bool) -> list[tuple]:
+    pick = _picture if pictures else (lambda n: safe_icon(cap.PNG_FALLBACK.get(n, n)))
+    return [(k, a["label"], a["description"], pick(_ICON["word"].get(k, 'NONE')), i)
+            for i, (k, a) in enumerate(cap.WORD_ANIMATIONS.items())]
+
+
+_WORD_ITEMS = _word_items_made(False)
+_WORD_PICTURES: list[tuple] = []        # kept alive: Blender reads the strings of a dynamic enum later
+
+
+def _word_pictures(_self: Any, _context: Any) -> list[tuple]:
+    """Word Animation: "Highlight + ..." with the picture of its motion and the colour wheel."""
+    _WORD_PICTURES[:] = _word_items_made(True)
+    return _WORD_PICTURES
+
+
+_EASING_ITEMS = [(k, e["label"], e["description"], safe_icon(_ICON["easing"].get(k, 'NONE')), i)
+                 for i, (k, e) in enumerate(cap.EASINGS.items())]
+_SPEED_ITEMS = [(k, e["label"], e["description"], safe_icon(_ICON["speed"].get(k, 'NONE')), i)
+                for i, (k, e) in enumerate(cap.SPEEDS.items())]
+_POSITION_ITEMS = [(k, p["label"], p["description"], safe_icon(_ICON["position"].get(k, 'NONE')), i)
                    for i, (k, p) in enumerate(cap.POSITIONS.items())]
-_CASE_ITEMS = [(k, c["label"], c["description"], safe_icon(_CASE_ICONS.get(k, 'NONE')), i)
+_CASE_ITEMS = [(k, c["label"], c["description"], safe_icon(_ICON["case"].get(k, 'NONE')), i)
                for i, (k, c) in enumerate(cap.CASES.items())]
-_TRI_ITEMS = {name: [("STYLE", "As the Style", "The style's own: " + what[0], 'NONE', 0),
-                     ("ON", "On", what[1], 'NONE', 1), ("OFF", "Off", what[2], 'NONE', 2)]
+_TRI_ITEMS = {name: [("STYLE", "As the Style", "The style's own: " + what[0], safe_icon(_ICON["tri"]["STYLE"]), 0),
+                     ("ON", "On", what[1], safe_icon(_ICON[name]["ON"]), 1),
+                     ("OFF", "Off", what[2], safe_icon(_ICON["tri"]["OFF"]), 2)]
               for name, what in (("bold", ("bold or not, as the style has it", "Bold text", "Regular weight text")),
                                  ("italic", ("never italic", "Slanted text", "Upright text")))}
 _TRI_VALUE = {"STYLE": None, "ON": True, "OFF": False}
-_SAME = ("SAME", "Same as Above", "As set above for every speaker")
+_SAME = ("SAME", "Same as Above", "As set above for every speaker", safe_icon(_ICON["same"]["SAME"]), 0)
 _FONT_ITEMS: list[tuple] = []       # kept alive: Blender reads the strings of a dynamic enum later
 
 
 def _font_items(_self: Any, _context: Any) -> list[tuple]:
     """Font: the style's own, each font loaded in this file, or a font file."""
-    items = [("STYLE", "As the Style", "The style's own font: Blender's bundled Inter", safe_icon('FONT_DATA'), 0)]
+    icons = cap.ICONS["font"]
+    items = [("STYLE", "As the Style", "The style's own font: Blender's bundled Inter", safe_icon(icons["STYLE"]), 0)]
     for f in bpy.data.fonts:
         if not str(f.filepath).startswith("<builtin"):
-            items.append(("FONT:" + f.name, f.name, "A font loaded in this file", safe_icon('FONT_DATA'),
+            items.append(("FONT:" + f.name, f.name, "A font loaded in this file", safe_icon(icons["FONT"]),
                           len(items)))
     items.append(("FILE", "A Font File...", "Pick a font file on disk (.ttf, .otf, .woff2...); it is loaded "
-                                            "into this file", safe_icon('FILE_FONT'), len(items)))
+                                            "into this file", safe_icon(icons["FILE"]), len(items)))
     _FONT_ITEMS[:] = items
     return _FONT_ITEMS
 
@@ -2455,10 +2535,10 @@ class BFACW_PG_caption_speaker(PropertyGroup):  # type: ignore[misc]
         name="Name", default="", description="The speaker's name: their caption channel's, and the label in front "
                                              "of their captions")
     style: EnumProperty(  # type: ignore[valid-type]
-        name="Style", items=[_SAME] + _STYLE_ITEMS, default="SAME",
+        name="Style", items=[_SAME] + [(i[0], i[1], i[2], i[3], i[4] + 1) for i in _STYLE_ITEMS], default="SAME",
         description="How this speaker's captions look (Same as Above: the style chosen above)")
     position: EnumProperty(  # type: ignore[valid-type]
-        name="Position", items=[_SAME] + [(i[0], i[1], i[2]) for i in _POSITION_ITEMS], default="SAME",
+        name="Position", items=[_SAME] + [(i[0], i[1], i[2], i[3], i[4] + 1) for i in _POSITION_ITEMS], default="SAME",
         description="Where this speaker's captions sit (Same as Above: the position chosen above)")
 
 
@@ -2505,7 +2585,7 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         name="Style", items=_STYLE_ITEMS, default="CLEAN",
         description="How the captions look: size, colours, outline, box and whether the spoken word lights up")
     language: EnumProperty(  # type: ignore[valid-type]
-        name="Language", items=_LANGUAGE_ITEMS, default="auto",
+        name="Language", items=_language_pictures,
         description="The language that is spoken, so it is transcribed right (Detect: let the transcription find it)")
     max_chars: IntProperty(  # type: ignore[valid-type]
         name="Max Characters", default=0, min=0, max=80,
@@ -2532,9 +2612,24 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         name="Line Animation", items=_ANIM_ITEMS, default="FADE",
         description="How each caption line moves in and out as a whole")
     word_animation: EnumProperty(  # type: ignore[valid-type]
-        name="Word Animation", items=_WORD_ITEMS, default="HIGHLIGHT",
+        name="Word Animation", items=_word_pictures, default=list(cap.WORD_ANIMATIONS).index("HIGHLIGHT"),
         description="What each word does at its own time: light up in the highlight colour, pop, scale, rise or "
                     "fade in (a word motion makes every word its own strip)")
+    line_easing: EnumProperty(  # type: ignore[valid-type]
+        name="Line Easing", items=_EASING_ITEMS, default="STYLE",
+        description="How the line's move eases: the shape of its curve, with Blender's own keyframe interpolation "
+                    "(no keyframe is added; the Graph Editor can still edit it). Greyed out when the line animation "
+                    "has no smooth move to ease: None, or a style whose own line stands still. Typewriter's letters "
+                    "appear in steps, but its fade out is eased")
+    word_easing: EnumProperty(  # type: ignore[valid-type]
+        name="Word Easing", items=_EASING_ITEMS, default="STYLE",
+        description="How each word's move eases: the shape of its curve, with Blender's own keyframe interpolation "
+                    "(no keyframe is added). Greyed out when the word animation has nothing to ease: a Highlight "
+                    "only changes the colour in a step")
+    speed: EnumProperty(  # type: ignore[valid-type]
+        name="Speed", items=_SPEED_ITEMS, default="NORMAL",
+        description="How long the moves in and out take: Fast, Normal or Slow (a way in never takes more than a "
+                    "third of a caption, a way out a quarter). Greyed out when nothing moves")
     position: EnumProperty(  # type: ignore[valid-type]
         name="Position", items=_POSITION_ITEMS, default="BOTTOM",
         description="Where the captions sit in the frame: near the bottom, near the top or in the middle")
@@ -2608,7 +2703,7 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         highlight = cap.word_parts(plan["word"])[0]
         # Style: how the captions look.
         box = layout.box()
-        box.label(text="Style: how the captions look", icon=safe_icon('FONT_DATA'))
+        box.label(text="Style: how the captions look", icon=safe_icon(cap.ICONS["section"]["style"]))
         col = box.column()
         col.use_property_split = True
         col.prop(self, "style")
@@ -2640,36 +2735,61 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
             row.label(text="Auto: {:d} %".format(int(round(cap.default_margin(self.position, kind) * 100))))
         # Motion: how they move.
         box = layout.box()
-        box.label(text="Motion: how the captions move", icon=safe_icon('ANIM'))
+        box.label(text="Motion: how the captions move", icon=safe_icon(cap.ICONS["section"]["motion"]))
         col = box.column()
         col.use_property_split = True
         col.prop(self, "animate")
-        if self.animate in ("LINE", "BOTH"):
+        line_row = self.animate in ("LINE", "BOTH")
+        word_row = self.animate in ("WORD", "BOTH")
+        if line_row:
             col.prop(self, "line_animation")
-        if self.animate in ("WORD", "BOTH"):
+        # An easing row sits under its animation (or, for the style's own pop, under Animate); greyed out when the
+        # chosen animation has nothing smooth to ease (#605).
+        own_pop = self.animate == "STYLE" and cap.line_eases(plan, self.style)
+        if line_row or own_pop:
+            sub = col.row()
+            sub.enabled = cap.line_eases(plan, self.style)
+            sub.prop(self, "line_easing")
+            if not sub.enabled:
+                _wrapped(col.column(align=True), cap.line_ease_reason(plan, self.style), 'INFO')
+        if word_row:
             col.prop(self, "word_animation")
+            sub = col.row()
+            sub.enabled = cap.words_ease(plan)
+            sub.prop(self, "word_easing")
+            if not sub.enabled:
+                _wrapped(col.column(align=True), cap.words_ease_reason(plan), 'INFO')
+        sub = col.row()
+        sub.enabled = cap.animates(plan)
+        sub.prop(self, "speed")
         if plan["words"] == "motion":
             _wrapped(col.column(align=True), "Each word is a strip of its own on a channel of its own, and the "
                      "caption's line strip stays as the anchor and draws nothing.", 'INFO')
         # The words: what is transcribed and how it is split.
-        layout.prop(self, "language")
-        row = layout.row()
+        box = layout.box()
+        box.label(text="Text: what is said and how it is split", icon=safe_icon(cap.ICONS["section"]["text"]))
+        col = box.column()
+        col.use_property_split = True
+        col.prop(self, "language")
+        row = col.row()
         row.prop(self, "max_chars")
         if self.max_chars == 0:
             row.label(text="Auto: {:d}".format(cap.default_max_chars(
                 self.style, scene.render.resolution_x, scene.render.resolution_y, self._choices_or_none())))
-        sub = layout.row()
-        sub.enabled = not (cap.STYLES[self.style]["highlight"] and plan["words"] != "none")             and not cap.plan_one_line(plan)
+        sub = col.row()
+        sub.enabled = not (cap.STYLES[self.style]["highlight"] and plan["words"] != "none") and not cap.plan_one_line(plan)
         sub.prop(self, "lines")
-        layout.prop(self, "transcript_path")
-        layout.prop(self, "replace_edited")
+        col.prop(self, "transcript_path")
+        col.prop(self, "replace_edited")
         if len(self.speaker_list) > 1 or self.speakers:
-            layout.prop(self, "speakers")
+            box = layout.box()
+            box.label(text="Speakers: a channel for each voice", icon=safe_icon(cap.ICONS["section"]["speakers"]))
+            box.prop(self, "speakers")
             if self.speakers:
-                layout.prop(self, "speaker_labels")
-                col = layout.column(align=True)
+                box.prop(self, "speaker_labels")
+                col = box.column(align=True)
                 col.use_property_split = False
-                col.label(text="Each speaker: name, style, position")
+                col.label(text="Each speaker: name, style, position", icon=safe_icon('USER'))
                 for item in self.speaker_list:
                     r = col.row(align=True)
                     r.prop(item, "name", text="")
@@ -2735,6 +2855,8 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
         return {"animation": self.animation if own else cap.ANIM_STYLE, "animate": self.animate,
                 "line_animation": None if own else self.line_animation,
                 "word_animation": None if own else self.word_animation,
+                "line_easing": self.line_easing, "word_easing": None if own else self.word_easing,
+                "speed": self.speed,
                 "position": self.position, "margin": self.margin / 100.0,
                 "speakers": bool(self.speakers), "speaker_settings": settings,
                 "speaker_labels": bool(self.speaker_labels), "choices": self._choices()}
@@ -3054,6 +3176,11 @@ def register() -> None:
 
 
 def unregister() -> None:
+    try:
+        from . import captions_icons
+        captions_icons.free()
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
     _watch_stop()
     for menu, draw in _HOOKED:
         try:

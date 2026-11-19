@@ -300,7 +300,11 @@ class ChatSurface:
             self.on_resize(max(0.0, self.bounds.top - y))
             return True
         if self.pressed == "input_resize":           # the input's top edge (#389)
-            self.box.drag_top(y)
+            if not self._dragging and self._press_at is not None:      # a wiggle is no drag (#626)
+                px, py = self._press_at
+                self._dragging = abs(x - px) > _DRAG_PIXELS or abs(y - py) > _DRAG_PIXELS
+            if self._dragging:
+                self.box.drag_top(y)
             return True
         if self.pressed in _TEXT_DRAG:
             if not self._dragging and self._press_at is not None:

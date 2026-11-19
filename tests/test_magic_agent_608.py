@@ -299,7 +299,25 @@ class TestWiring(_Case):
             self.assertIn(needle, ui)
         self.assertEqual(ui.count("return _magic.agent_label(cls.bl_description)"), 3, "start, stop, restart")
         self.assertIn("magic_wording.agent_label(", ce)
-        self.assertIn("magic_wording.agent_icon(item[3]) if item[0] == \"AGENT\"", ce)
+        self.assertNotIn("agent_icon(item[3])", ce, "the mode button keeps its own icon (#624)")
+
+    def test_the_coworker_mode_button_keeps_the_ghost_on_and_off(self):
+        """#624: the mode button is the mode's own GHOST_ENABLED; the wizard is for the headers."""
+        src = _SRC["chat_editor.py"]
+        start = src.index("def _chat_mode_buttons")
+        body = src[start:src.index("def _mode_status", start)]
+        ns = {"CHAT_MODE_ITEMS": shared.CHAT_MODE_ITEMS, "magic_wording": mw, "__builtins__": __builtins__}
+        exec(body, ns)
+        for enabled in (True, False):
+            mw.set_enabled_for_tests(enabled)
+            icons = {ident: icon for ident, _label, icon in ns["_chat_mode_buttons"]()}
+            self.assertEqual(icons["AGENT"], "GHOST_ENABLED", enabled)
+            self.assertEqual(icons["ASK"], "QUESTION")
+        self.assertNotIn("WIZARD", repr(ns["_chat_mode_buttons"]()))
+        # the wizard stays on the header, the panel header and the reply line
+        mw.set_enabled_for_tests(True)
+        self.assertEqual(mw.agent_icon("GHOST_ENABLED"), "WIZARD")
+        self.assertIn("**_magic.agent_icon_args(_AGENT_ICON)", _SRC["ui_chat.py"])
 
     def test_operator_names_and_labels_stay_plain(self):
         ui = _SRC["ui_chat.py"]

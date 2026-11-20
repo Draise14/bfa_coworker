@@ -5,8 +5,8 @@
 """
 Draw Reframe's layout icons (#606) as PNGs, with no dependencies beyond the standard library.
 
-Each icon is a simple diagram of a 9:16 frame: a dark outline and a white keyline round the inside, the
-larger part in strong blue, the smaller part pale, a white seam between them where the split is:
+Each icon is a simple diagram of a 9:16 frame (bold dark outline, white halo; see #628), the
+larger part in strong blue, the smaller part orange, a thick dark seam between them where the split is:
 
 * ``reframe_full``: the whole frame in blue;
 * ``reframe_full_blur``: the picture in the middle, a soft border fading out above and below it;
@@ -49,13 +49,14 @@ HILL, HILL_DARK = (0x3c, 0x98, 0x3c), (0x1e, 0x4c, 0x1e)
 WHITE, BLACK = (0xfe, 0xfe, 0xfe), (0, 0, 0)
 SEAM = (0x32, 0x00, 0x00)
 DARK = (0x1c, 0x1c, 0x1c)
-BIG = (0x32, 0x65, 0xfe)       # the part that fills most of the frame
-SMALL = (0x98, 0xcb, 0xfe)     # the smaller part (lighter, so the shares read)
-FADE = (0xcb, 0xe4, 0xfe)
 
-# The frame: 9:16, centred, in the 64 px design.
-FX0, FX1, FY0, FY1 = 14, 50, 2, 62
-INNER = (FX0 + 4, FY0 + 4, FX1 - 4, FY1 - 4)       # x0, y0, x1, y1 (y down)
+# The frame: about 9:16, as wide as the 64 px design allows, a white halo and a bold dark outline so it
+# reads on a dark and on a light theme at 16 px.
+FX0, FX1, FY0, FY1 = 9, 55, 1, 63
+INNER = (FX0 + 5, FY0 + 5, FX1 - 5, FY1 - 5)       # x0, y0, x1, y1 (y down)
+BIG = (0x1f, 0x4f, 0xe8)       # the larger part: strong blue
+SMALL = (0xff, 0xb3, 0x1a)     # the smaller part: orange, clearly another colour
+PALE = (0xdf, 0xec, 0xff)      # where Blur Fill fades out
 
 
 class Canvas:
@@ -188,37 +189,39 @@ def target(c: Canvas, cx: float, cy: float, r: float = 7.0) -> None:
 
 
 def frame(c: Canvas) -> tuple:
-    """The 9:16 frame: a dark outline, a white keyline, the inside; returns the inside's rectangle."""
-    c.rect(FX0, FY0, FX1, FY1, DARK)
-    c.rect(FX0 + 2.5, FY0 + 2.5, FX1 - 2.5, FY1 - 2.5, WHITE)
-    return (FX0 + 4.5, FY0 + 4.5, FX1 - 4.5, FY1 - 4.5)
+    """The 9:16 frame: a white halo, a bold dark outline, the inside; returns the inside's rectangle."""
+    c.rect(FX0, FY0, FX1, FY1, WHITE)
+    c.rect(FX0 + 2, FY0 + 2, FX1 - 2, FY1 - 2, DARK)
+    return (FX0 + 5, FY0 + 5, FX1 - 5, FY1 - 5)
 
 
 def seam(c: Canvas, x0: float, x1: float, y: float) -> None:
-    c.rect(x0, y - 2.6, x1, y + 2.6, DARK)
-    c.rect(x0, y - 1.2, x1, y + 1.2, WHITE)
+    """A thick dark seam (the bar between the two parts) with a thin white line in it."""
+    c.rect(x0, y - 3.0, x1, y + 3.0, DARK)
+    c.rect(x0, y - 0.8, x1, y + 0.8, WHITE)
 
 
 def draw(name: str) -> Canvas:
     c = Canvas(BASE)
     x0, y0, x1, y1 = frame(c)
     height = y1 - y0
-    if name in ("reframe_full", "reframe_full_tracked"):
+    cx = (x0 + x1) / 2
+    if name == "reframe_full":
         c.rect(x0, y0, x1, y1, BIG)
-        if name.endswith("tracked"):
-            target(c, (x0 + x1) / 2 + 2, y0 + height * 0.36, 8.5)
+    elif name == "reframe_full_tracked":
+        c.rect(x0, y0, x1, y1, BIG)
+        target(c, cx, y0 + height * 0.45, 12.0)
     elif name == "reframe_full_blur":
-        # a soft border: the colour fades out above and below the whole picture in the middle
-        mid0, mid1 = y0 + height * 0.34, y0 + height * 0.66
+        # the whole picture in the middle, a visibly soft border above and below that fades to pale
+        mid0, mid1 = y0 + height * 0.36, y0 + height * 0.64
         for row in range(int(y0 * SS), int(y1 * SS)):
             y = row / SS
-            d = max(0.0, mid0 - y, y - mid1) / (mid0 - y0)
-            k = min(1.0, d) ** 0.8
-            colour = tuple(int(BIG[i] + (FADE[i] - BIG[i]) * k) for i in range(3))
+            d = min(1.0, max(0.0, mid0 - y, y - mid1) / (mid0 - y0))
+            colour = tuple(int(BIG[i] + (PALE[i] - BIG[i]) * (0.35 + 0.65 * d) * min(1.0, d * 4)) for i in range(3))
             c.rect(x0, y, x1, y + 1.0 / SS, colour)
         c.rect(x0, mid0, x1, mid1, BIG)
-        c.rect(x0, mid0 - 1.0, x1, mid0, DARK)
-        c.rect(x0, mid1, x1, mid1 + 1.0, DARK)
+        c.rect(x0, mid0 - 1.2, x1, mid0, WHITE)
+        c.rect(x0, mid1, x1, mid1 + 1.2, WHITE)
     else:
         share = {"reframe_split_half": 0.5, "reframe_split_top": 2 / 3, "reframe_split_bottom": 1 / 3,
                  "reframe_track_all": 0.5}[name]
@@ -228,8 +231,8 @@ def draw(name: str) -> Canvas:
         c.rect(x0, edge, x1, y1, SMALL if top_big else BIG)
         seam(c, x0, x1, edge)
         if name == "reframe_track_all":
-            target(c, (x0 + x1) / 2 + 3, y0 + (edge - y0) * 0.5, 6.0)
-            target(c, (x0 + x1) / 2 - 3, edge + (y1 - edge) * 0.5, 6.0)
+            target(c, cx, y0 + (edge - y0) * 0.5 - 1.0, 8.5)
+            target(c, cx, edge + (y1 - edge) * 0.5 + 1.0, 8.5)
     return c
 
 

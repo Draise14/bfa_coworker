@@ -37,8 +37,12 @@ _DRAWN_IN = (("captions_ops.py", ("BFACW_MT_captions", "_draw_context_menu")),
              # the Reframe sidebar box, the toolshelf box and the Strip menu entries draw through these
              # (``layout.operator("bfacw.reframe_layout", icon_value=...)``: icon_value, not a wand-icon helper)
              ("reframe_layouts.py", ("BFACW_PT_reframe_sidebar", "BFACW_PT_reframe_toolshelf",
-                                     "BFACW_MT_reframe_layout", "_layout_button", "_action_buttons",
-                                     "_draw_buttons")))
+                                     "BFACW_MT_reframe_layout", "_layout_button",
+                                     "_draw_buttons"),
+              # the toolshelf entries (#622): ``LayoutEntry.draw`` names its operator; Swap and Reset are table rows
+              # (``_SWAP`` / ``_RESET``: the id is the first string of the tuple), drawn by ``ActionEntry.draw``
+              ),
+             ("wand/reframe_entries.py", ("LayoutEntry", "ActionEntry", "_SWAP", "_RESET")))
 
 
 def _load_spec():
@@ -112,7 +116,12 @@ def _drawn_in_menus(classes: dict) -> set:
     for filename, scopes in _DRAWN_IN:
         tree = ast.parse((_ADDON / filename).read_text(encoding="utf-8"))
         for top in tree.body:
-            if getattr(top, "name", "") not in scopes:
+            name = getattr(top, "name", "") or next((getattr(t, "id", "") for t in getattr(top, "targets", ())), "")
+            if name not in scopes:
+                continue
+            if isinstance(top, ast.Assign):      # a table row: the operator ids are its string literals
+                ids.update(n.value for n in ast.walk(top) if isinstance(n, ast.Constant)
+                           and isinstance(n.value, str) and n.value.startswith("bfacw."))
                 continue
             for node in ast.walk(top):
                 if not isinstance(node, ast.Call) or getattr(node.func, "attr", getattr(node.func, "id", "")) not in (
@@ -187,6 +196,21 @@ class EveryWand(unittest.TestCase):
             self.assertIn(idname, drawn)
             without = set(SPEC.WAND_OPERATORS) - {idname}
             self.assertEqual(sorted(drawn - without), [idname], idname)
+
+    def test_the_toolshelf_entries_are_walked_too(self) -> None:
+        # #622: the toolshelf draws the Reframe buttons from wand/reframe_entries.py; without that scope the
+        # walk would see them only through the sidebar box.
+        scoped = [scopes for name, scopes in _DRAWN_IN if name == "wand/reframe_entries.py"]
+        self.assertEqual(len(scoped), 1)
+        saved = _DRAWN_IN
+        try:
+            globals()["_DRAWN_IN"] = (("wand/reframe_entries.py", scoped[0]),)
+            only = _drawn_in_menus(self.classes)
+        finally:
+            globals()["_DRAWN_IN"] = saved
+        self.assertEqual(only, {"bfacw.reframe_layout", "bfacw.reframe_swap", "bfacw.reframe_reset"})
+        for idname in sorted(only):
+            self.assertEqual(sorted(only - (set(SPEC.WAND_OPERATORS) - {idname})), [idname])
 
     def test_the_wand_without_the_helper_is_caught(self) -> None:
         node = ast.parse('class A:\n    bl_idname = "x.y"\n    bl_description = "plain"\n').body[0]

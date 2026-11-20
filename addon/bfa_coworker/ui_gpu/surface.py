@@ -88,7 +88,7 @@ TIPS: dict[str, str] = {
     "input": "Your message: Enter sends, Shift+Enter is a new line, @ mentions, / runs an agent command",
     "queue": "Queue this message: it goes when the running turn ends",
     "resize": "Drag to make the chat taller or shorter",
-    "input_resize": "Drag to make the input taller or shorter (Ctrl+Up / Ctrl+Down while typing)",
+    "input_resize": "Drag to make the input taller or shorter (Ctrl+Up / Ctrl+Down while typing). Double-click: grow with the text again",
     "scroll_track": "Click to page up or down",
     "scroll_handle": "Drag to scroll the chat",
     "approve:once": "Allow this one step (the next one asks again)",
@@ -300,7 +300,11 @@ class ChatSurface:
             self.on_resize(max(0.0, self.bounds.top - y))
             return True
         if self.pressed == "input_resize":           # the input's top edge (#389)
-            self.box.drag_top(y)
+            if not self._dragging and self._press_at is not None:      # a wiggle is no drag (#626)
+                px, py = self._press_at
+                self._dragging = abs(x - px) > _DRAG_PIXELS or abs(y - py) > _DRAG_PIXELS
+            if self._dragging:
+                self.box.drag_top(y)
             return True
         if self.pressed in _TEXT_DRAG:
             if not self._dragging and self._press_at is not None:
@@ -359,6 +363,10 @@ class ChatSurface:
             self.pressed = "input"            # a drag selects (#451)
             return True
         if widget == "input_resize":
+            if double:              # back to growing with the text (#626); no drag, focus stays
+                self.box.reset_size()
+                self.pressed = None
+                return True
             self.box.begin_resize()
         self.pressed = widget
         return True

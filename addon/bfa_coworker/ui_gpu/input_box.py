@@ -23,7 +23,10 @@ fills :attr:`InputBox.actions` with requests for the host: ``("send", text)``,
 
 Long messages (#389): the box grows with its text up to :attr:`InputBox.max_lines`
 (the host remembers it; dragging the box's top edge or Ctrl+Up / Ctrl+Down sets
-it, never past :attr:`InputBox.line_cap`, about half the chat).  Past that the
+it, never past :attr:`InputBox.line_cap`, about half the chat).  Once the
+size was set by hand (a drag or Ctrl+Up / Ctrl+Down, :attr:`InputBox.sized`, #626) the box
+keeps exactly that many lines whatever the text's length; a double-click on the top edge
+goes back to growing with the text.  Past the size the
 text scrolls inside the box (:attr:`InputBox.scroll`, the wheel), and the caret
 stays in view whenever it moves or the text changes.
 Free of ``bpy``.
@@ -267,6 +270,10 @@ class InputBox:
     line_cap: int = 0
     scroll: int = 0
     on_lines: Callable[[int], None] | None = None
+    # #626: the size was set by hand -- the box then shows exactly *max_lines* (within the cap)
+    # instead of growing with its text; the host keeps it with the size (*on_sized* hears of it).
+    sized: bool = False
+    on_sized: Callable[[bool], None] | None = None
     resizing: bool = False                 # the top edge is being dragged
     _drag_lines: int = 0                   # ... and the lines it shows meanwhile
     # The last draw: every visual line, how many showed, where they start (x), the line
@@ -389,9 +396,12 @@ class InputBox:
 
     def visible_lines(self, count: int) -> int:
         """Text lines shown for *count* lines of text: as many as it has, within the limit
-        (while the top edge is dragged: the dragged size, so you see what you set)."""
+        (while the top edge is dragged: the dragged size, so you see what you set).  A size set
+        by hand (#626) is shown whatever the text's length."""
         if self.resizing:
             return max(_MIN_VISIBLE_LINES, self._drag_lines)
+        if self.sized:
+            return self.line_limit()
         return max(_MIN_VISIBLE_LINES, min(count, self.line_limit()))
 
     def set_max_lines(self, lines: int) -> int:
@@ -404,6 +414,17 @@ class InputBox:
             if self.on_lines is not None:
                 self.on_lines(lines)
         return lines
+
+    def set_sized(self, sized: bool) -> None:
+        """Size by hand (True) or grow with the text (False); tell the host when it changed (#626)."""
+        if bool(sized) != self.sized:
+            self.sized = bool(sized)
+            if self.on_sized is not None:
+                self.on_sized(self.sized)
+
+    def reset_size(self) -> None:
+        """Back to growing with the text (a double-click on the top edge, #626)."""
+        self.set_sized(False)
 
     def lines_fitting(self, canvas: Canvas, height: float) -> int:
         """How many text lines fit in a box *height* tall (for the surface's cap)."""
@@ -419,6 +440,7 @@ class InputBox:
         if not self.resizing or self.rect is None or self._line_h <= 0:
             return
         self._drag_lines = self.set_max_lines(round((y - self.rect.y - self._chrome_h) / self._line_h))
+        self.set_sized(True)
 
     def end_resize(self) -> None:
         self.resizing = False
@@ -452,8 +474,9 @@ class InputBox:
         # Ctrl+Up / Ctrl+Down: a taller or shorter box (#389); from what shows now, so a short
         # draft in a tall box shrinks at once.
         if key.ctrl and not (key.shift or key.alt or key.oskey) and key.type in ("UP_ARROW", "DOWN_ARROW"):
-            shown = min(self.line_limit(), max(_MIN_VISIBLE_LINES, len(self._layout)))
-            self.set_max_lines(self.line_limit() + 1 if key.type == "UP_ARROW" else shown - 1)
+            shown = self.line_limit() if self.sized else min(self.line_limit(), max(_MIN_VISIBLE_LINES, len(self._layout)))
+            self.set_max_lines(shown + 1 if key.type == "UP_ARROW" else shown - 1)
+            self.set_sized(True)
             return True
         if self.suggestions:
             if key.type == "UP_ARROW":

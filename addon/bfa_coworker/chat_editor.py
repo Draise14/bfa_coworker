@@ -419,6 +419,8 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0, trace: Any =
     surface.bounds = rect
     surface.box.max_lines = getattr(prefs, _input_lines_pref(compact), surface.box.max_lines)     # #389
     surface.box.on_lines = lambda lines, _compact=compact: _remember_input_lines(lines, _compact)
+    surface.box.sized = bool(getattr(prefs, _input_sized_pref(compact), surface.box.sized))      # #626
+    surface.box.on_sized = lambda sized, _compact=compact: _remember_input_sized(sized, _compact)
     surface.drop_hover = drop_hover()
     surface.show_tips = bool(getattr(context.preferences.view, "show_tooltips", True))   # #388
     try:        # a second press this soon selects a word (#451, #455), like Blender's double-click
@@ -470,6 +472,22 @@ def _draw(region: Any, rect: Any, compact: bool, zoom: float = 1.0, trace: Any =
 def _input_lines_pref(compact: bool) -> str:
     """The preference that keeps the input's height (#389): one for sidebars, one for editors."""
     return "chat_input_lines_sidebar" if compact else "chat_input_lines_editor"
+
+
+def _input_sized_pref(compact: bool) -> str:
+    """The preference that says the input's height was set by hand (#626)."""
+    return "chat_input_sized_sidebar" if compact else "chat_input_sized_editor"
+
+
+def _remember_input_sized(sized: bool, compact: bool) -> None:
+    """Keep whether the input's height was set by hand (a drag, Ctrl+Up / Down) or grows with
+    its text again (a double-click on the top edge), saved with the preferences (#626)."""
+    prefs = _prefs()
+    name = _input_sized_pref(compact)
+    if prefs is None or getattr(prefs, name, sized) == sized:
+        return
+    from .shared import set_user_pref
+    set_user_pref(prefs, name, bool(sized))
 
 
 def _remember_input_lines(lines: int, compact: bool) -> None:

@@ -371,6 +371,245 @@ class TestTopEdge(_Surface):
         self.assertEqual(self.box.max_lines, ib._MAX_VISIBLE_LINES)
 
 
+class TestSizedByHand(_Surface):
+    """#626: a size set by hand is the size the box keeps; a double-click goes back to growing."""
+
+    def lines(self):
+        return self.box._visible
+
+    def double_click_edge(self):
+        s = self.surface
+        edge = _hit(s, "input_resize")
+        x, y = edge.x + edge.w / 2, edge.y + edge.h / 2
+        for _ in range(2):
+            s.on_press(x, y)
+            s.on_release(x, y)
+        _draw(s)
+
+    drag_edge = TestTopEdge.drag_edge
+
+    def test_never_sized_grows_with_the_text_as_before(self):
+        self.assertFalse(self.box.sized)
+        self.assertEqual(self.lines(), ib._MIN_VISIBLE_LINES)
+        self.fill("one\ntwo\nthree")
+        self.assertEqual(self.lines(), 3)
+        self.fill(FORTY)
+        self.assertEqual(self.lines(), ib._MAX_VISIBLE_LINES)
+
+    def test_sized_then_short_text_keeps_the_size(self):
+        self.drag_edge(st.Style().line_height * 4)
+        self.assertTrue(self.box.sized)
+        want = ib._MIN_VISIBLE_LINES + 4
+        for text in ("", "one", "one\ntwo\nthree"):
+            self.fill(text)
+            self.assertEqual(self.lines(), want, repr(text))
+        self.assertEqual(self.box.max_lines, want)
+
+    def test_sized_then_long_text_scrolls_inside_it(self):
+        self.drag_edge(st.Style().line_height * 2)
+        self.fill()
+        self.assertEqual(self.lines(), ib._MIN_VISIBLE_LINES + 2)
+        self.assertTrue(self.box.can_scroll())
+        self.assertTrue(_caret_shown(self.box))
+
+    def test_the_bottom_stays_put_and_the_box_grows_up(self):
+        bottom = self.box.rect.y
+        self.drag_edge(st.Style().line_height * 3)
+        self.fill("")
+        self.assertAlmostEqual(self.box.rect.y, bottom)
+        self.assertGreater(self.box.rect.top, bottom + 3 * st.Style().line_height)
+
+    def test_ctrl_up_and_down_size_it_by_hand(self):
+        self.fill("one")
+        _key(self.box, "UP_ARROW", ctrl=True)
+        self.assertTrue(self.box.sized)
+        self.assertEqual(self.box.max_lines, 3)                       # from the 2 lines it showed
+        self.fill("")
+        self.assertEqual(self.lines(), 3)
+        _key(self.box, "UP_ARROW", ctrl=True)
+        _draw(self.surface)
+        self.assertEqual(self.lines(), 4)
+        _key(self.box, "DOWN_ARROW", ctrl=True)
+        _draw(self.surface)
+        self.assertEqual(self.lines(), 3)
+
+    def test_a_double_click_on_the_edge_grows_with_the_text_again(self):
+        self.drag_edge(st.Style().line_height * 4)
+        self.fill("one")
+        self.assertEqual(self.lines(), ib._MIN_VISIBLE_LINES + 4)
+        self.double_click_edge()
+        self.assertFalse(self.box.sized)
+        self.assertEqual(self.lines(), ib._MIN_VISIBLE_LINES)   # "one": the minimum
+        self.assertEqual(self.box.max_lines, ib._MIN_VISIBLE_LINES + 4)              # the limit is kept
+        self.fill(FORTY)
+        self.assertEqual(self.lines(), ib._MIN_VISIBLE_LINES + 4)
+
+    def test_the_double_click_neither_drags_nor_moves_focus_nor_the_caret(self):
+        self.fill("hello")
+        self.box.model.select_all()
+        h0 = self.box.rect.h
+        self.double_click_edge()
+        self.assertTrue(self.box.focused)
+        self.assertIsNone(self.surface.pressed)
+        self.assertFalse(self.box.resizing)
+        self.assertEqual(self.box.model.selected_text(), "hello")
+        self.assertAlmostEqual(self.box.rect.h, h0)
+        self.assertFalse(self.box.sized)                              # a click alone never sizes
+
+    def test_the_cap_wins_without_changing_the_kept_size(self):
+        kept = {"lines": 60, "sized": True}
+        s = sf.ChatSurface(clock=_Clock())
+        s.box.on_lines = lambda n: kept.update(lines=n)
+        s.box.on_sized = lambda b: kept.update(sized=b)
+        s.box.max_lines, s.box.sized = kept["lines"], kept["sized"]
+        for text in ("", FORTY):
+            s.box.model.set_text(text)
+            _draw(s)
+            self.assertEqual(s.box._visible, s.box.line_cap)
+        self.assertLess(s.box.line_cap, 60)
+        self.assertEqual(kept, {"lines": 60, "sized": True})
+
+    def test_the_host_keeps_it_across_a_restart(self):
+        kept = {"lines": 6, "sized": False}
+
+        def start():
+            s = sf.ChatSurface(clock=_Clock())
+            s.box.on_lines = lambda n: kept.update(lines=n)
+            s.box.on_sized = lambda b: kept.update(sized=b)
+            s.box.max_lines, s.box.sized = kept["lines"], kept["sized"]       # as chat_editor does each frame
+            s.box.focused = True
+            _draw(s)
+            return s
+
+        s = start()
+        _key(s.box, "UP_ARROW", ctrl=True)
+        _key(s.box, "UP_ARROW", ctrl=True)
+        self.assertEqual(kept, {"lines": 4, "sized": True})
+        s = start()                                                   # a new session
+        self.assertEqual(s.box._visible, 4)
+        s.box.model.set_text("hi")
+        _draw(s)
+        self.assertEqual(s.box._visible, 4)
+        s.box.reset_size()
+        self.assertEqual(kept["sized"], False)
+        self.assertEqual(start().box._visible, 2)
+
+    def test_the_tooltip_says_how_to_go_back(self):
+        self.assertIn("Double-click", sf.tip_for("input_resize"))
+
+    def edge_xy(self):
+        edge = _hit(self.surface, "input_resize")
+        return edge.x + edge.w / 2, edge.y + edge.h / 2
+
+    def test_a_wiggle_on_the_edge_is_no_drag(self):
+        self.drag_edge(st.Style().line_height * 4)
+        self.fill("one")
+        kept = (self.box.max_lines, self.box.sized, list(self.remembered))
+        x, y = self.edge_xy()
+        self.surface.on_press(x, y)
+        self.surface.on_move(x, y + 1)
+        self.surface.on_move(x + 2, y - 1)
+        _draw(self.surface)
+        self.assertEqual(self.lines(), ib._MIN_VISIBLE_LINES + 4)      # no jump while wiggling
+        self.surface.on_release(x, y)
+        self.assertEqual((self.box.max_lines, self.box.sized, self.remembered), kept)
+
+    def test_a_double_click_with_a_wiggle_leaves_max_lines_alone(self):
+        for host_double in (False, True):
+            with self.subTest(host_double=host_double):
+                self.box.set_sized(False)
+                self.drag_edge(st.Style().line_height * 4)
+                self.fill("one")
+                want = self.box.max_lines
+                s = self.surface
+                x, y = self.edge_xy()
+                s.on_press(x, y)
+                s.on_move(x, y + 1)                       # the hand moves a little
+                s.on_release(x, y + 1)
+                if not host_double:
+                    s.on_press(x, y + 1)
+                else:
+                    s.clock.t += 5                         # too late for the timing path: the host says so
+                    s.on_press(x, y + 1, double=True)
+                s.on_move(x + 1, y)
+                s.on_release(x, y)
+                _draw(s)
+                self.assertFalse(self.box.sized)
+                self.assertEqual(self.box.max_lines, want)
+                self.assertEqual(self.lines(), ib._MIN_VISIBLE_LINES)
+
+    def test_a_real_drag_past_the_dead_zone_still_sizes(self):
+        self.fill("one")
+        x, y = self.edge_xy()
+        self.surface.on_press(x, y)
+        self.surface.on_move(x, y + 1)
+        self.assertFalse(self.box.sized)
+        self.surface.on_move(x, y + st.Style().line_height * 3)
+        self.assertTrue(self.box.sized)
+        self.surface.on_release(x, y)
+
+    def test_a_wiggle_below_the_cap_keeps_the_kept_size(self):
+        kept = {"lines": 60, "sized": True}
+        s = sf.ChatSurface(clock=_Clock())
+        s.box.on_lines = lambda n: kept.update(lines=n)
+        s.box.on_sized = lambda b: kept.update(sized=b)
+        s.box.max_lines, s.box.sized = 60, True
+        _draw(s)
+        edge = _hit(s, "input_resize")
+        x, y = edge.x + edge.w / 2, edge.y + edge.h / 2
+        s.on_press(x, y)
+        s.on_move(x, y + 1)
+        s.on_release(x, y)
+        _draw(s)
+        self.assertLess(s.box.line_cap, 60)
+        self.assertEqual(kept, {"lines": 60, "sized": True})
+
+    def test_the_host_functions_write_and_read_the_flag_back(self):
+        import pathlib
+        import sys
+        import types as _t
+        addon = pathlib.Path(__file__).resolve().parent.parent / "addon" / "bfa_coworker"
+        prefs_src = (addon / "preferences.py").read_text(encoding="utf-8")
+        for name in ("chat_input_sized_sidebar", "chat_input_sized_editor"):
+            self.assertIn(name + ": BoolProperty", prefs_src)          # declared, default off
+        src = (addon / "chat_editor.py").read_text(encoding="utf-8")
+        start = src.index("def _input_lines_pref(")
+        code = src[start:src.index("def _live_lengths(", start)]
+        prefs = _t.SimpleNamespace(chat_input_lines_sidebar=6, chat_input_lines_editor=6,
+                                   chat_input_sized_sidebar=False, chat_input_sized_editor=False)
+        pkg, shared = _t.ModuleType("bfacw626host"), _t.ModuleType("bfacw626host.shared")
+        shared.set_user_pref = lambda p, name, value: setattr(p, name, value)
+        pkg.shared = shared
+        saved = {k: sys.modules.get(k) for k in ("bfacw626host", "bfacw626host.shared")}
+        sys.modules.update({"bfacw626host": pkg, "bfacw626host.shared": shared})
+        try:
+            ns = {"__package__": "bfacw626host", "_prefs": lambda: prefs}
+            exec(compile(code, "chat_editor.py", "exec"), ns)       # pylint: disable=exec-used
+            for compact, flag, lines in ((True, "chat_input_sized_sidebar", "chat_input_lines_sidebar"),
+                                         (False, "chat_input_sized_editor", "chat_input_lines_editor")):
+                box = sf.ChatSurface(clock=_Clock()).box
+                box.on_lines = lambda n, c=compact: ns["_remember_input_lines"](n, c)
+                box.on_sized = lambda b, c=compact: ns["_remember_input_sized"](b, c)
+                box.set_max_lines(9)
+                box.set_sized(True)
+                self.assertEqual((getattr(prefs, lines), getattr(prefs, flag)), (9, True))
+                other = "chat_input_sized_editor" if compact else "chat_input_sized_sidebar"
+                self.assertFalse(getattr(prefs, other))                # one per place
+                again = sf.ChatSurface(clock=_Clock()).box             # a new session reads them back
+                again.max_lines, again.sized = getattr(prefs, lines), getattr(prefs, flag)
+                self.assertEqual(again.line_limit(), 9)
+                self.assertTrue(again.sized)
+                again.on_sized = lambda b, c=compact: ns["_remember_input_sized"](b, c)
+                again.reset_size()
+                self.assertFalse(getattr(prefs, flag))
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    sys.modules.pop(k, None)
+                else:
+                    sys.modules[k] = v
+
+
 class TestRemembered(unittest.TestCase):
 
     def test_the_box_shows_what_the_host_keeps(self):

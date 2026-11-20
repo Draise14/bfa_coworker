@@ -112,10 +112,10 @@ def _status(context: Any) -> TopBar:
 
 
 def _chat_mode_buttons() -> tuple[tuple[str, str, str], ...]:
-    """The chat-mode buttons (id, label, icon); the Coworker mode wears the wizard with
-    Magic Wording on (#608).  Its name stays: a mode is something you search for."""
-    return tuple((item[0], item[1], magic_wording.agent_icon(item[3]) if item[0] == "AGENT" else item[3])
-                 for item in CHAT_MODE_ITEMS)
+    """The chat-mode buttons (id, label, icon).  Each mode keeps its own icon, the Coworker
+    mode its ghost, with Magic Wording on or off (#624; the wizard is for the headers and the
+    reply line, #608)."""
+    return tuple((item[0], item[1], item[3]) for item in CHAT_MODE_ITEMS)
 
 
 def _mode_status(context: Any) -> TopBar:

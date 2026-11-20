@@ -542,9 +542,12 @@ class TestChatView(unittest.TestCase):
         far = self.canvas(mouse=(10, 150))                     # mouse far away: still there, faint (#279)
         view.draw(far, rect, long)
         faint = scroll_cmds(far)
-        self.assertEqual(len(faint), 1, "far away: only a thin, faint handle, like a region's scrollbar")
-        self.assertAlmostEqual(faint[0].color[3], style.scroll.item[3] * cv._SCROLL_IDLE_ALPHA)
-        self.assertAlmostEqual(faint[0].rect.w, cv.ChatView._bar_widths(style)[0])
+        self.assertEqual(len(faint), 2, "far away: a faint track and a clear handle (#627)")
+        track_idle, handle_idle = faint
+        self.assertAlmostEqual(track_idle.color[3], style.scroll.inner[3] * cv._SCROLL_IDLE_TRACK)
+        self.assertAlmostEqual(handle_idle.color[3], style.scroll.item[3] * cv._SCROLL_IDLE_ALPHA)
+        self.assertAlmostEqual(handle_idle.rect.w, cv.ChatView._bar_widths(style)[0])
+        self.assertAlmostEqual(track_idle.rect.w, cv.ChatView._bar_widths(style)[0])
         self.assertFalse([cmd for cmd in far.commands if cmd.kind == "outline" and cmd.rect.x > 380])
         self.assertIn("scroll_handle", [wid for _, wid in far.hit_areas])
         zoomed = lay.Canvas(st.Style().with_zoom(2.0), lay.fixed_measure(0.55), lay.InteractionState())
@@ -555,6 +558,14 @@ class TestChatView(unittest.TestCase):
         track = scroll_cmds(near)[0]
         self.assertAlmostEqual(track.rect.w, thin)
         self.assertEqual(track.color[:3], style.scroll.inner[:3])            # theme wcol_scroll
+        self.assertGreater(track.color[3], track_idle.color[3])              # stronger than idle
+        self.assertGreater(scroll_cmds(near)[1].color[3], handle_idle.color[3])
+        drag = self.canvas(mouse=(rect.right - 4, 150), pressed="scroll_handle")
+        view.draw(drag, rect, long)
+        dragged = scroll_cmds(drag)
+        self.assertAlmostEqual(dragged[1].rect.w, full)
+        self.assertAlmostEqual(dragged[1].color[3], style.scroll.item[3])    # full strength
+        self.assertAlmostEqual(dragged[0].color[3], style.scroll.inner[3])
         over = self.canvas(mouse=(rect.right - 4, 150))        # over the bar: full width, item colour
         view.draw(over, rect, long)
         handle = scroll_cmds(over)[1]
@@ -571,6 +582,77 @@ class TestChatView(unittest.TestCase):
         top = view.scroll
         view.draw(self.canvas(mouse=(x, 4), clicked="scroll_track"), rect, long)
         self.assertAlmostEqual(view.scroll, top - rect.h * 0.9)
+
+    def test_scrollbar_room_and_idle_widths(self):
+        style = st.Style()
+        thin, full = cv.ChatView._bar_widths(style)
+        self.assertAlmostEqual(thin, 9.0)             # 7 + 2 px at UI scale 1 (was 7 -> 5 + 2)
+        self.assertAlmostEqual(full, 11.0)            # the room the text leaves: unchanged
+        self.assertLess(thin, full)
+        big = st.Style(ui_scale=2.0)
+        self.assertEqual(cv.ChatView._bar_widths(big), (thin * 2, full * 2))
+
+    def test_scroll_handle_contrast_rule(self):
+        gap = cv._SCROLL_MIN_CONTRAST
+        s = cv._SCROLL_IDLE_ALPHA
+
+        def shown_gap(item, back):
+            return abs(s * (cv._luma(item) - cv._luma(back)))
+
+        dark = st.Style()
+        item = cv._scroll_handle_color(dark.scroll.item, dark.back, dark.text, s)
+        self.assertEqual(item, dark.scroll.item)      # default dark: already reads, left alone
+        # Blender's own themes make the track (wcol_scroll inner) fully transparent: it still shows, faintly.
+        clear = st.Style(scroll=st.WidgetColors((0.13, 0.13, 0.13, 0.0), (0.2, 0.2, 0.2, 0.0),
+                                                (0.1, 0.1, 0.1, 1.0), (0.9, 0.9, 0.9, 1.0), (1.0, 1.0, 1.0, 1.0),
+                                                0.5, (0.33, 0.33, 0.33, 1.0)))
+        view = cv.ChatView()
+        far = lay.Canvas(clear, lay.fixed_measure(0.55), lay.InteractionState(mouse=(10, 150)))
+        view.draw(far, lay.Rect(0, 0, 400, 300), [m for i in range(30) for m in (
+            {"role": "user", "content": "question {:d}".format(i)},
+            {"role": "assistant", "content": "answer {:d} with some more words to wrap".format(i)})])
+        bar = [cmd for cmd in far.commands if cmd.kind == "rect" and cmd.rect.x > 380]
+        self.assertAlmostEqual(bar[0].color[3], cv._SCROLL_TRACK_MIN_ALPHA * cv._SCROLL_IDLE_TRACK)
+        self.assertGreater(cv._luma(bar[1].color) - cv._luma(clear.back), 0.1)   # the handle was lifted
+        # A theme's own faint track (alpha 0.3) is kept, not raised to the floor.
+        faint_t = st.Style(scroll=st.WidgetColors((0.13, 0.13, 0.13, 0.3), (0.2, 0.2, 0.2, 0.3),
+                                                  (0.1, 0.1, 0.1, 1.0), (0.9, 0.9, 0.9, 1.0), (1.0, 1.0, 1.0, 1.0),
+                                                  0.5, (0.33, 0.33, 0.33, 1.0)))
+        far2 = lay.Canvas(faint_t, lay.fixed_measure(0.55), lay.InteractionState(mouse=(10, 150)))
+        view.draw(far2, lay.Rect(0, 0, 400, 300), [m for i in range(30) for m in (
+            {"role": "user", "content": "question {:d}".format(i)},
+            {"role": "assistant", "content": "answer {:d} with some more words to wrap".format(i)})])
+        bar2 = [cmd for cmd in far2.commands if cmd.kind == "rect" and cmd.rect.x > 380]
+        self.assertAlmostEqual(bar2[0].color[3], 0.3 * cv._SCROLL_IDLE_TRACK)
+        # A handle already on the dark side of a mid background keeps its colour (no flip).
+        mid, bright = (0.40, 0.40, 0.40, 1.0), (0.90, 0.90, 0.90, 1.0)
+        dark_handle = (0.05, 0.05, 0.05, 1.0)
+        self.assertEqual(cv._scroll_handle_color(dark_handle, mid, bright, s), dark_handle)
+        # A translucent handle is judged as drawn: alpha 0.5 halves its gap, so it is corrected.
+        glass = (0.60, 0.60, 0.60, 0.5)
+        back, text = (0.16, 0.16, 0.16, 1.0), (0.85, 0.85, 0.85, 1.0)
+        fixed_glass = cv._scroll_handle_color(glass, back, text, s)
+        self.assertGreater(cv._luma(fixed_glass), 0.60)
+        self.assertAlmostEqual(abs(s * fixed_glass[3] * (cv._luma(fixed_glass) - cv._luma(back))), gap)
+        self.assertEqual(fixed_glass[3], 0.5)
+        # A handle nearly the colour of the background is pulled toward the text colour.
+        back, text = (0.16, 0.16, 0.16, 1.0), (0.85, 0.85, 0.85, 1.0)
+        weak = (0.18, 0.18, 0.18, 1.0)
+        fixed = cv._scroll_handle_color(weak, back, text, s)
+        self.assertGreater(cv._luma(fixed), cv._luma(weak))
+        self.assertAlmostEqual(shown_gap(fixed, back), gap)
+        # Light theme: a pale handle on a pale background is darkened toward the dark text.
+        lback, ltext = (0.80, 0.80, 0.80, 1.0), (0.05, 0.05, 0.05, 1.0)
+        pale = (0.78, 0.78, 0.78, 1.0)
+        darker = cv._scroll_handle_color(pale, lback, ltext, s)
+        self.assertLess(cv._luma(darker), cv._luma(pale))
+        self.assertAlmostEqual(shown_gap(darker, lback), gap)
+        # A handle that already reads on a light theme is kept; the alpha is never changed.
+        good = (0.35, 0.35, 0.35, 0.9)
+        self.assertEqual(cv._scroll_handle_color(good, lback, ltext, s), good)
+        self.assertEqual(cv._scroll_handle_color((0.18, 0.18, 0.18, 0.6), back, text, s)[3], 0.6)
+        # Text colour as dull as the background: goes all the way to the text colour.
+        self.assertEqual(cv._scroll_handle_color(weak, back, (0.2, 0.2, 0.2, 1.0), s)[:3], (0.2, 0.2, 0.2))
 
     def test_heights_cached_for_finished_turns(self):
         view = cv.ChatView()

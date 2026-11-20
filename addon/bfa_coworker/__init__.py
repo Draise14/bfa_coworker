@@ -296,6 +296,7 @@ def _register() -> None:
 def _after_register_timer() -> None:
     """One-shot, right after ``register()``: restore the settings backup, then auto-start."""
     _restore_settings_backup()
+    _migrate_ctx_preset()
     _publish_secrets()      # the restored keys, whatever their update callbacks did (#346)
     _schedule_autostart()
     return None
@@ -454,6 +455,18 @@ def _restore_settings_backup() -> None:
     except Exception as ex:  # pylint: disable=broad-exception-caught
         print("[Coworker] settings restore skipped: {:s}".format(str(ex)))
     return None
+
+
+def _migrate_ctx_preset() -> None:
+    """#631: a saved 4K / 8K context preset (or a size under 16K) becomes 16K."""
+    try:
+        from . import settings_transfer
+        addon = bpy.context.preferences.addons.get(__package__)
+        if addon is not None and addon.preferences is not None:
+            if settings_transfer.migrate_ctx_prefs(addon.preferences):
+                bpy.context.preferences.is_dirty = True     # kept on quit: it is not printed again
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] context window migration skipped: {:s}".format(str(ex)))
 
 
 def _publish_secrets() -> None:

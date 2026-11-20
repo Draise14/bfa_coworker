@@ -932,7 +932,7 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "Default 32768 works for most models. Gemma 4 supports up to 262144."
         ),
         default=32768,
-        min=4096,
+        min=16384,
         max=262144,
         step=1024,
         subtype='UNSIGNED',
@@ -1003,13 +1003,13 @@ class _BFACW_Preferences(bpy.types.AddonPreferences):  # type: ignore[misc]
             "Custom reveals a manual slider for fine control."
         ),
         items=[
-            ("4096", "4K", "4096 tokens -- minimal, fastest to load"),
-            ("8192", "8K", "8192 tokens -- short conversations"),
-            ("16384", "16K", "16384 tokens -- good default for most agent work"),
-            ("32768", "32K", "32768 tokens -- recommended default"),
-            ("65536", "64K", "65536 tokens -- long conversations, needs lots of memory"),
-            ("131072", "128K", "131072 tokens -- only on high-end hardware"),
-            ("custom", "Custom", "Manually set the context size with a slider"),
+            # The numbers are the items' positions before 4K / 8K went (#631): Blender stores
+            # an enum as that number, so the kept presets still read as themselves.
+            ("16384", "16K", "16384 tokens -- the smallest offered; tight for agent work", 2),
+            ("32768", "32K", "32768 tokens -- recommended default", 3),
+            ("65536", "64K", "65536 tokens -- long conversations, needs lots of memory", 4),
+            ("131072", "128K", "131072 tokens -- only on high-end hardware", 5),
+            ("custom", "Custom", "Manually set the context size with a slider", 6),
         ],
         default="32768",
         update=_update_ctx_preset,

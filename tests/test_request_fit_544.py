@@ -86,7 +86,7 @@ class TestFittingOrder(_PureBase):
 
     def test_ctx_needed_picks_the_preference_size(self):
         self.assertEqual(self.ac._ctx_needed(19915, 1024), 32768)    # the A27 first request
-        self.assertEqual(self.ac._ctx_needed(3000), 8192)
+        self.assertEqual(self.ac._ctx_needed(3000), 16384)
         self.assertEqual(self.ac._ctx_needed(400000), 0)
 
     def test_fit_note_says_what_and_how_to_get_it_back(self):

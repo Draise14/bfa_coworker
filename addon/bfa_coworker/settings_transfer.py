@@ -76,6 +76,50 @@ _DRIVERS = ("operating_mode", "llm_mode", "remote_provider", "model_preset", "lo
 SECRET_KEYS = ("remote_api_key", "hf_token", "gen_remote_key")
 
 
+# #631: the Local context presets start at 16K.  A saved 4K / 8K preset (an identifier that is
+# no longer an item) or a custom size under 16384 becomes 16K.
+CTX_MIN = 16384
+CTX_PRESET_IDS = ("16384", "32768", "65536", "131072", "custom")
+
+
+def migrate_ctx_data(data: dict[str, Any]) -> dict[str, Any]:
+    """*data* (a saved settings dict) with a too-small context moved up to 16K (#631).
+
+    Returns *data* itself when nothing needs it, else a copy; the fix is printed once."""
+    preset, size = data.get("local_ctx_preset"), data.get("local_ctx_size")
+    small = isinstance(size, int) and not isinstance(size, bool) and size < CTX_MIN
+    gone = isinstance(preset, str) and preset not in CTX_PRESET_IDS
+    if not (small or gone):
+        return data
+    out = dict(data)
+    out["local_ctx_preset"] = str(CTX_MIN)
+    out["local_ctx_size"] = CTX_MIN
+    print("[Coworker] context window: the saved {:s} is below 16K, now 16K (16384)".format(
+        "size {:d}".format(size) if small and not gone else "preset {!s}".format(preset)))
+    return out
+
+
+def migrate_ctx_prefs(prefs: Any) -> bool:
+    """The live preferences: a context preset that is no longer offered, or a size under
+    16K, becomes 16K (#631).  True when it changed something.  Never raises."""
+    try:
+        try:
+            preset = getattr(prefs, "local_ctx_preset")
+        except Exception:  # pylint: disable=broad-exception-caught
+            preset = ""         # a stored value that is no item (blank drop-down)
+        size = int(getattr(prefs, "local_ctx_size", CTX_MIN))
+        if preset in CTX_PRESET_IDS and size >= CTX_MIN:
+            return False
+        was = "preset {!s}, size {:d}".format(preset or "(none)", size)
+        prefs.local_ctx_size = CTX_MIN
+        prefs.local_ctx_preset = str(CTX_MIN)
+        print("[Coworker] context window: the saved {:s} is below 16K, now 16K (16384)".format(was))
+        return True
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print("[Coworker] context window migration: {:s}".format(str(ex)))
+        return False
+
+
 def _is_secret(prop: Any) -> bool:
     return prop.identifier in SECRET_KEYS or getattr(prop, "subtype", "") == "PASSWORD"
 
@@ -135,6 +179,7 @@ def apply(prefs: Any, data: dict[str, Any]) -> list[str]:
     Returns the keys that were applied.
     """
     applied: list[str] = []
+    data = migrate_ctx_data(data)
     props = {p.identifier: p for p in _props(prefs)}
     order = [k for k in _DRIVERS if k in data] + [k for k in data if k not in _DRIVERS]
     for key in order:
@@ -254,7 +299,7 @@ def restore_once(prefs: Any, config_dir: str) -> list[str]:
     try:
         if getattr(prefs, RESTORED_FLAG, True):
             return []
-        data = load(config_dir)
+        data = migrate_ctx_data(load(config_dir))
         newer = newer_than_backup(prefs, data) if data else []
         if newer:
             setattr(prefs, RESTORED_FLAG, True)

@@ -2407,7 +2407,7 @@ The add-on uses three ports by default:
 - Try running `llama-server` manually from the command line.
 
 ### 💥 Out of Memory
-- Reduce **Context Window Size** (try 8192).
+- Reduce **Context Window Size** (try 16384, the smallest).
 - Use a smaller model preset.
 - Close other GPU-intensive applications.
 

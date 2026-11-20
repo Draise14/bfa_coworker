@@ -1753,7 +1753,7 @@ def resolve_gpu_backend(backend: str) -> str:
 # users get something that "just works" instead of a slider to misconfigure.
 
 # Standard context sizes exposed as one-click preset buttons.
-ctx_preset_sizes: tuple[int, ...] = (4096, 8192, 16384, 32768, 65536, 131072)
+ctx_preset_sizes: tuple[int, ...] = (16384, 32768, 65536, 131072)
 
 
 
@@ -3682,10 +3682,10 @@ def start_local_llama(
     # NOTE: no silent auto-upgrade -- the configured size is applied verbatim
     # and the real applied value is reported via /props (see get_runtime_ctx).
     # If it looks too small for agent work, warn (never restart mid-session).
-    if ctx_size <= 8192:
+    if ctx_size < 16384:
         print(
-            "[Coworker] start_local_llama: ctx_size {:d} is small for agent work "
-            "(system prompt + tools + conversation); consider 16K-32K in preferences".format(ctx_size))
+            "[Coworker] start_local_llama: ctx_size {:d} is too small for agent work "
+            "(system prompt + tools + conversation); 16K is the smallest, 32K recommended".format(ctx_size))
     print("[Coworker] start_local_llama: using ctx_size {:d}".format(ctx_size))
     global _runtime_ctx_cache, _runtime_ctx_logged_mismatch, _runtime_vision_cache
     _runtime_ctx_cache = None

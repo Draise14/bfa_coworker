@@ -49,6 +49,7 @@ __all__ = (
     "refusal",
     "reset",
     "sample",
+    "is_stepping",
     "stepping",
 )
 
@@ -106,6 +107,11 @@ def own(seconds: float = _GRACE) -> None:
     """Coworker itself changes the scene outside a bridge step (an undo push, the lock's
     release, a save): the depsgraph updates that follow are not the user's."""
     _own_until[0] = max(_own_until[0], time.monotonic() + max(0.0, min(float(seconds), _GRACE_MAX)))
+
+
+def is_stepping() -> bool:
+    """A bridge step runs right now (main thread; #638: the autosave waits for it)."""
+    return _step_depth[0] > 0
 
 
 @contextlib.contextmanager

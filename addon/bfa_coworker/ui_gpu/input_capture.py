@@ -88,6 +88,14 @@ _RIGHT = frozenset({"RELEASE", "CLICK", "DOUBLE_CLICK"})
 # Autosave (#370, #488).  "since": when Blender's autosave interval last started (the chat's last
 # autosave, a save, a clean check).
 _AUTOSAVE: dict[str, Any] = {"since": 0.0}
+# #638: the last key / mouse button press or release or wheel turn the chat's operator saw (monotonic
+# seconds; 0.0 = none yet) and the mouse buttons held right now.  The autosave waits for a quiet moment.
+_INPUT: dict[str, Any] = {"last": 0.0, "held": set()}
+_QUIET_SECONDS = 2.0
+# Job kinds Blender may know (the valid list differs per version; an unknown one is skipped).
+_JOB_KINDS = ("RENDER", "RENDER_PREVIEW", "COMPOSITE", "OBJECT_BAKE", "OBJECT_BAKE_TEXTURE",
+              "SHADER_COMPILATION")
+_TRACE_LIMIT, _TRACE_KEEP = 200, 100
 
 _IGNORED = frozenset({"TIMER", "TIMER_REPORT", "TIMERREGION", "WINDOW_DEACTIVATE", "NONE"})
 _MOVES = frozenset({"MOUSEMOVE", "INBETWEEN_MOUSEMOVE"})
@@ -242,6 +250,7 @@ class BFACW_OT_gpu_input(bpy.types.Operator):
         return {"FINISHED", "PASS_THROUGH"}
 
     def modal(self, context, event):
+        _note_input(event)
         router = _HOST["router"]
         if router is None:
             return self._finish()
@@ -496,7 +505,8 @@ def ensure_running() -> None:
 
 
 def autosave_step(now: float, since: float, autosave_on: bool, autosave_minutes: float,
-                  dirty: bool, busy: bool, undo_ok: bool) -> str:
+                  dirty: bool, busy: bool, undo_ok: bool, job_running: bool = False,
+                  bridge_busy: bool = False, quiet: bool = True) -> str:
     """What to do about Blender's autosave on this watch tick (#488): ``"wait"``, ``"skip"``
     (nothing to save: the next interval starts, as in Blender) or ``"write"``.
 
@@ -504,14 +514,112 @@ def autosave_step(now: float, since: float, autosave_on: bool, autosave_minutes:
     from the last autosave or save; a saved file has nothing to write; never while another
     modal operator runs (*busy*), nor in a mode whose undo isn't global (not *undo_ok*: edit,
     sculpt...) -- it waits.  Due one watch tick early, so the chat's write comes before
-    Blender's own timer would start retrying."""
+    Blender's own timer would start retrying.
+
+    #638: it also waits for a quiet moment: no Blender job running (*job_running*), no bridge
+    step running or queued (*bridge_busy*), and the user not in the middle of a click or a
+    key (not *quiet*).  A clean file is still skipped, quiet or not."""
     if not autosave_on or now - since < max(1.0, autosave_minutes) * 60.0 - _WATCH_SECONDS:
         return "wait"
     if not dirty:
         return "skip"
-    if busy or not undo_ok:
+    if busy or not undo_ok or job_running or bridge_busy or not quiet:
         return "wait"
     return "write"
+
+
+def _note_input(event: Any) -> None:
+    """Remember the last press / release / wheel turn and which mouse buttons are held (#638).
+    Looks only; never raises and never changes what the operator does with the event."""
+    try:
+        etype, value = event.type, event.value
+        if etype == "WINDOW_DEACTIVATE":        # the release may go to another window
+            _INPUT["held"].clear()
+            return
+        if not etype or etype in _IGNORED or etype in _MOVES:
+            return
+        if etype in _WHEEL or etype.startswith("WHEEL"):
+            _INPUT["last"] = time.monotonic()
+            return
+        if value in ("PRESS", "DOUBLE_CLICK", "RELEASE"):
+            _INPUT["last"] = time.monotonic()
+            if etype.endswith("MOUSE") or etype.startswith("BUTTON"):
+                if value == "RELEASE":
+                    _INPUT["held"].discard(etype)
+                else:
+                    _INPUT["held"].add(etype)
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+
+
+def _seconds_since_input(now: float) -> float | None:
+    last = _INPUT["last"]
+    return now - last if last else None
+
+
+def _input_quiet(now: float) -> bool:
+    """No mouse button held and no key / button / wheel event for :data:`_QUIET_SECONDS`."""
+    if _INPUT["held"]:
+        return False
+    idle = _seconds_since_input(now)
+    return idle is None or idle >= _QUIET_SECONDS
+
+
+def _running_jobs() -> list[str]:
+    """The kinds of Blender job running now (render, bake, compositor...)."""
+    out = []
+    for kind in _JOB_KINDS:
+        try:
+            if bpy.app.is_job_running(kind):
+                out.append(kind)
+        except Exception:  # pylint: disable=broad-exception-caught  # kind unknown in this version
+            pass
+    return out
+
+
+def _bridge_state() -> str:
+    """``"step"`` while the bridge runs agent code, ``"queued"`` while an answer is pending, else ``"idle"``."""
+    try:
+        from .. import deferred_tool, ui_activity
+        if ui_activity.is_stepping():
+            return "step"
+        if deferred_tool.has_pending():
+            return "queued"
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    return "idle"
+
+
+def _trace_path() -> Any:
+    from .. import log
+    return log.get_log_path().parent / "autosave_trace.txt"
+
+
+def _trace(what: str, locks: int, now: float | None = None) -> None:
+    """One line on disk about the autosave write (#638), flushed and closed at once, so a crash
+    leaves what was going on.  No file names, no object names.  Never raises."""
+    try:
+        import os
+        now = time.monotonic() if now is None else now
+        idle = _seconds_since_input(now)
+        try:
+            mode = str(bpy.context.mode)
+        except Exception:  # pylint: disable=broad-exception-caught
+            mode = "?"
+        line = "{:s} pid={:d} {:s} mode={:s} jobs={:s} bridge={:s} locks={:d} idle={:s}\n".format(
+            time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid(), what, mode,
+            ",".join(_running_jobs()) or "-", _bridge_state(), locks,
+            "-" if idle is None else "{:.1f}s".format(idle))
+        path = _trace_path()
+        with open(str(path), "a", encoding="utf-8") as f:
+            f.write(line)
+            f.flush()
+        if path.stat().st_size > 64 * _TRACE_LIMIT:     # about 200 lines: read it back only then
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines(True)
+            if len(lines) > _TRACE_LIMIT:
+                path.write_text("".join(lines[-_TRACE_KEEP:]), encoding="utf-8")
+    except Exception:  # pylint: disable=broad-exception-caught  # OSError and the rest: never stop the autosave
+        pass
 
 
 def _other_modal_running() -> bool:
@@ -537,7 +645,8 @@ def _autosave_tick() -> None:
     on, minutes = _autosave_prefs()
     now = time.monotonic()
     step = autosave_step(now, _AUTOSAVE["since"], on, minutes, bool(getattr(bpy.data, "is_dirty", True)),
-                         _other_modal_running(), _undo_allows_autosave())
+                         _other_modal_running(), _undo_allows_autosave(),
+                         bool(_running_jobs()), _bridge_state() != "idle", _input_quiet(now))
     if step == "wait":
         return
     _AUTOSAVE["since"] = now
@@ -546,8 +655,15 @@ def _autosave_tick() -> None:
             from .. import co_work_guard
             # #558: an autosave runs no save handlers, so lift the co-work lock here (put
             # back also when the write fails): the file keeps the objects' own hide_select.
-            with co_work_guard.lifted(bpy.data):
-                bpy.ops.wm.save_auto_save()
+            with co_work_guard.lifted(bpy.data) as held:
+                locks = len(held) if hasattr(held, "__len__") else 0
+                _trace("begin", locks, now)
+                try:
+                    bpy.ops.wm.save_auto_save()
+                except RuntimeError:
+                    _trace("failed", locks)
+                    raise
+                _trace("done", locks)
         except RuntimeError as ex:
             print("[Coworker] autosave failed: {:s}".format(str(ex)))
 
@@ -586,6 +702,7 @@ def _blink() -> float:
 def _on_load_pre(*_args) -> None:
     # Opening a file ends every modal operator and frees every area.
     _RUNNING.clear()
+    _INPUT["held"].clear()
     _FOCUS["box"] = _FOCUS["region"] = None
     _DRAG["hit"] = _HOVER["hit"] = _ZOOM_DRAG["hit"] = _SELECT["hit"] = None
     _forget_menu()

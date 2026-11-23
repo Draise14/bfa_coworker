@@ -148,6 +148,7 @@ class TestAutosaveDropsTheLock(unittest.TestCase):
         self.data = _Data(*_OWN)
         self.writer = _Writer(self.data)
         self.ic = _load(_fake_bpy(self.data, self.writer))
+        self.ic._trace = lambda *_a, **_k: None     # #638: no trace file from a test
         self.ic._AUTOSAVE.update(since=0.0)     # an autosave is due
 
     def test_an_autosave_during_a_turn_stores_the_own_values(self):

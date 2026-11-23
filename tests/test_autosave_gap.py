@@ -28,6 +28,7 @@ import contextlib
 import importlib
 import io
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -160,8 +161,8 @@ class TestAutosaveStep(unittest.TestCase):
     def setUpClass(cls):
         cls.ic = _load(_fake_bpy())
 
-    def step(self, now, since=100.0, on=True, minutes=2, dirty=True, busy=False, undo_ok=True):
-        return self.ic.autosave_step(now, since, on, minutes, dirty, busy, undo_ok)
+    def step(self, now, since=100.0, on=True, minutes=2, dirty=True, busy=False, undo_ok=True, **quiet):
+        return self.ic.autosave_step(now, since, on, minutes, dirty, busy, undo_ok, **quiet)
 
     def test_never_with_autosave_off(self):
         self.assertEqual(self.step(10000.0, on=False), "wait")
@@ -176,6 +177,18 @@ class TestAutosaveStep(unittest.TestCase):
     def test_waits_for_another_modal_operator_and_for_edit_mode(self):
         self.assertEqual(self.step(300.0, busy=True), "wait")
         self.assertEqual(self.step(300.0, undo_ok=False), "wait")
+
+    def test_waits_for_a_job_a_bridge_step_and_the_user(self):       # #638
+        self.assertEqual(self.step(300.0, job_running=True), "wait")
+        self.assertEqual(self.step(300.0, bridge_busy=True), "wait")
+        self.assertEqual(self.step(300.0, quiet=False), "wait")
+        self.assertEqual(self.step(300.0, job_running=False, bridge_busy=False, quiet=True), "write")
+
+    def test_a_saved_file_is_skipped_even_when_not_quiet(self):
+        self.assertEqual(self.step(300.0, dirty=False, job_running=True, bridge_busy=True, quiet=False), "skip")
+
+    def test_not_due_still_waits_first(self):
+        self.assertEqual(self.step(150.0, dirty=False, quiet=False), "wait")
 
 
 class TestAutosaveWriter(unittest.TestCase):
@@ -195,6 +208,25 @@ class TestAutosaveWriter(unittest.TestCase):
         self.ic.set_host(lambda *_a: None)
         self.ic._RUNNING.update({1, 2})
         self.ic._AUTOSAVE.update(since=0.0)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.trace = Path(tmp.name) / "autosave_trace.txt"
+        self.ic._trace_path = lambda: self.trace
+        self.jobs = set()
+        self.bpy.app.is_job_running = self._is_job_running
+        self.stepping = False
+        self.ic._bridge_state = lambda: "step" if self.stepping else "idle"
+
+    def _is_job_running(self, kind):
+        if kind == "NOT_A_KIND":
+            raise ValueError(kind)
+        return kind in self.jobs
+
+    def _event(self, etype, value="PRESS"):
+        return types.SimpleNamespace(type=etype, value=value)
+
+    def _trace_lines(self):
+        return self.trace.read_text(encoding="utf-8").splitlines() if self.trace.exists() else []
 
     def _op(self, ptr):
         op = self.ic.BFACW_OT_gpu_input()
@@ -214,6 +246,7 @@ class TestAutosaveWriter(unittest.TestCase):
         # Presses before, at and after the autosave moment all reach the chat: the operators
         # never end.
         ic = self.ic
+        ic._input_quiet = lambda _now: True     # the events here never stop; the quiet rule has its own tests
         ops = [self._op(1), self._op(2)]
         events = [types.SimpleNamespace(type=t, value="PRESS") for t in ("A", "LEFTMOUSE", "C", "RIGHTMOUSE")]
         got = sent = 0
@@ -266,6 +299,117 @@ class TestAutosaveWriter(unittest.TestCase):
         self.ic._on_save_post()
         self.ic._watch()
         self.assertEqual(self.writer.calls, 0)
+
+    # --- #638: write in a quiet moment ---
+
+    def test_waits_while_a_job_runs_then_writes(self):
+        self.jobs.add("RENDER")
+        self.ic._watch()
+        self.assertEqual(self.writer.calls, 0)
+        self.jobs.clear()
+        self.ic._watch()
+        self.assertEqual(self.writer.calls, 1)
+
+    def test_a_job_kind_the_version_does_not_know_does_not_break_it(self):
+        self.ic._JOB_KINDS = ("NOT_A_KIND", "COMPOSITE")
+        self.jobs.add("COMPOSITE")
+        self.ic._watch()
+        self.assertEqual(self.writer.calls, 0)
+
+    def test_waits_while_a_bridge_step_runs(self):
+        self.stepping = True
+        self.ic._watch()
+        self.assertEqual(self.writer.calls, 0)
+        self.stepping = False
+        self.ic._watch()
+        self.assertEqual(self.writer.calls, 1)
+
+    def test_waits_while_a_button_is_held_and_two_seconds_after(self):
+        ic = self.ic
+        op = self._op(1)
+        op.modal(None, self._event("LEFTMOUSE", "PRESS"))
+        ic._watch()
+        self.assertEqual(self.writer.calls, 0)
+        op.modal(None, self._event("LEFTMOUSE", "RELEASE"))
+        ic._watch()                                  # released just now
+        self.assertEqual(self.writer.calls, 0)
+        ic._INPUT["last"] -= 2.5
+        ic._watch()
+        self.assertEqual(self.writer.calls, 1)
+
+    def test_a_key_or_wheel_turn_makes_it_wait_a_moment(self):
+        for etype, value in (("A", "PRESS"), ("A", "RELEASE"), ("WHEELUPMOUSE", "PRESS")):
+            self.ic._INPUT["last"] = 0.0
+            self._op(1).modal(None, self._event(etype, value))
+            self.assertFalse(self.ic._input_quiet(self.ic.time.monotonic()), etype)
+
+    def test_mouse_moves_and_timers_are_not_input(self):
+        op = self._op(1)
+        for etype in ("MOUSEMOVE", "INBETWEEN_MOUSEMOVE", "TIMER", "NONE"):
+            op.modal(None, self._event(etype, "NOTHING"))
+        self.assertEqual(self.ic._INPUT["last"], 0.0)
+        self.ic._watch()
+        self.assertEqual(self.writer.calls, 1)
+
+    def test_the_held_state_clears_on_deactivate_and_on_load(self):
+        op = self._op(1)
+        op.modal(None, self._event("LEFTMOUSE", "PRESS"))
+        self.assertTrue(self.ic._INPUT["held"])
+        op.modal(None, self._event("WINDOW_DEACTIVATE", "NOTHING"))
+        self.assertFalse(self.ic._INPUT["held"])
+        op.modal(None, self._event("RIGHTMOUSE", "PRESS"))
+        self.ic._on_load_pre()
+        self.assertFalse(self.ic._INPUT["held"])
+
+    def test_recording_the_input_does_not_change_the_answer_of_the_operator(self):
+        op = self._op(1)
+        for etype, value in (("A", "PRESS"), ("LEFTMOUSE", "PRESS"), ("LEFTMOUSE", "RELEASE")):
+            self.assertEqual(op.modal(None, self._event(etype, value)), {"RUNNING_MODAL"})
+
+    def test_a_clean_file_is_skipped_while_not_quiet(self):
+        self.bpy.data.is_dirty = False
+        self.jobs.add("RENDER")
+        self.ic._watch()
+        self.assertEqual(self.writer.calls, 0)
+        self.assertGreater(self.ic._AUTOSAVE["since"], 0.0)
+
+    # --- #638: the trace on disk ---
+
+    def test_the_trace_has_a_begin_and_a_done_line(self):
+        self.ic._watch()
+        lines = self._trace_lines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn(" begin ", lines[0])
+        self.assertIn(" done ", lines[1])
+        self.assertIn("mode=OBJECT", lines[0])
+        self.assertIn("bridge=idle", lines[0])
+        self.assertIn("locks=", lines[0])
+
+    def test_the_trace_has_a_begin_and_a_failed_line(self):
+        self.writer.fail = True
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.ic._watch()
+        lines = self._trace_lines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn(" begin ", lines[0])
+        self.assertIn(" failed ", lines[1])
+
+    def test_the_trace_names_no_file_and_no_object(self):
+        self.bpy.data.filepath = "C:/secret/project.blend"
+        self.ic._watch()
+        self.assertNotIn("secret", "".join(self._trace_lines()))
+
+    def test_a_trace_that_cannot_be_written_does_not_stop_the_autosave(self):
+        self.ic._trace_path = lambda: Path(self.trace.parent) / "no_such_folder" / "x.txt"
+        self.ic._watch()
+        self.assertEqual(self.writer.calls, 1)
+
+    def test_the_trace_stays_small(self):
+        self.trace.write_text("old line of the trace, long enough to pass the size check\n" * 400, encoding="utf-8")
+        self.ic._watch()
+        lines = self._trace_lines()
+        self.assertLessEqual(len(lines), 102)
+        self.assertIn(" done ", lines[-1])
 
 
 if __name__ == "__main__":

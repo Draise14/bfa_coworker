@@ -90,8 +90,11 @@ _RIGHT = frozenset({"RELEASE", "CLICK", "DOUBLE_CLICK"})
 _AUTOSAVE: dict[str, Any] = {"since": 0.0}
 # #638: the last key / mouse button press or release or wheel turn the chat's operator saw (monotonic
 # seconds; 0.0 = none yet) and the mouse buttons held right now.  The autosave waits for a quiet moment.
-_INPUT: dict[str, Any] = {"last": 0.0, "held": set()}
+_INPUT: dict[str, Any] = {"last": 0.0, "held": {}}      # held: {button type: monotonic time of its press}
 _QUIET_SECONDS = 2.0
+# Blender's UI handlers, navigation and menus may take a button's release before the chat sees it:
+# a press older than this is forgotten, so the held state cannot hold the autosave back for long.
+_HELD_MAX_SECONDS = 10.0
 # Job kinds Blender may know (the valid list differs per version; an unknown one is skipped).
 _JOB_KINDS = ("RENDER", "RENDER_PREVIEW", "COMPOSITE", "OBJECT_BAKE", "OBJECT_BAKE_TEXTURE",
               "SHADER_COMPILATION")
@@ -545,9 +548,9 @@ def _note_input(event: Any) -> None:
             _INPUT["last"] = time.monotonic()
             if etype.endswith("MOUSE") or etype.startswith("BUTTON"):
                 if value == "RELEASE":
-                    _INPUT["held"].discard(etype)
+                    _INPUT["held"].pop(etype, None)
                 else:
-                    _INPUT["held"].add(etype)
+                    _INPUT["held"][etype] = time.monotonic()
     except Exception:  # pylint: disable=broad-exception-caught
         pass
 
@@ -558,8 +561,9 @@ def _seconds_since_input(now: float) -> float | None:
 
 
 def _input_quiet(now: float) -> bool:
-    """No mouse button held and no key / button / wheel event for :data:`_QUIET_SECONDS`."""
-    if _INPUT["held"]:
+    """No mouse button held (for less than :data:`_HELD_MAX_SECONDS`) and no key / button / wheel
+    event for :data:`_QUIET_SECONDS`."""
+    if any(now - t < _HELD_MAX_SECONDS for t in list(_INPUT["held"].values())):
         return False
     idle = _seconds_since_input(now)
     return idle is None or idle >= _QUIET_SECONDS
@@ -578,7 +582,8 @@ def _running_jobs() -> list[str]:
 
 
 def _bridge_state() -> str:
-    """``"step"`` while the bridge runs agent code, ``"queued"`` while an answer is pending, else ``"idle"``."""
+    """``"step"`` while the bridge runs agent code (the autosave waits), ``"queued"`` while an answer is pending
+    (information for the trace only: an approval card can wait long), else ``"idle"``."""
     try:
         from .. import deferred_tool, ui_activity
         if ui_activity.is_stepping():
@@ -595,7 +600,7 @@ def _trace_path() -> Any:
     return log.get_log_path().parent / "autosave_trace.txt"
 
 
-def _trace(what: str, locks: int, now: float | None = None) -> None:
+def _trace(what: str, locks: int | None, now: float | None = None) -> None:
     """One line on disk about the autosave write (#638), flushed and closed at once, so a crash
     leaves what was going on.  No file names, no object names.  Never raises."""
     try:
@@ -606,9 +611,9 @@ def _trace(what: str, locks: int, now: float | None = None) -> None:
             mode = str(bpy.context.mode)
         except Exception:  # pylint: disable=broad-exception-caught
             mode = "?"
-        line = "{:s} pid={:d} {:s} mode={:s} jobs={:s} bridge={:s} locks={:d} idle={:s}\n".format(
+        line = "{:s} pid={:d} {:s} mode={:s} jobs={:s} bridge={:s} locks={:s} idle={:s}\n".format(
             time.strftime("%Y-%m-%d %H:%M:%S"), os.getpid(), what, mode,
-            ",".join(_running_jobs()) or "-", _bridge_state(), locks,
+            ",".join(_running_jobs()) or "-", _bridge_state(), "-" if locks is None else str(locks),
             "-" if idle is None else "{:.1f}s".format(idle))
         path = _trace_path()
         with open(str(path), "a", encoding="utf-8") as f:
@@ -646,7 +651,7 @@ def _autosave_tick() -> None:
     now = time.monotonic()
     step = autosave_step(now, _AUTOSAVE["since"], on, minutes, bool(getattr(bpy.data, "is_dirty", True)),
                          _other_modal_running(), _undo_allows_autosave(),
-                         bool(_running_jobs()), _bridge_state() != "idle", _input_quiet(now))
+                         bool(_running_jobs()), _bridge_state() == "step", _input_quiet(now))
     if step == "wait":
         return
     _AUTOSAVE["since"] = now
@@ -655,12 +660,12 @@ def _autosave_tick() -> None:
             from .. import co_work_guard
             # #558: an autosave runs no save handlers, so lift the co-work lock here (put
             # back also when the write fails): the file keeps the objects' own hide_select.
+            _trace("begin", None, now)      # before the lift: a crash in it leaves a line too
             with co_work_guard.lifted(bpy.data) as held:
                 locks = len(held) if hasattr(held, "__len__") else 0
-                _trace("begin", locks, now)
                 try:
                     bpy.ops.wm.save_auto_save()
-                except RuntimeError:
+                except BaseException:
                     _trace("failed", locks)
                     raise
                 _trace("done", locks)

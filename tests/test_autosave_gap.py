@@ -215,7 +215,21 @@ class TestAutosaveWriter(unittest.TestCase):
         self.jobs = set()
         self.bpy.app.is_job_running = self._is_job_running
         self.stepping = False
-        self.ic._bridge_state = lambda: "step" if self.stepping else "idle"
+        self.pending = False
+        self._install_bridge_modules()
+
+    def _install_bridge_modules(self):
+        """Stand-ins for ``ui_activity`` and ``deferred_tool``, so the real ``_bridge_state`` runs."""
+        name = "bfacw_autosave_gap_pkg"
+        mods = {"ui_activity": types.SimpleNamespace(is_stepping=lambda: self.stepping),
+                "deferred_tool": types.SimpleNamespace(has_pending=lambda: self.pending)}
+        for key, mod in mods.items():
+            old = sys.modules.get(name + "." + key)
+            sys.modules[name + "." + key] = mod
+            setattr(sys.modules[name], key, mod)
+            self.addCleanup(lambda k=key, o=old: (sys.modules.pop(name + "." + k, None) if o is None
+                                                  else sys.modules.__setitem__(name + "." + k, o)))
+            self.addCleanup(lambda k=key: vars(sys.modules[name]).pop(k, None))
 
     def _is_job_running(self, kind):
         if kind == "NOT_A_KIND":
@@ -315,6 +329,9 @@ class TestAutosaveWriter(unittest.TestCase):
         self.jobs.add("COMPOSITE")
         self.ic._watch()
         self.assertEqual(self.writer.calls, 0)
+        self.jobs.clear()
+        self.ic._watch()
+        self.assertEqual(self.writer.calls, 1)
 
     def test_waits_while_a_bridge_step_runs(self):
         self.stepping = True
@@ -323,6 +340,35 @@ class TestAutosaveWriter(unittest.TestCase):
         self.stepping = False
         self.ic._watch()
         self.assertEqual(self.writer.calls, 1)
+
+    def test_the_real_bridge_state_reads_the_step_and_the_pending_answers(self):
+        self.assertEqual(self.ic._bridge_state(), "idle")
+        self.pending = True
+        self.assertEqual(self.ic._bridge_state(), "queued")
+        self.stepping = True
+        self.assertEqual(self.ic._bridge_state(), "step")
+
+    def test_a_pending_answer_does_not_hold_the_autosave_but_shows_in_the_trace(self):
+        self.pending = True
+        self.ic._watch()
+        self.assertEqual(self.writer.calls, 1)
+        self.assertIn("bridge=queued", self._trace_lines()[0])
+
+    def test_the_begin_line_is_on_disk_before_the_write(self):
+        seen = []
+        real = self.writer.__call__
+        self.bpy.ops.wm.save_auto_save = lambda: (seen.append(self._trace_lines()), real())[1]
+        self.ic._watch()
+        self.assertEqual(len(seen[0]), 1)
+        self.assertIn(" begin ", seen[0][0])
+
+    def test_a_non_runtime_error_is_traced_as_failed_and_propagates(self):
+        def boom():
+            raise ValueError("x")
+        self.bpy.ops.wm.save_auto_save = boom
+        with self.assertRaises(ValueError):
+            self.ic._watch()
+        self.assertIn(" failed ", self._trace_lines()[-1])
 
     def test_waits_while_a_button_is_held_and_two_seconds_after(self):
         ic = self.ic
@@ -349,6 +395,17 @@ class TestAutosaveWriter(unittest.TestCase):
             op.modal(None, self._event(etype, "NOTHING"))
         self.assertEqual(self.ic._INPUT["last"], 0.0)
         self.ic._watch()
+        self.assertEqual(self.writer.calls, 1)
+
+    def test_a_press_whose_release_never_came_is_forgotten_after_the_cap(self):
+        ic = self.ic
+        self._op(1).modal(None, self._event("MIDDLEMOUSE", "PRESS"))     # navigation takes the release
+        ic._INPUT["last"] -= 5.0                       # past the 2 s rule
+        ic._INPUT["held"]["MIDDLEMOUSE"] -= ic._HELD_MAX_SECONDS - 3.0     # held for 7 s: still waits
+        ic._watch()
+        self.assertEqual(self.writer.calls, 0)
+        ic._INPUT["held"]["MIDDLEMOUSE"] -= 4.0        # held for 11 s: forgotten
+        ic._watch()
         self.assertEqual(self.writer.calls, 1)
 
     def test_the_held_state_clears_on_deactivate_and_on_load(self):

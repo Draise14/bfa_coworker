@@ -70,7 +70,9 @@
 
 <!-- #637: confirm wording against its PR before release -->
 ### 🌐 **Read a Web Page** (#637)
-- **Give the agent a link and it can read the page,** after you allow it on a card that shows the full address. **Always** remembers that site only, until Blender restarts or you change the approval mode. Addresses on your own computer or network are refused, and only text pages are read (not PDFs or images).
+- **Give the agent a link and it can read the page.** It first asks on a card, "Coworker wants to read a web page (example.com)", that shows the address (the first 500 characters of a very long one). Press **Allow once**, **Allow this turn** or **Deny**. **Allow this turn** lets it read that site again for the rest of that turn in that chat; your next message asks again, and another site always asks.
+- **Only text pages are read,** not PDFs, images or downloads. Addresses on your own computer or network are refused, and a link that redirects to another site is not followed: the agent has to ask again.
+- **In Auto mode it is declined.** In the approval mode that never asks, pages are read without a card, like other risky steps; the chat's status line shows "Reading a web page (site)".
 
 ---
 
@@ -114,6 +116,7 @@
   - **Local checkpoints (#545):** summaries return text now, but the model still re-reads the conversation after each checkpoint, and the model's extra thinking between steps is switched off for now.
   - **Restart Coworker with a Local model (#564), the Local 27B start (#543) and question cards with a real External Agent app (#572):** the fixes are in; a check with a real model or agent is still open.
   - **Video and render follow-ups (#541, #527):** smaller findings from the real-footage test and render previews are still open.
+- **Reading a web page (#637) has not been tried on a real page yet;** it was tested with stand-ins only.
 - **Not yet tried by hand:** most video tools were checked live by the builders on Blender 5.2.4, Blender 5.4 and Bforartists 5.2.3, with generated clips and made-up speech. Please try them on real footage, and tell us what looks off (hand-test list: #561, 1.1.44 hand tests).
 - **Chats side by side were tested with stand-in models,** not yet with real ones. Only Claude Code runs chats at the same time on External Agent; the other agents stay chained until they are measured.
 - **Follow Subject** needs a vision model and wasn't tried on a real person. **Track All** is greyed out ("coming").

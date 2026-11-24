@@ -68,7 +68,9 @@ Release notes: `_misc/release_notes/release_notes_v1.1.44.md`.
 - **Autosave trace (#638, #639).** `autosave_trace.txt` in the logs folder gets a line before and after each autosave the chat writes.
 - **New icons in the Bforartists style (#563, #570).** Filled, coloured icons built from Bforartists' own, a purple wand as the Coworker mark, and a small wand only on tools that need the agent. In Bforartists the Sequencer's toolshelf has a Coworker tab with icon buttons; in Blender the same tools are in the sidebar's Coworker tab, in one Video panel.
 - **Wand tooltips (#607, #618, #623).** Every Coworker tool's tooltip ends with whether it works without the agent started.
-- **Read a web page (#637, PR #641).** <!-- #637: confirm wording against its PR before release --> The tool `read_web_page` reads a page when you give the agent a link, after you allow it on a card that shows the full address. **Always** remembers that site only, until Blender restarts or you change the approval mode. Addresses on your own computer or a private network are refused; only text pages (HTML, plain text, Markdown, JSON, XML) are read, not PDFs or images.
+- **Read a web page (#637, PR #641).** <!-- #637: confirm wording against its PR before release --> The tool `read_web_page` reads one page when you give the agent a link, after you say yes on a card titled "Coworker wants to read a web page (example.com)" that shows the address (the first 500 characters of a long one). Buttons: **Allow once**, **Allow this turn** (that site again for the rest of the turn in that chat; your next message asks again; another site always asks) and **Deny**.
+  - Addresses on your own computer or a private network are refused. Only text pages (HTML, plain text, Markdown, JSON, XML) are read, not PDFs, images or downloads. A redirect to another site is not followed: the agent has to ask again.
+  - Auto mode declines it. In the approval mode that never asks, pages are read without a card, like other risky steps; the status line shows "Reading a web page (site)". Not tried on a real page yet (stand-in tests only).
 
 ### Changed
 

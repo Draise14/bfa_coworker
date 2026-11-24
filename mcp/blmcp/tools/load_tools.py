@@ -52,6 +52,7 @@ def register(mcp: FastMCP) -> None:
           jump_to_asset_browser, download_polyhaven_asset, search_polyhaven_assets,
           assign_material_to_objects, get_active_node_tree, get_node_group_interface,
           wire_node_group)
+        - web: read a web page the user gives or asks for; the user is asked first (read_web_page)
         - vse: Video Sequencer strips: list, read, move / trim, preview a frame, speech to text,
           remove silences, captions, edit by transcript and a vertical 9:16 version with editable
           framing (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,

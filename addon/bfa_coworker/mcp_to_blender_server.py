@@ -1411,7 +1411,8 @@ def _execute_code_from_request(
         _prefs = _bpy.context.preferences.addons[__package__].preferences
         _engine = _prefs.operating_mode
         if not _internal:           # Coworker's own bookkeeping never asks (#414)
-            _kind, _why = risky_steps.ask_kind(_tool, code, getattr(_prefs, "approval_mode", "ASK"), _engine)
+            _kind, _why = risky_steps.ask_kind(_tool, code, getattr(_prefs, "approval_mode", "ASK"), _engine,
+                                                 inputs=request.get("args"))
     except (KeyError, AttributeError, ImportError):
         _kind, _why = "", ""
 

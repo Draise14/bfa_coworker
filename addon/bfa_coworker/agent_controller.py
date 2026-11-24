@@ -1701,6 +1701,7 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "get_node_tree_as_code",       # #480: whole node trees as text
         "build_node_tree_from_code",
     }),
+    "web": frozenset({"read_web_page"}),     # #637: a page the user links, after they say yes
     "assets": frozenset({
         "search_assets",
         "get_asset_libraries",
@@ -1752,6 +1753,10 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "asset", "library", "catalog", "browse", "import asset",
         "append", "link asset", "asset browser",
         "preset", "template", "stock", "material library",
+    ],
+    "web": [
+        "http://", "https://", "www.", "web page", "webpage", "website", "web site", "this link", "the link",
+        "read this page", "open this url", "this url",
     ],
 }
 
@@ -5136,6 +5141,7 @@ _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "get_blendfile_summary_datablocks_toolcode": "Reading scene data",
     "download_polyhaven_asset": "Downloading asset",
     "search_polyhaven_assets": "Searching Poly Haven",
+    "read_web_page": "Reading a web page",
     "place_asset_in_scene": "Placing asset in scene",
     "jump_to_asset_browser": "Opening Asset Browser",
     "setup_pbr_material": "Setting up PBR material",

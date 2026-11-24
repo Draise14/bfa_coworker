@@ -32,14 +32,17 @@ def get_connection_params() -> tuple[str, int]:
 
 _ARGS_CHARS = 400
 _ARG_VALUE_CHARS = 120
+_URL_CHARS = 2100
 
 
 def _args_text(inputs: dict[str, object]) -> str:
     """The tool's input as short JSON text, for the bridge's activity view and approval card
     (#500): a long text value is cut on its own, so the whole stays JSON the card can read."""
+    # A web address is kept whole (#637): the approval card shows it in full, and the host in it is
+    # what "Always" remembers.  read_web_page refuses addresses over _URL_CHARS before it asks.
     short = {key: value[:_ARG_VALUE_CHARS] + "…" if isinstance(value, str) and len(value) > _ARG_VALUE_CHARS
-             else value for key, value in inputs.items()}
-    return json.dumps(short, ensure_ascii=False, default=str)[:_ARGS_CHARS]
+             and key != "url" else value for key, value in inputs.items()}
+    return json.dumps(short, ensure_ascii=False, default=str)[:_ARGS_CHARS + (_URL_CHARS if "url" in short else 0)]
 
 
 def send_code(code: str, strict_json: bool) -> dict[str, object]:

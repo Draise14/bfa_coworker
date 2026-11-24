@@ -111,6 +111,16 @@ class ApprovalRequest:
     @property
     def detail(self) -> str:
         """The card's line: the tool and its input (#500), or the code it runs."""
+        if self.tool.startswith("web:"):        # #637: the whole address, never cut
+            args = self.args
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    pass
+            url = args.get("url") if isinstance(args, dict) else ""
+            if url:
+                return _line(str(url), 2200, "…")
         name = self.name or (self.tool if self.coworker_tool and ":" not in self.tool else "")
         return _detail(self.args, name)
 
@@ -137,6 +147,11 @@ class Approvals:
         """Allowed without asking: "Allow this turn" was picked in *thread*'s turn (any tool)."""
         with self._lock:
             return thread in self._turn_all
+
+    def allowed_kind(self, kind: str) -> bool:
+        """*kind* (a web host, #637) was answered "Always": until Blender restarts or the mode changes."""
+        with self._lock:
+            return kind in self._always
 
     def new_turn(self, thread: str | None = None) -> None:
         """A new turn (your next message): ask again (in *thread*, or every thread)."""
@@ -196,11 +211,15 @@ class Approvals:
             if index is None:
                 return False
             request, respond = self._pending.pop(index)
+            web = request.tool.startswith("web:")      # #637: "Always" is for that host only
             if choice == "always":
                 self._always.add(request.tool)
-                self._turn_all.add(request.thread)
+                if not web:
+                    self._turn_all.add(request.thread)
             # The rest of the turn is allowed: what else waits in that thread is answered too.
-            also = [(r, f) for r, f in self._pending if choice == "always" and r.thread == request.thread]
+            # A web page's "Always" lets only its own host's waiting cards through.
+            also = [(r, f) for r, f in self._pending if choice == "always" and (
+                r.tool == request.tool if web else r.thread == request.thread and not r.tool.startswith("web:"))]
             self._pending = [p for p in self._pending if p not in also]
         respond(choice)
         for _r, other in also:

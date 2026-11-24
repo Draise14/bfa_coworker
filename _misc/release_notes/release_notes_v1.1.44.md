@@ -14,7 +14,7 @@
 - Prefer an online model? **Use Remote for speech** uses your Remote API instead.
 
 ### 💬 **Auto Captions** (#376)
-- **Strip → Coworker → Auto Captions...** turns a clip's words into caption strips, in four looks: **Clean**, **Bold Pop**, **Word-by-word highlight** and **Boxed**. One **Ctrl+Z** takes the whole run away.
+- **Strip → Auto Captions...** turns a clip's words into caption strips, in four looks: **Clean**, **Bold Pop**, **Word-by-word highlight** and **Boxed**. One **Ctrl+Z** takes the whole run away.
 - **No transcript yet? It transcribes first,** in the same click. (#516) It captions **every selected strip** and names any it had to skip, and a re-run keeps captions you edited by hand. (#538)
 - **Put them where you want:** Bottom, Top or Middle with a margin, and a caption channel per speaker, with name labels, when you have one sound file per speaker. (#542)
 - **Make them move:** each caption can fade, slide, pop or type out, and the words can pop, scale, rise or light up one by one as they are spoken. Pick how it eases (Ease In, Ease Out, Back, Bounce and more) and how fast. (#594, #605)
@@ -22,7 +22,7 @@
 - **SRT in and out:** Strip → Captions → **Import SRT...** and **Export SRT...**. Right-click captions → **Translate Captions** translates many lines at once, keeping their style.
 
 ### ✂️ **Remove Silences** (#331)
-- **Strip → Remove Silences** (also in the Coworker toolshelf tab) cuts the quiet parts of the selected sound strips and closes the gaps. It listens to all selected sounds and cuts only where all of them are quiet.
+- **Strip → Remove Silences...** cuts the quiet parts of the selected sound strips and closes the gaps. It listens to all selected sounds and cuts only where all of them are quiet.
 - **The whole edit stays together:** pictures, music, other tracks and captions are cut at the same places, and the scene's end follows. With a locked strip in the way, nothing changes and the strip is named. One **Ctrl+Z** undoes it all. (#539)
 - The agent can run it too, and tells you how many seconds it removed.
 
@@ -33,16 +33,17 @@
 - **Play from Line**, **Live** (apply as you type), **Make Captions** and **Remove Filler Words...** (um, uh) are in the same panel. (#593, #595)
 
 ### 📱 **Make Vertical and Reframe Layouts** (#333, #606)
-- **Strip → Make Vertical** (also in the View menu and the Coworker toolshelf tab) turns your edit into a 9:16 scene with **Centre Crop** or **Blur Fill**, in 1080x1920, 720x1280 or 2160x3840. By default it works in a copy of your scene, and the copy now survives save and reopen. (#537)
+- **Strip → Make Vertical...** (also in the Coworker tab: the toolshelf in Bforartists, the sidebar in Blender) turns your edit into a 9:16 scene with **Centre Crop** or **Blur Fill**, in 1080x1920, 720x1280 or 2160x3840. By default it works in a copy of your scene, and the copy now survives save and reopen. (#537)
 - **Captions are laid out again** for the tall frame; a caption you moved by hand stays put. (#497)
-- **Reframe layouts, one click each:** Full Frame, Blur Fill, Tracked, and three splits (half and half, two thirds on top, one third on top) that show two crops of the same shot, one above the other. **Swap** and **Reset Framing** correct a split. Each click is one undo step. The Reframe buttons are in the sidebar's Coworker tab, in the toolshelf grid and in the Preview.
+- **Reframe layouts, one click each:** Full Frame, Blur Fill, Tracked, and three splits (half and half, two thirds on top, one third on top) that show two crops of the same shot, one above the other. **Swap** and **Reset Framing** correct a split. Each click is one undo step. The Reframe buttons are in **Strip → Reframe Layout** and in the Coworker tab (the toolshelf grid in Bforartists, the sidebar in Blender), also in the Preview.
+- **Remote transcription sends the whole file in one request** (25 MB limit), and Stop is not honoured while it uploads. Local transcription works in pieces.
 - **Follow Subject** (off by default) keeps a person in frame, and needs a vision model.
 
 ### 🧙 **Chats Side by Side, and Helper Chats** (#359, #479)
-- **Chat tabs work at the same time** on Remote API and External Agent (up to **Chats Running at Once**, 3 by default). **Local** takes turns, because one graphics card does one job at a time; **Local Side by Side** is an opt-in.
-- **Two chats that want the same object ask first:** "The 3D chat is changing Cube. Wait for it, or go ahead anyway?" **Stop** ends one chat only; **Stop All Chats** (in the tab menu) ends all of them, helpers too.
+- **Chat tabs work at the same time** on Remote API and, with External Agent, on Claude Code (up to **Chats Running at Once**, 3 by default). Other agents (Codex, Gemini, Copilot and your own) take one chat at a time. **Local** takes turns by default, so the graphics card is not shared by several chats; **Local Side by Side** is an opt-in.
+- **Two chats that want the same object ask first:** The card names the chat that is changing the object and asks whether to wait for it or go ahead anyway. **Stop** ends one chat only; **Stop All Chats** (in the tab menu) ends all of them, helpers too.
 - **Revert stays honest.** If another chat worked in between, you get **Revert Both Turns** or **Cancel**, never a quiet undo of someone else's work.
-- **A chat can hand parts of a job to helper chats.** They open as tabs, and a **Helpers** card shows them. With **Magic Wording** on (the default) helpers read as wizards and the agent itself is "the Wizard"; turn it off in Preferences → Chat Display for the plain words. (#528, #608)
+- **A chat can hand parts of a job to helper chats.** They open as tabs, and a **Helpers** card shows them. With **Magic Wording** on (the default) helpers read as wizards and the agent itself is "the Wizard"; turn it off in Preferences → Advanced → Chat Display for the plain words. (#528, #608)
 
 ### 🌳 **Node Trees as Code** (#480)
 - **Coworker reads a whole node tree** (Geometry Nodes, shader or compositor) as a short text, one line per node, and **builds or rebuilds a tree** from the same text. Changing one thing in a big tree no longer means rebuilding it node by node.
@@ -51,7 +52,7 @@
 - **The co-work lock no longer gets in the agent's way:** Apply Modifier and other operators work while Coworker works, and objects can't stay unselectable after a save or an undo. (#548)
 - **Agent steps wait while you drag a slider or use a tool** like Grab, up to 8 seconds, then say "Not run ... Nothing was changed". While a render or bake runs, steps that would touch the scene are refused. (#576, #591)
 - **One Ctrl+Z per chat turn,** and a turn that only looked leaves no undo step. (#501)
-- **Cards say what they are about:** the approval card shows the tool and its arguments, nine more file-writing commands (UV layout export and others) ask first, and a harmless `objects.unlink` no longer shows the "delete files" card. (#500, #558, #549)
+- **Cards say what they are about:** the approval card shows the tool and its arguments, nine more file-writing commands (UV layout export and others) ask first, and removing an object from a collection no longer shows the "delete files" card. (#500, #558, #549)
 - **Keys stay hidden** in the Workshop, the job row, cards, helper chats, logs and the tool history. (#511, #528)
 - **Permissions in External Harness mode:** the card has a **Permissions** button, and the sidebar and editor header have one too. (#385)
 
@@ -65,11 +66,11 @@
 
 ### 🎨 **New Icons in the Bforartists Style** (#563)
 - Coworker's icons are redrawn from Bforartists' own icons: filled, coloured and readable at menu size, in the dark and the light theme. The purple wand is the Coworker mark, and a small wand shows only on tools that need the agent (Translate, Explain, Tidy Nodes).
-- **The Sequencer has a Coworker tab** in the toolshelf with icon buttons, and one **Video** panel in the sidebar. Every tool's tooltip ends with whether it works without the agent started. (#504, #607)
+- **In Bforartists the Sequencer's toolshelf has a Coworker tab** with icon buttons; in Blender the same tools are in the sidebar's Coworker tab, in one **Video** panel. Every tool's tooltip ends with whether it works without the agent started. (#504, #607)
 
 <!-- #637: confirm wording against its PR before release -->
 ### 🌐 **Read a Web Page** (#637)
-- **Give the agent a link and it can read the page,** after you allow it on a card that shows the address. **Always** remembers the site until Blender restarts. Local addresses are refused.
+- **Give the agent a link and it can read the page,** after you allow it on a card that shows the full address. **Always** remembers that site only, until Blender restarts or you change the approval mode. Addresses on your own computer or network are refused, and only text pages are read (not PDFs or images).
 
 ---
 
@@ -99,6 +100,7 @@
 - **The compositor tree is read through its current API,** so "add a glare" no longer fails on newer builds. (#503)
 - **The chat no longer loses a click or key** when the autosave runs. (#488) **Autosave is now written in a quiet moment** (no render, no agent step, no mouse button held, nothing typed for 2 seconds), and each write leaves a trace in `autosave_trace.txt`. This is a stability change, not a proven fix. (#638)
 - **Changing the Operating Mode from a script no longer raises an error.** (#489)
+- **A render that makes no progress for 3 minutes is reported as stuck,** and the agent stops polling it after three "stuck" answers. A step that hit its time limit may still be running in Blender; nothing is undone then. (#591)
 - **Repeated transcriptions after a set-up change are no longer called a loop,** and Stop says "Transcription stopped." (#499)
 - **The prompt's highlight ring stays on** while you drag its top edge. (#532)
 
@@ -109,13 +111,13 @@
   - **A crash in the autosave (#638).** The change above lowers the chance; it isn't proven to fix it. Keep the crash log and `autosave_trace.txt`.
   - **Local, unattended runs (#591):** a crash after a timed-out step and a render that never ends were reported; steps are refused during a render now, but this is not confirmed fixed.
   - **Make Vertical with a plain Centre Crop (#632)** can halve playback speed in the Sequencer.
-  - **Local checkpoints (#545):** summaries return text now, but the model still re-reads the conversation after each checkpoint, and the step-thinking change ships switched off.
-  - **Restart Coworker with a Local model (#564) and the Local 27B start (#543):** the fixes are in; a check with a real Local model is still open.
+  - **Local checkpoints (#545):** summaries return text now, but the model still re-reads the conversation after each checkpoint, and the model's extra thinking between steps is switched off for now.
+  - **Restart Coworker with a Local model (#564), the Local 27B start (#543) and question cards with a real External Agent app (#572):** the fixes are in; a check with a real model or agent is still open.
   - **Video and render follow-ups (#541, #527):** smaller findings from the real-footage test and render previews are still open.
 - **Not yet tried by hand:** most video tools were checked live by the builders on Blender 5.2.4, Blender 5.4 and Bforartists 5.2.3, with generated clips and made-up speech. Please try them on real footage, and tell us what looks off (hand-test list: #561, 1.1.44 hand tests).
-- **Chats side by side were tested with stand-in models,** not yet with real ones. OpenCode stays chained (one chat at a time) until it is measured.
+- **Chats side by side were tested with stand-in models,** not yet with real ones. Only Claude Code runs chats at the same time on External Agent; the other agents stay chained until they are measured.
 - **Follow Subject** needs a vision model and wasn't tried on a real person. **Track All** is greyed out ("coming").
-- **Speech set-up is Windows only** for now; on macOS and Linux use **Use Remote for speech**.
+- **Speech set-up is for Windows (64-bit) only** for now; on macOS and Linux use **Use Remote for speech**.
 - **The 27B on a card that is nearly full** (partial GPU layers) wasn't tried with a model loaded.
 - **Stop still doesn't cancel a running render or bake:** the **X** on the status bar does. This needs a small Bforartists API (#419).
 
@@ -123,14 +125,14 @@
 
 ## 📥 Install or Update
 
-- **Already on 1.1.37 or newer?** Coworker updates itself: open **Preferences → Get Extensions** and press **Update**.
+- **Already on 1.1.37 or newer?** Coworker updates itself: open **Preferences → Get Extensions** and press **Update**. This needs Blender / Bforartists 5.2 or newer; on 5.1 the update does not show, so update Blender / Bforartists first.
 - **New install:**
   1. Download **`bfa_coworker_installer.zip`** below.
   2. Drag it into Bforartists / Blender.
   3. It adds the Coworker update repository and installs Coworker.
 - **Manual:** install `bfa_coworker-1.1.44.zip` with *Preferences → Add-ons → Install from Disk*.
 
-> **Try it:** open the Video Sequencer with a talking clip, set up speech in Preferences → Speech, select the clip and press **Strip → Coworker → Auto Captions...**. Then try **Remove Silences** and **Make Vertical**.
+> **Try it:** open the Video Sequencer with a talking clip, set up speech in Preferences → Speech, select the clip and press **Strip → Auto Captions...**. Then try **Remove Silences** and **Make Vertical**.
 
 **Requires** Blender / Bforartists 5.2 or newer. Windows is tested; macOS and Linux are untested.
 

@@ -31,7 +31,7 @@ Video tools in the Sequencer, and chats side by side:
 
 - **Captions for any clip.** Transcribe speech on your own computer, then **Auto Captions** in four looks, with motion, easing, position and a channel per speaker. **SRT** in and out.
 - **Remove Silences**, **Edit by Transcript** (delete a line of text, the video follows) and **Make Vertical** with **Reframe layouts**: a 9:16 short in a few clicks, no agent needed.
-- **Chats side by side,** and **helper chats** that take parts of a job. Online engines work at the same time; Local takes turns.
+- **Chats side by side,** and **helper chats** that take parts of a job. Remote API and Claude Code work at the same time; Local takes turns by default.
 - **Node trees as code,** a safer agent (the co-work lock, steps that wait while you drag, one undo per turn) and a more reliable Local engine.
 - **New icons**, **Magic Wording**, and **Blender / Bforartists 5.2** as the minimum version.
 

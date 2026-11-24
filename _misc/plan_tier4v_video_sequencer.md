@@ -1,6 +1,6 @@
 # Tier 4v — Video week: an artist-friendly Sequencer (captions, vertical, text, suggestions)
 
-**Status**: 📝 Planned (2026-10-25, re-ordered the same day): **after the architecture work.** The Sequencer core (Video 0–3, Tools 1, Wand 0) **shipped in 1.1.44** (2026-11-24), with Edit by Transcript (#498) and the Reframe layouts (#606); Highlights (#571, build issues #610 to #616) and #592 are 1.1.45, and Suggest Edits (#378) is shelved to Tier 5; titles, Suggest (Video 4–5) and the assets library (Video 6) come later, with the asset work in Bforartists. Threads ship first in 1.1.42.
+**Status**: 🚧 Core shipped in 1.1.44 (2026-11-24). Plan of 2026-10-25, re-ordered the same day: **after the architecture work.** The Sequencer core (Video 0–3, Tools 1, Wand 0) **shipped in 1.1.44** (2026-11-24), with Edit by Transcript (#498) and the Reframe layouts (#606); Highlights (#571, build issues #610 to #616) and #592 are 1.1.45, and Suggest Edits (#378) is shelved to Tier 5; titles (Video 4) and the assets library (Video 6) come later, with the asset work in Bforartists. Threads ship first in 1.1.42.
 **Goal**: by the end of the week, a talking-head clip becomes a **captioned vertical
 short** in a few clicks, with no model needed for the basics, and Coworker can
 **suggest** the edit. Next week: the **Sequencer assets** library (looks, blur fill,

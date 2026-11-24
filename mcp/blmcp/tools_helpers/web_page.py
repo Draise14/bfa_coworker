@@ -25,9 +25,14 @@ what comes back.
 
 __all__ = (
     "DEFAULT_MAX_CHARS",
+    "TOTAL_SECONDS",
+    "ascii_host",
+    "host_label",
     "MAX_BODY_BYTES",
     "MAX_CHARS_LIMIT",
+    "MAX_ECHO_CHARS",
     "MAX_REDIRECTS",
+    "MAX_TITLE_CHARS",
     "MAX_URL_CHARS",
     "TEXT_TYPES",
     "TIMEOUT",
@@ -46,15 +51,19 @@ import ipaddress
 import re
 import socket
 import ssl
+import time
 import urllib.parse
 from html.parser import HTMLParser
 from typing import Any, Callable
 
 MAX_REDIRECTS = 5
-TIMEOUT = 15.0
+TIMEOUT = 15.0                  # one connect or one read
+TOTAL_SECONDS = 30.0            # the whole call: lookups, connects, redirects, body
+MAX_TITLE_CHARS = 300
+MAX_ECHO_CHARS = 100            # what a refusal repeats from the server
 MAX_BODY_BYTES = 2 * 1024 * 1024
 MAX_URL_CHARS = 2000
-DEFAULT_MAX_CHARS = 20000
+DEFAULT_MAX_CHARS = 12000
 MAX_CHARS_LIMIT = 50000
 USER_AGENT = "bfa-coworker-web-reader/1.0"
 
@@ -93,6 +102,24 @@ def host_of(url: str) -> str:
         return ""
 
 
+def ascii_host(host: str) -> str:
+    """*host* in its ASCII (IDNA, ``xn--``) form; :class:`WebPageError` when it can't be written that way."""
+    try:
+        return host.encode("idna").decode("ascii") if host else ""
+    except UnicodeError as ex:
+        raise WebPageError("The host name '{:s}' isn't a valid internet name.".format(host[:100])) from ex
+
+
+def host_label(host: str) -> str:
+    """The host as the card shows it: the ``xn--`` form, with the Unicode form next to it when it differs."""
+    try:
+        ascii_form = ascii_host(host)
+        shown = ascii_form.encode("ascii").decode("idna")
+    except (WebPageError, UnicodeError):
+        return host[:100]
+    return ascii_form if shown == ascii_form else "{:s}, {:s}".format(ascii_form, shown)
+
+
 def check_url(url: str) -> urllib.parse.SplitResult:
     """*url* split into parts, or :class:`WebPageError` when it may not be read (no lookup is made)."""
     url = str(url or "").strip()
@@ -116,6 +143,15 @@ def check_url(url: str) -> urllib.parse.SplitResult:
         raise WebPageError("The URL has no host name.")
     if host in _BLOCKED_NAMES or host.endswith(".localhost"):
         raise WebPageError("'{:s}' is this computer, which isn't read (Coworker's own servers live there).".format(host))
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        pass
+    else:                       # an address as the host: judged now, before anyone is asked
+        why = _blocked_reason(host.strip("[]"))
+        if why:
+            raise WebPageError("'{:s}' is {:s}; addresses on this computer or a private network aren't "
+                               "read.".format(host, why))
     if port is not None and not 0 < port < 65536:
         raise WebPageError("The URL's port is out of range.")
     return parts
@@ -134,8 +170,9 @@ def _blocked_reason(address: str) -> str:
             ip = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
         elif ip.sixtofour is not None and not ip.sixtofour.is_global:    # 6to4: the IPv4 address inside
             ip = ip.sixtofour
-    for name in ("is_loopback", "is_private", "is_link_local", "is_multicast", "is_reserved", "is_unspecified"):
-        if getattr(ip, name):
+    for name in ("is_loopback", "is_private", "is_link_local", "is_site_local", "is_multicast", "is_reserved",
+                 "is_unspecified"):
+        if getattr(ip, name, False):
             return name[3:].replace("_", " ")
     if not ip.is_global:
         return "not a public address"
@@ -178,29 +215,53 @@ class _PinnedHTTP(_Pinned, http.client.HTTPConnection):
 class _PinnedHTTPS(_Pinned, http.client.HTTPSConnection):
     def connect(self) -> None:
         sock = socket.create_connection((self.pinned_address, self.port), self.timeout)
-        # The certificate is checked against the host name, not the address.
+        # The certificate is checked against the host name (default context: chain and name on), not the address.
         self.sock = ssl.create_default_context().wrap_socket(sock, server_hostname=self.host)
 
 
-def _http_get(scheme: str, host: str, port: int, address: str, target: str) -> tuple[int, dict[str, str], bytes, bool]:
+def _left(deadline: float) -> float:
+    """Seconds left until *deadline* (a ``time.monotonic()`` value); :class:`WebPageError` when it is over."""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise WebPageError("Reading the page took longer than {:.0f} seconds; stopped.".format(TOTAL_SECONDS))
+    return left
+
+
+def _http_get(scheme: str, host: str, port: int, address: str, target: str,
+              deadline: float = 0.0) -> tuple[int, dict[str, str], bytes, bool]:
     """One GET to *address*: ``(status, headers (lower-case names), body, body_was_cut)``.
 
-    Sends no cookies and no credentials.  Reads at most :data:`MAX_BODY_BYTES`."""
+    Sends no cookies and no credentials.  Reads at most :data:`MAX_BODY_BYTES`, in chunks, and
+    gives up when *deadline* passes (the whole call's, not this read's)."""
+    deadline = deadline or time.monotonic() + TOTAL_SECONDS
     cls = _PinnedHTTPS if scheme == "https" else _PinnedHTTP
-    conn = cls(host, port, timeout=TIMEOUT)
+    conn = cls(host, port, timeout=min(TIMEOUT, _left(deadline)))
     conn.pinned_address = address
     try:
         conn.request("GET", target, headers={"User-Agent": USER_AGENT, "Accept": "text/html,text/plain,*/*;q=0.5",
                                              "Accept-Encoding": "identity", "Connection": "close"})
         response = conn.getresponse()
         headers = {k.lower(): v for k, v in response.getheaders()}
-        body = b""
+        chunks: list[bytes] = []
+        size = 0
         cut = False
         if 200 <= response.status < 300:
-            body = response.read(MAX_BODY_BYTES + 1)
-            if len(body) > MAX_BODY_BYTES:
-                body, cut = body[:MAX_BODY_BYTES], True
-        return response.status, headers, body, cut
+            while True:
+                sock = getattr(conn, "sock", None)
+                if sock is not None:
+                    sock.settimeout(min(TIMEOUT, _left(deadline)))
+                else:
+                    _left(deadline)
+                chunk = response.read(min(65536, MAX_BODY_BYTES + 1 - size))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+                if size > MAX_BODY_BYTES:
+                    cut = True
+                    break
+        body = b"".join(chunks)
+        return response.status, headers, body[:MAX_BODY_BYTES], cut
     finally:
         conn.close()
 
@@ -217,20 +278,22 @@ class _TextExtractor(HTMLParser):
         self._in_head = False
         self._in_title = False
         self._pre = 0
-        self._links: list[tuple[str, int]] = []
+        self._newlines = 0       # line breaks at the end of the text so far (spaces between them don't count)
+        self._length = 0         # characters in self.parts
+        self._links: list[tuple[str, int, int]] = []
+
+    def _add(self, text: str) -> None:
+        if not text:
+            return
+        self.parts.append(text)
+        self._length += len(text)
+        tail = text[len(text.rstrip(" \n")):]
+        self._newlines = (self._newlines if not text.strip(" \n") else 0) + tail.count("\n")
 
     def _break(self, count: int = 1) -> None:
         """Make sure the text ends with *count* line breaks (a break after a break adds nothing)."""
-        if not self.parts:
-            return
-        have = 0
-        for piece in reversed(self.parts):
-            stripped = piece.rstrip(" \n")
-            have += piece[len(stripped):].count("\n")
-            if stripped:
-                break
-        if have < count:
-            self.parts.append("\n" * (count - have))
+        if self.parts and self._newlines < count:
+            self._add("\n" * (count - self._newlines))
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag in _SKIP_TAGS:
@@ -246,13 +309,13 @@ class _TextExtractor(HTMLParser):
             return
         if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
             self._break(2)
-            self.parts.append("#" * int(tag[1]) + " ")
+            self._add("#" * int(tag[1]) + " ")
         elif tag == "li":
             self._break()
-            self.parts.append("- ")
+            self._add("- ")
         elif tag == "a":
             href = dict(attrs).get("href") or ""
-            self._links.append((href.strip(), len(self.parts)))
+            self._links.append((href.strip(), len(self.parts), self._length))
         elif tag == "pre":
             self._pre += 1
             self._break(2)
@@ -279,11 +342,14 @@ class _TextExtractor(HTMLParser):
         if self._skip or self._in_head:
             return
         if tag == "a" and self._links:
-            href, start = self._links.pop()
-            text = " ".join("".join(self.parts[start:]).split())
+            href, start, start_length = self._links.pop()
             link = self._link(href)
-            if text and link and link != text:
-                self.parts.append(" ({:s})".format(link))
+            seen = self._length - start_length
+            if link and seen:
+                # A long link text is neither empty nor the address: no need to join it (that was quadratic).
+                text = " ".join("".join(self.parts[start:]).split()) if seen <= 2 * MAX_URL_CHARS else "long"
+                if text and link != text:
+                    self._add(" ({:s})".format(link))
         elif tag == "pre":
             self._pre = max(0, self._pre - 1)
             self._break(2)
@@ -306,11 +372,11 @@ class _TextExtractor(HTMLParser):
             return
         if self._in_title:
             if not self.title:
-                self.title = " ".join(data.split())
+                self.title = " ".join(data.split())[:MAX_TITLE_CHARS]
             return
         if self._in_head:
             return
-        self.parts.append(data if self._pre else re.sub(r"\s+", " ", data))
+        self._add(data if self._pre else re.sub(r"\s+", " ", data))
 
 
 def _tidy(text: str) -> str:
@@ -350,9 +416,20 @@ def _decode(body: bytes, content_type: str, is_html: bool) -> str:
             continue
         try:
             return body.decode(name, errors="replace")
-        except LookupError:
+        except (LookupError, UnicodeError, ValueError):     # no such codec, or one that isn't for text (idna...)
             continue
     return body.decode("utf-8", errors="replace")
+
+
+_SAFE_PATH = "/%:@!$&'()*+,;=~-._"
+_SAFE_QUERY = "/%:@!$&'()*+,;=~-._?"
+
+
+def _target(parts: urllib.parse.SplitResult) -> str:
+    """The request line's path and query, with what isn't ASCII percent-encoded (existing ``%XX`` stay)."""
+    path = urllib.parse.quote(parts.path or "/", safe=_SAFE_PATH)
+    query = urllib.parse.quote(parts.query, safe=_SAFE_QUERY)
+    return path + ("?" + query if query else "")
 
 
 def read_page(url: str, max_chars: int = DEFAULT_MAX_CHARS, start: int = 0,
@@ -360,8 +437,19 @@ def read_page(url: str, max_chars: int = DEFAULT_MAX_CHARS, start: int = 0,
               http_get: Callable[..., Any] | None = None) -> dict[str, Any]:
     """The readable text of *url* (a part of it: *max_chars* from character *start*).
 
-    Raises :class:`WebPageError` for what is refused.  *getaddrinfo* / *http_get*: the lookup and
-    the request (tests give their own: no real request)."""
+    Raises :class:`WebPageError` for what is refused or can't be read, whatever went wrong inside
+    (nothing else comes out).  *getaddrinfo* / *http_get*: the lookup and the request (tests give
+    their own: no real request)."""
+    try:
+        return _read_page(url, max_chars, start, getaddrinfo, http_get)
+    except WebPageError:
+        raise
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        raise WebPageError("The page could not be read ({:s}).".format(type(ex).__name__)) from ex
+
+
+def _read_page(url: str, max_chars: Any, start: Any, getaddrinfo: Callable[..., Any] | None,
+               http_get: Callable[..., Any] | None) -> dict[str, Any]:
     try:
         max_chars = int(max_chars)
         start = int(start)
@@ -370,40 +458,57 @@ def read_page(url: str, max_chars: int = DEFAULT_MAX_CHARS, start: int = 0,
     max_chars = max(1, min(max_chars, MAX_CHARS_LIMIT))
     start = max(0, start)
     get = http_get or _http_get
+    deadline = time.monotonic() + TOTAL_SECONDS
 
     current = url.strip()
-    first_host = host_of(current)
+    parts = check_url(current)
+    first_host = ascii_host((parts.hostname or "").lower().rstrip("."))
     for hop in range(MAX_REDIRECTS + 1):
         parts = check_url(current)
-        host = (parts.hostname or "").lower().rstrip(".")
         scheme = parts.scheme.lower()
+        host = ascii_host((parts.hostname or "").lower().rstrip("."))
         port = parts.port or (443 if scheme == "https" else 80)
+        _left(deadline)
         addresses = resolve_public(host, port, getaddrinfo)
-        target = urllib.parse.urlunsplit(("", "", parts.path or "/", parts.query, ""))
+        _left(deadline)
         try:
-            status, headers, body, cut = get(scheme, host, port, addresses[0], target)
+            status, headers, body, cut = get(scheme, host, port, addresses[0], _target(parts), deadline)
+        except WebPageError:
+            raise
         except (OSError, http.client.HTTPException, ssl.SSLError) as ex:
             raise WebPageError("The page could not be read from {:s}: {:s}".format(
-                host, str(ex) or type(ex).__name__)) from ex
+                host, (str(ex) or type(ex).__name__)[:MAX_ECHO_CHARS])) from ex
         if status in (301, 302, 303, 307, 308):
-            location = headers.get("location", "")
+            location = headers.get("location", "").strip()
             if not location:
                 raise WebPageError("The page redirects ({:d}) without saying where.".format(status))
+            target = urllib.parse.urljoin(current, location)
+            new = check_url(target)           # refused: another scheme, credentials, localhost
+            new_host = ascii_host((new.hostname or "").lower().rstrip("."))
+            if new_host != first_host:
+                # Another host: the user's yes was for the first one.  Say where it leads; reading it
+                # is a new call, which asks again.
+                return {"status": "redirect", "url": url.strip(), "redirect_to": target,
+                        "message": "This address redirects to another site ({:s}). It was not read: reading it "
+                                   "is a new read_web_page call with that address, which asks the user "
+                                   "again.".format(host_label(new_host))}
+            if scheme == "https" and new.scheme.lower() == "http":
+                raise WebPageError("The page redirects from https to http (an unprotected address); not followed.")
             if hop >= MAX_REDIRECTS:
                 raise WebPageError("The page redirects more than {:d} times; stopped.".format(MAX_REDIRECTS))
-            current = urllib.parse.urljoin(current, location)
+            current = target
             continue
         break
     else:  # pragma: no cover  (the loop ends by break or raise)
         raise WebPageError("Too many redirects.")
 
     if not 200 <= status < 300:
-        raise WebPageError("The server answered {:d} for {:s}; no page to read.".format(status, current))
+        raise WebPageError("The server answered {:d} for {:s}; no page to read.".format(status, current[:300]))
     content_type = headers.get("content-type", "")
     mime = content_type.split(";", 1)[0].strip().lower()
     if mime not in TEXT_TYPES:
         raise WebPageError("This is not a text page (content type: {:s}). Only HTML, plain text, Markdown, JSON "
-                           "and XML are read.".format(mime or "none given"))
+                           "and XML are read.".format(mime[:MAX_ECHO_CHARS] or "none given"))
     is_html = mime in ("text/html", "application/xhtml+xml")
     decoded = _decode(body, content_type, is_html)
     if is_html:
@@ -426,11 +531,8 @@ def read_page(url: str, max_chars: int = DEFAULT_MAX_CHARS, start: int = 0,
         "next_start": end if end < total else None,
         "text": part,
     }
-    if host_of(current) != first_host:
-        result["redirected_to_other_host"] = "The address redirected to {:s}; this is the page that was read.".format(
-            host_of(current))
-    elif current != url.strip():
-        result["redirected"] = "The address redirected; this is the page that was read: " + current
+    if current != url.strip():
+        result["redirected"] = "The address redirected (same site); this is the page that was read: " + current
     if cut:
         result["download_cut"] = "The page is bigger than {:d} MB; only its start was read.".format(
             MAX_BODY_BYTES // (1024 * 1024))

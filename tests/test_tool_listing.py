@@ -2360,7 +2360,9 @@ EXPECTED_TOOLS = [
         "name": "read_web_page",
         "description": "\n"
 "        Read the text of a web page when the user asks for it or gives a link. The user is asked\n"
-"        first (a card with the full address); if they say no, don't try another way to reach it.\n"
+"        first (a card with the address and the site); if they say no, don't try another way to reach\n"
+"        it. Their \"Allow this turn\" lets you read that site again for the rest of this turn; another\n"
+"        site asks again.\n"
 "\n"
 "        Only http and https pages with text (HTML, plain text, Markdown, JSON, XML) are read;\n"
 "        this computer and private networks are refused; no cookies or logins are sent. What comes\n"
@@ -2368,12 +2370,14 @@ EXPECTED_TOOLS = [
 "\n"
 "        Args:\n"
 "            url: The full address of the page (https://...).\n"
-"            max_chars: How much text to return at most (default 20000; use less on a small context).\n"
+"            max_chars: How much text to return at most (default 12000; use less on a small context).\n"
 "            start: Character to begin at: pass the ``next_start`` of the last answer to read the next part.\n"
 "\n"
 "        Returns:\n"
 "            ``text`` (the page's readable text), ``title``, ``final_url`` (the page that was read, after\n"
-"            redirects), ``total_chars`` and ``next_start`` (None when this was the end).\n"
+"            redirects), ``total_chars`` and ``next_start`` (None when this was the end). An address that\n"
+"            redirects to another site answers ``status`` \"redirect\" with ``redirect_to``: that is a new call (and\n"
+"            a new question to the user), not followed for you.\n"
 "        ",
         "inputSchema": {
             "properties": {
@@ -2382,7 +2386,7 @@ EXPECTED_TOOLS = [
                     "type": "string"
                 },
                 "max_chars": {
-                    "default": 20000,
+                    "default": 12000,
                     "title": "Max Chars",
                     "type": "integer"
                 },

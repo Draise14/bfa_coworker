@@ -61,7 +61,9 @@ def register(mcp: FastMCP) -> None:
     def read_web_page(url: str, max_chars: int = web_page.DEFAULT_MAX_CHARS, start: int = 0) -> dict[str, object]:
         """
         Read the text of a web page when the user asks for it or gives a link. The user is asked
-        first (a card with the full address); if they say no, don't try another way to reach it.
+        first (a card with the address and the site); if they say no, don't try another way to reach
+        it. Their "Allow this turn" lets you read that site again for the rest of this turn; another
+        site asks again.
 
         Only http and https pages with text (HTML, plain text, Markdown, JSON, XML) are read;
         this computer and private networks are refused; no cookies or logins are sent. What comes
@@ -69,11 +71,13 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             url: The full address of the page (https://...).
-            max_chars: How much text to return at most (default 20000; use less on a small context).
+            max_chars: How much text to return at most (default 12000; use less on a small context).
             start: Character to begin at: pass the ``next_start`` of the last answer to read the next part.
 
         Returns:
             ``text`` (the page's readable text), ``title``, ``final_url`` (the page that was read, after
-            redirects), ``total_chars`` and ``next_start`` (None when this was the end).
+            redirects), ``total_chars`` and ``next_start`` (None when this was the end). An address that
+            redirects to another site answers ``status`` "redirect" with ``redirect_to``: that is a new call (and
+            a new question to the user), not followed for you.
         """
         return read(url, max_chars=max_chars, start=start)

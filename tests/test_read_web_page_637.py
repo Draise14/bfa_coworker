@@ -25,6 +25,7 @@ __all__ = ()
 import importlib
 import json
 import os
+import socket
 import sys
 import types
 import unittest
@@ -52,6 +53,15 @@ def _load_risky():
 rs = _load_risky()
 
 
+def ap_detail(url):
+    """The detail line of a web card for *url*."""
+    return rs_approvals().ApprovalRequest(tool="web:x", args=json.dumps({"url": url})).detail
+
+
+def rs_approvals():
+    return importlib.import_module("bfacw_web_pkg.approvals")
+
+
 def _lookup(*addresses):
     """A ``getaddrinfo`` that answers *addresses* (IPv4 or IPv6 text) for any host."""
     def getaddrinfo(host, port, **_kw):
@@ -72,7 +82,7 @@ class _Net:
     def __init__(self, pages):
         self.pages, self.calls = pages, []
 
-    def __call__(self, scheme, host, port, address, target):
+    def __call__(self, scheme, host, port, address, target, deadline=0.0):
         self.calls.append((scheme, host, port, address, target))
         return self.pages[host + target]
 
@@ -103,7 +113,7 @@ class TestAddresses(unittest.TestCase):
     def test_each_refused_class(self):
         for address in ("127.0.0.1", "127.8.8.8", "10.0.0.5", "172.16.3.1", "192.168.1.1", "169.254.169.254",
                         "224.0.0.1", "240.0.0.1", "0.0.0.0", "100.64.0.1", "255.255.255.255",
-                        "::1", "::", "fe80::1", "fc00::1", "fd12:3456::1", "ff02::1", "::ffff:127.0.0.1",
+                        "::1", "::", "fe80::1", "fec0::1", "fc00::1", "fd12:3456::1", "ff02::1", "::ffff:127.0.0.1",
                         "::ffff:10.1.2.3", "64:ff9b::7f00:1", "2002:7f00:1::1"):
             with self.assertRaises(wp.WebPageError, msg=address):
                 wp.resolve_public("example.com", 80, _lookup(address))
@@ -123,13 +133,27 @@ class TestAddresses(unittest.TestCase):
             wp.resolve_public("nope.invalid", 80, fail)
         self.assertIn("could not be found", str(ctx.exception))
 
-    def test_ip_literals_are_checked_through_the_lookup(self):
-        net = _Net({})
-        for url in ("http://127.0.0.1:9876/", "http://[::1]/", "http://2130706433/", "http://0x7f.1/",
-                    "http://10.0.0.1/x"):
+    def test_ip_literals_are_refused_before_any_card_or_lookup(self):
+        for url in ("http://127.0.0.1:9876/", "http://[::1]/", "http://10.0.0.1/x", "http://[fec0::1]/",
+                    "http://169.254.169.254/latest/meta-data/", "http://[::ffff:7f00:1]/"):
             with self.assertRaises(wp.WebPageError, msg=url):
-                wp.read_page(url, getaddrinfo=_lookup("127.0.0.1" if "10." not in url else "10.0.0.1"), http_get=net)
-        self.assertEqual(net.calls, [])         # nothing was requested
+                wp.check_url(url)
+
+    def test_decimal_and_hex_forms_go_through_the_system_lookup(self):
+        # The system's own lookup (numeric only: it asks no name server) turns an address written as a
+        # number into an address, or refuses it; either way nothing is requested.
+        def numeric_only(host, port, **kw):
+            return socket.getaddrinfo(host, port, flags=socket.AI_NUMERICHOST, **kw)
+        net = _Net({})
+        for url in ("http://2130706433/", "http://0x7f.1/", "http://0177.0.0.1/", "http://127.1/", "http://0/"):
+            with self.assertRaises(wp.WebPageError, msg=url):
+                wp.read_page(url, getaddrinfo=numeric_only, http_get=net)
+        self.assertEqual(net.calls, [])
+        try:
+            seen = numeric_only("2130706433", 80, type=socket.SOCK_STREAM)[0][4][0]
+        except OSError:
+            seen = None
+        self.assertIn(seen, (None, "127.0.0.1"))      # the system either refuses the form or says 127.0.0.1
 
     def test_connects_to_the_checked_address(self):
         net = _Net({"example.com/": _page("<p>hi</p>")})
@@ -139,37 +163,52 @@ class TestAddresses(unittest.TestCase):
 
 class TestRedirects(unittest.TestCase):
 
-    def test_follow_and_tell(self):
-        net = _Net({"a.com/": _page("", status=302, location="https://b.com/page?x=1"),
-                    "b.com/page?x=1": _page("<p>there</p>")})
+    def test_another_host_is_not_followed(self):
+        # The user's yes was for the first host: the answer says where it leads, a new call asks again.
+        net = _Net({"a.com/": _page("", status=302, location="https://b.com/page?x=1")})
         result = wp.read_page("https://a.com/", getaddrinfo=PUBLIC, http_get=net)
-        self.assertEqual(result["final_url"], "https://b.com/page?x=1")
-        self.assertIn("b.com", result["redirected_to_other_host"])
-        self.assertEqual(result["text"], "there")
+        self.assertEqual(result["status"], "redirect")
+        self.assertEqual(result["redirect_to"], "https://b.com/page?x=1")
+        self.assertIn("new read_web_page call", result["message"])
+        self.assertNotIn("text", result)
+        self.assertEqual(len(net.calls), 1)         # b.com was neither looked up nor asked
+
+    def test_www_is_another_host(self):
+        net = _Net({"a.com/": _page("", status=301, location="https://www.a.com/")})
+        self.assertEqual(wp.read_page("https://a.com/", getaddrinfo=PUBLIC, http_get=net)["status"], "redirect")
 
     def test_relative_redirect_same_host(self):
         net = _Net({"a.com/": _page("", status=301, location="/new"), "a.com/new": _page("<p>x</p>")})
         result = wp.read_page("http://a.com/", getaddrinfo=PUBLIC, http_get=net)
         self.assertEqual(result["final_url"], "http://a.com/new")
-        self.assertNotIn("redirected_to_other_host", result)
         self.assertIn("redirected", result)
 
-    def test_redirect_to_a_private_host_is_refused(self):
+    def test_https_to_http_is_refused_http_to_https_is_followed(self):
+        net = _Net({"a.com/": _page("", status=302, location="http://a.com/plain")})
+        with self.assertRaises(wp.WebPageError) as ctx:
+            wp.read_page("https://a.com/", getaddrinfo=PUBLIC, http_get=net)
+        self.assertIn("https to http", str(ctx.exception))
+        self.assertEqual(len(net.calls), 1)
+        net = _Net({"a.com/": _page("", status=302, location="https://a.com/safe"), "a.com/safe": _page("<p>ok</p>")})
+        self.assertEqual(wp.read_page("http://a.com/", getaddrinfo=PUBLIC, http_get=net)["text"], "ok")
+
+    def test_same_host_is_looked_up_again_each_time(self):
+        # A name that answers a public address first and a private one on the second lookup (rebinding).
+        answers = iter(["93.184.216.34", "127.0.0.1"])
+
         def lookup(host, port, **_k):
-            return _lookup("127.0.0.1" if host == "evil.test" else "93.184.216.34")(host, port)
-        net = _Net({"a.com/": _page("", status=302, location="http://evil.test/")})
+            return _lookup(next(answers))(host, port)
+        net = _Net({"a.com/": _page("", status=302, location="/next")})
         with self.assertRaises(wp.WebPageError):
             wp.read_page("https://a.com/", getaddrinfo=lookup, http_get=net)
-        self.assertEqual(len(net.calls), 1)     # the second request was never made
+        self.assertEqual(len(net.calls), 1)
 
     def test_redirect_to_localhost_and_other_scheme(self):
-        def lookup(host, port, **_k):       # like the real one: an address literal answers itself
-            return _lookup(host if host[0].isdigit() else "93.184.216.34")(host, port)
-        for location in ("http://localhost:9876/", "http://127.0.0.1/", "file:///etc/passwd", "ftp://a.com/x",
-                         "http://user:pw@b.com/"):
+        for location in ("http://localhost:9876/", "http://127.0.0.1/", "http://[::1]/", "file:///etc/passwd",
+                         "ftp://a.com/x", "http://user:pw@b.com/"):
             net = _Net({"a.com/": _page("", status=302, location=location)})
             with self.assertRaises(wp.WebPageError, msg=location):
-                wp.read_page("https://a.com/", getaddrinfo=lookup, http_get=net)
+                wp.read_page("https://a.com/", getaddrinfo=PUBLIC, http_get=net)
             self.assertEqual(len(net.calls), 1, location)
 
     def test_at_most_five_redirects(self):
@@ -231,8 +270,11 @@ class TestContent(unittest.TestCase):
             def getheaders(self):
                 return [("Content-Type", "text/plain")]
 
+            sizes: list = []
+
             def read(self, n):
-                return b"x" * n
+                Resp.sizes.append(n)
+                return b"x" * n         # as many as asked, again and again
 
         class Conn:
             def __init__(self, *_a, **_k):
@@ -250,6 +292,7 @@ class TestContent(unittest.TestCase):
         with mock.patch.object(wp, "_PinnedHTTP", Conn):
             status, _h, body, cut = wp._http_get("http", "a.com", 80, "93.184.216.34", "/")
         self.assertEqual((status, len(body), cut), (200, wp.MAX_BODY_BYTES, True))
+        self.assertIn(len(Resp.sizes), range(1, 100))
         method, _target, headers = Conn.last
         self.assertEqual(method, "GET")
         names = {k.lower() for k in headers}
@@ -279,7 +322,7 @@ class TestContent(unittest.TestCase):
 
     def test_max_chars_default_and_limit(self):
         body = "x" * 60000
-        self.assertEqual(self._read(body, "text/plain")["returned_chars"], 20000)
+        self.assertEqual(self._read(body, "text/plain")["returned_chars"], 12000)
         self.assertEqual(self._read(body, "text/plain", max_chars=10 ** 9)["returned_chars"], wp.MAX_CHARS_LIMIT)
         self.assertEqual(self._read(body, "text/plain", max_chars=-5)["returned_chars"], 1)
 
@@ -393,8 +436,23 @@ class TestTool(unittest.TestCase):
 
     def test_bridge_args_keep_the_whole_url(self):
         from blmcp.tools_helpers.connection import _args_text
-        url = "https://a.com/" + "p" * 600
-        self.assertEqual(json.loads(_args_text({"url": url, "max_chars": 5}))["url"], url)
+        url = "https://a.com/" + "p" * 1900
+        self.assertEqual(json.loads(_args_text({"url": url, "max_chars": 5}, "read_web_page"))["url"], url)
+
+    def test_quotes_and_backslashes_still_reach_the_bridge_as_json(self):
+        # The text was cut after JSON escaping (#637 review): a URL of quotes made it invalid JSON, the
+        # host was lost, and "Allow this turn" then stored a bare "web:".  Now the text is never cut.
+        from blmcp.tools_helpers.connection import _args_text
+        for filler in ('"', "\\", '"\\'):
+            url = "https://victim.example/" + filler * 900
+            text = _args_text({"url": url}, "read_web_page")
+            self.assertEqual(json.loads(text)["url"], url)
+            self.assertEqual(rs.web_target(text), ("victim.example", url))
+            kind, why = rs.ask_kind("read_web_page", "# blmcp-toolcode-skip-preflight\nx", "ASK", "LOCAL_LLM",
+                                    inputs=text)
+            self.assertEqual((kind, why), ("web:victim.example", "read a web page (victim.example)"))
+            self.assertEqual(rs.web_refusal("read_web_page", text), "")
+
 
 
 class TestCard(unittest.TestCase):
@@ -453,20 +511,69 @@ class TestCard(unittest.TestCase):
         self.assertIn("read a web page (example.com)", answer["message"])
         self.assertEqual(self.ran, [])
 
-    def test_always_is_for_that_host_only(self):
-        kind, why, code = self._ask("https://example.com/")
-        _r, check = rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind)
-        rs.APPROVALS.answer("always")
+    def _allow_turn(self, url, thread=""):
+        kind, why, code = self._ask(url)
+        _r, check = rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind, thread=thread)
+        rs.APPROVALS.answer("always", thread=thread)      # the card's second button, "Allow this turn"
         check()
-        # The same host: no card.
+        return kind, why, code
+
+    def test_allow_this_turn_is_for_that_host_only(self):
+        kind, why, code = self._allow_turn("https://example.com/")
+        # The same host: no card for the rest of the turn.
         response, check = rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind)
         self.assertEqual((response["status"], check), ("ok", None))
         self.assertIsNone(rs.APPROVALS.current())
-        # Another host asks again, although "Always" was picked in this turn.
+        # Another host asks again, although the button was picked in this turn.
         kind2, why2, code = self._ask("https://other.org/")
         response, check = rs.wrap(code, True, why2, self._execute, tool="read_web_page", kind=kind2)
         self.assertEqual(response, {})
         self.assertEqual(rs.APPROVALS.current().title, "Coworker wants to read a web page (other.org)")
+
+    def test_the_next_turn_asks_again(self):
+        kind, why, code = self._allow_turn("https://example.com/")
+        rs.APPROVALS.new_turn("")                         # the user's next message
+        response, _c = rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind)
+        self.assertEqual(response, {})
+        self.assertIsNotNone(rs.APPROVALS.current())
+
+    def test_allow_this_turn_holds_in_that_chat_only(self):
+        kind, why, code = self._allow_turn("https://example.com/", thread="t1")
+        response, check = rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind, thread="t1")
+        self.assertEqual((response["status"], check), ("ok", None))
+        response, _c = rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind, thread="t2")
+        self.assertEqual(response, {})                    # another chat asks
+        rs.APPROVALS.new_turn("t2")                       # its turn starting does not end t1's
+        self.assertTrue(rs.APPROVALS.allowed_kind(kind, "t1"))
+        rs.APPROVALS.new_turn("t1")
+        self.assertFalse(rs.APPROVALS.allowed_kind(kind, "t1"))
+
+    def test_new_turn_for_every_chat_clears_every_web_host(self):
+        kind, _w, _c = self._allow_turn("https://example.com/", thread="t1")
+        self._allow_turn("https://other.org/", thread="t2")
+        rs.APPROVALS.new_turn()
+        self.assertFalse(rs.APPROVALS.allowed_kind(kind, "t1"))
+        self.assertFalse(rs.APPROVALS.allowed_kind("web:other.org", "t2"))
+
+    def test_it_is_not_remembered_for_longer(self):
+        kind, why, code = self._allow_turn("https://example.com/")
+        self.assertFalse(rs.APPROVALS._always)            # nothing is kept until Blender restarts
+        rs.APPROVALS.forget_always()                      # the approval mode changed
+        response, _c = rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind)
+        self.assertEqual(response, {})
+
+    def test_a_bare_web_kind_is_never_stored_or_allowed(self):
+        rs.wrap("# blmcp-toolcode-skip-preflight\nx", True, "read a web page", self._execute,
+                tool="read_web_page", kind="web:")
+        rs.APPROVALS.answer("always")
+        self.assertFalse(rs.APPROVALS.allowed_kind("web:", ""))
+        self.assertEqual(rs.APPROVALS._turn_web, {})
+        response, _c = rs.wrap("x", True, "read a web page", self._execute, tool="read_web_page", kind="web:")
+        self.assertEqual(response, {})                    # asks again; a bare kind lets nothing through
+        # Another host's card is not allowed by it, nor any other tool's.
+        kind, why, code = self._ask("https://example.com/")
+        response, _c = rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind)
+        self.assertEqual(response, {})
 
     def test_allow_this_turn_of_another_step_does_not_allow_a_web_read(self):
         _r, check = rs.wrap("os.remove(p)", True, "delete or move files", self._execute)
@@ -477,15 +584,12 @@ class TestCard(unittest.TestCase):
         self.assertEqual(response, {})
         self.assertIsNotNone(rs.APPROVALS.current())
 
-    def test_always_on_a_web_card_does_not_open_the_turn_to_other_steps(self):
-        kind, why, code = self._ask("https://example.com/")
-        _r, check = rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind)
-        rs.APPROVALS.answer("always")
-        check()
+    def test_allow_this_turn_on_a_web_card_does_not_open_the_turn_to_other_steps(self):
+        self._allow_turn("https://example.com/")
         response, _c = rs.wrap("os.remove(p)", True, "delete or move files", self._execute)
         self.assertEqual(response, {})                           # still asks
 
-    def test_always_answers_only_waiting_cards_of_the_same_host(self):
+    def test_the_button_answers_only_waiting_cards_of_the_same_host_and_chat(self):
         for url in ("https://example.com/a", "https://other.org/", "https://example.com/b"):
             kind, why, code = self._ask(url)
             rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind)
@@ -493,14 +597,32 @@ class TestCard(unittest.TestCase):
         self.assertEqual(rs.APPROVALS.count(), 1)
         self.assertEqual(rs.APPROVALS.current().tool, "web:other.org")
 
-    def test_always_is_forgotten_with_the_session(self):
-        kind, why, code = self._ask("https://example.com/")
-        _r, check = rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind)
-        rs.APPROVALS.answer("always")
-        check()
-        rs.APPROVALS.forget_always()
-        response, _c = rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind)
-        self.assertEqual(response, {})
+    def test_a_long_address_is_cut_on_the_card_and_the_host_stays_in_the_title(self):
+        url = "https://example.com/" + "x" * 800
+        kind, why, code = self._ask(url)
+        rs.wrap(code, True, why, self._execute, tool="read_web_page", kind=kind, inputs=self._args(url))
+        card = rs.APPROVALS.current()
+        self.assertEqual(card.title, "Coworker wants to read a web page (example.com)")
+        self.assertEqual(card.detail, url[:500] + "... ({:d} more characters)".format(len(url) - 500))
+        short = "https://example.com/" + "y" * 470              # 490 characters: whole
+        self.assertEqual(ap_detail(short), short)
+
+    def test_a_host_with_other_letters_shows_its_punycode_form(self):
+        url = "https://bücher.example/seite"
+        kind, why, _code = self._ask(url)
+        self.assertEqual(kind, "web:xn--bcher-kva.example")
+        self.assertEqual(why, "read a web page (xn--bcher-kva.example, bücher.example)")
+
+    def test_refusals_before_any_card(self):
+        for args in (None, "", "not json", "{", '{"url": ""}', '{"url": "no host here"}', '{"url": "https:///x"}',
+                     '{"url": 5}', '[]'):
+            self.assertIn("Not read", rs.web_refusal("read_web_page", args), args)
+        # An address that looks like it holds a key: the card would show ***, so it is refused.
+        secret = "sk-" + "Zq7Rk2" * 6
+        message = rs.web_refusal("read_web_page", json.dumps({"url": "https://example.com/?key=" + secret}))
+        self.assertIn("key or password", message)
+        self.assertEqual(rs.web_refusal("read_web_page", self._args("https://example.com/path?q=1")), "")
+        self.assertEqual(rs.web_refusal("get_objects_summary", None), "")
 
     def test_auto_mode_declines(self):
         kind, why, code = self._ask("https://example.com/")
@@ -518,6 +640,279 @@ class TestCard(unittest.TestCase):
         # Code that isn't Coworker's tool-code, named read_web_page, is scanned like any code.
         self.assertEqual(rs.ask_kind("read_web_page", "x = 1", "RISKY", "LOCAL_LLM",
                                      inputs=self._args("https://example.com/")), ("", ""))
+
+
+class TestRobust(unittest.TestCase):
+    """Odd addresses and pages: an answer, never a crash; time and size are bounded."""
+
+    def _read(self, url, body="<p>ok</p>", ctype="text/html", **kw):
+        net = _Net({})
+        net.pages = {}
+        seen = []
+
+        def get(scheme, host, port, address, target, deadline=0.0):
+            seen.append((host, target))
+            return _page(body, ctype)
+        result = wp.read_page(url, getaddrinfo=PUBLIC, http_get=get, **kw)
+        return result, seen
+
+    def test_non_ascii_address(self):
+        result, seen = self._read("http://de.example/wiki/Straße?q=ü&r=%41")
+        self.assertEqual(result["text"], "ok")
+        self.assertEqual(seen, [("de.example", "/wiki/Stra%C3%9Fe?q=%C3%BC&r=%41")])
+        result, seen = self._read("https://bücher.example/é")
+        self.assertEqual(seen, [("xn--bcher-kva.example", "/%C3%A9")])
+
+    def test_a_host_that_cant_be_written_as_an_internet_name_is_an_answer(self):
+        for url in ("http://" + "a" * 70 + "é.example/", "http://.é.example/", "http://a..bé/"):
+            with self.assertRaises(wp.WebPageError, msg=url):
+                wp.read_page(url, getaddrinfo=PUBLIC, http_get=_Net({}))
+
+    def test_unusable_charsets_fall_back(self):
+        for charset in ("idna", "punycode", "nonsense", "rot13"):
+            result, _s = self._read("https://a.com/", body=b"caf\xc3\xa9 text", ctype="text/plain; charset=" + charset)
+            self.assertIn("text", result["text"])
+
+    def test_anything_unexpected_becomes_a_clean_answer(self):
+        def boom(*_a, **_k):
+            raise RuntimeError("something odd " + "x" * 5000)
+        with self.assertRaises(wp.WebPageError) as ctx:
+            wp.read_page("https://a.com/", getaddrinfo=PUBLIC, http_get=boom)
+        self.assertEqual(str(ctx.exception), "The page could not be read (RuntimeError).")
+        with self.assertRaises(wp.WebPageError):
+            wp.read_page("https://a.com/", getaddrinfo=lambda *a, **k: 1 / 0, http_get=_Net({}))
+
+    def test_tool_never_raises_for_odd_addresses(self):
+        ok = {"status": "ok", "result": {}}
+        with mock.patch.object(tool, "send_code", return_value=ok), \
+                mock.patch.object(wp.socket, "getaddrinfo", PUBLIC), \
+                mock.patch.object(wp, "_http_get", lambda *a, **k: _page("<p>fine</p>")):
+            self.assertEqual(tool.read("http://de.example/wiki/Straße")["text"], "fine")
+
+    def test_title_and_echoed_type_are_capped(self):
+        result, _s = self._read("https://a.com/", body="<title>" + "t" * 5000 + "</title><p>x</p>")
+        self.assertEqual(len(result["title"]), wp.MAX_TITLE_CHARS)
+        with self.assertRaises(wp.WebPageError) as ctx:
+            self._read("https://a.com/", body=b"x", ctype="application/" + "z" * 5000)
+        self.assertLess(len(str(ctx.exception)), 300)
+
+    def test_worst_case_pages_convert_fast(self):
+        import time
+        size = 2 * 1024 * 1024
+        pages = ("<p>x</p>" + " <br>" * (size // 5), "<a href=/x>" * (size // 11) + "t" + "</a>" * 1000,
+                 "<a href=/x>t</a> " * (size // 17), "<li>" * (size // 4), "<div><p>" * (size // 8))
+        for page in pages:
+            started = time.monotonic()
+            wp.html_to_text(page, "https://a.com/")
+            self.assertLess(time.monotonic() - started, 2.0, page[:30])
+
+    def test_time_limit_is_for_the_whole_call(self):
+        clock = [1000.0]
+        with mock.patch.object(wp.time, "monotonic", lambda: clock[0]):
+            def slow(*_a, **_k):
+                clock[0] += 20.0          # each answer takes 20 s: fine alone, not twice
+                return _page("", status=302, location="/next")
+            with self.assertRaises(wp.WebPageError) as ctx:
+                wp.read_page("https://a.com/", getaddrinfo=PUBLIC, http_get=slow)
+        self.assertIn("longer than 30 seconds", str(ctx.exception))
+
+    def test_a_slow_body_is_stopped_by_the_deadline(self):
+        clock = [1000.0]
+
+        class Resp:
+            status = 200
+
+            def getheaders(self):
+                return [("Content-Type", "text/plain")]
+
+            def read(self, n):
+                clock[0] += 5.0          # a trickle: 5 s for each chunk
+                return b"x"
+
+        class Conn:
+            def __init__(self, *_a, **_k):
+                pass
+
+            def request(self, *_a, **_k):
+                pass
+
+            def getresponse(self):
+                return Resp()
+
+            def close(self):
+                pass
+        with mock.patch.object(wp.time, "monotonic", lambda: clock[0]), mock.patch.object(wp, "_PinnedHTTP", Conn):
+            with self.assertRaises(wp.WebPageError) as ctx:
+                wp._http_get("http", "a.com", 80, "93.184.216.34", "/", 1000.0 + wp.TOTAL_SECONDS)
+        self.assertIn("longer than 30 seconds", str(ctx.exception))
+
+
+class TestPinnedHttps(unittest.TestCase):
+
+    def test_connects_to_the_address_and_checks_the_name_and_certificate(self):
+        calls = {}
+        raw = object()
+
+        class Ctx:
+            def wrap_socket(self, sock, server_hostname=None):
+                calls["wrap"] = (sock, server_hostname)
+                return "tls-socket"
+
+        def create_connection(address, timeout=None):
+            calls["connect"] = (address, timeout)
+            return raw
+
+        def default_context():
+            calls["context"] = True            # the default context: chain and host name are checked
+            return Ctx()
+        conn = wp._PinnedHTTPS("example.com", 443, timeout=7)
+        conn.pinned_address = "93.184.216.34"
+        with mock.patch.object(wp.socket, "create_connection", create_connection), \
+                mock.patch.object(wp.ssl, "create_default_context", default_context):
+            conn.connect()
+        self.assertEqual(calls["connect"], (("93.184.216.34", 443), 7))      # the checked address, not the name
+        self.assertEqual(calls["wrap"], (raw, "example.com"))                # SNI and certificate name
+        self.assertTrue(calls["context"])
+        self.assertEqual(conn.sock, "tls-socket")
+
+    def test_the_default_context_verifies(self):
+        context = wp.ssl.create_default_context()
+        self.assertEqual(context.verify_mode, wp.ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+
+    def test_plain_http_connects_to_the_address_too(self):
+        seen = {}
+        conn = wp._PinnedHTTP("example.com", 80, timeout=3)
+        conn.pinned_address = "2606:2800:220:1::1"
+        with mock.patch.object(wp.socket, "create_connection",
+                               lambda address, timeout=None: seen.setdefault("a", address) and object()):
+            conn.connect()
+        self.assertEqual(seen["a"], ("2606:2800:220:1::1", 80))
+
+
+class TestBridge(unittest.TestCase):
+    """The real bridge request path (stand-in ``bpy``), for read_web_page."""
+
+    @classmethod
+    def setUpClass(cls):
+        import test_approval_card_500 as t500
+        cls.t500 = t500
+        cls.bridge = t500._load("mcp_to_blender_server")
+        cls.si = t500._load("session_identity")
+        cls.sandbox = t500._load("weak_sandbox")
+        cls.rs = t500.rs
+
+    def _setup(self, approval="ASK", engine="LOCAL_LLM", broken_prefs=False):
+        self.rs.APPROVALS.end_session()
+        self.addCleanup(self.rs.APPROVALS.end_session)
+        self.si.set_token_required(False)
+        self.addCleanup(self.si.set_token_required, True)
+        bpy = self.t500.TestBridgeCards._bpy(self, approval, engine)
+        if broken_prefs:
+            bpy.context = types.SimpleNamespace(preferences=types.SimpleNamespace(addons={}))
+        for patcher in (mock.patch.dict(sys.modules, {"bpy": bpy}),
+                        mock.patch.object(self.sandbox, "WeakSandboxForLLM", __import__("contextlib").nullcontext)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _send(self, args_text, tool="read_web_page"):
+        code = "# blmcp-toolcode-skip-preflight\nresult = {'status': 'ok'}\n"
+        request = {"type": "execute", "code": code, "strict_json": True, "tool": tool, "args": args_text}
+        result, _strict = self.bridge._execute_code_from_request(json.dumps(request).encode("utf-8"))
+        return result
+
+    def test_a_read_asks_with_the_host_and_the_address(self):
+        self._setup()
+        url = "https://example.com/a/b?q=1"
+        result = self._send(json.dumps({"url": url}))
+        self.assertIsNotNone(result.check_fn)
+        card = self.rs.APPROVALS.current()
+        self.assertEqual((card.title, card.tool, card.detail),
+                         ("Coworker wants to read a web page (example.com)", "web:example.com", url))
+        self.rs.APPROVALS.answer("once")
+        self.assertEqual(result.check_fn()["status"], "ok")
+
+    def test_quotes_in_the_address_still_ask_about_the_right_host(self):
+        # Real path: the tool's _args_text -> the bridge's args -> ask_kind (the review's first finding).
+        from blmcp.tools_helpers.connection import _args_text
+        self._setup()
+        for filler in ('"', "\\"):
+            url = "https://victim.example/" + filler * 1500
+            self.rs.APPROVALS.end_session()
+            result = self._send(_args_text({"url": url}, "read_web_page"))
+            self.assertIsNotNone(result.check_fn)
+            card = self.rs.APPROVALS.current()
+            self.assertEqual(card.tool, "web:victim.example")
+            self.assertEqual(card.title, "Coworker wants to read a web page (victim.example)")
+            self.assertEqual(card.detail, url[:500] + "... ({:d} more characters)".format(len(url) - 500))
+            self.rs.APPROVALS.answer("always")
+            # Allowed for that host only: another host still asks.
+            self.assertTrue(self.rs.APPROVALS.allowed_kind("web:victim.example", ""))
+            self.assertFalse(self.rs.APPROVALS.allowed_kind("web:other.example", ""))
+            self.assertFalse(self.rs.APPROVALS.allowed_kind("web:", ""))
+            other = self._send(json.dumps({"url": "https://other.example/"}))
+            self.assertIsNotNone(other.check_fn)
+            self.assertIsNone(other.check_fn())            # waiting: a card for the other host
+            self.assertEqual(self.rs.APPROVALS.current().tool, "web:other.example")
+
+    def test_an_address_with_no_host_is_refused_without_a_card(self):
+        self._setup()
+        for args in (None, "", "{", json.dumps({"url": "nothing"}), json.dumps({"max_chars": 5}),
+                     '{"url": "https://x.example/' + '"' * 20):       # cut in the middle: not JSON
+            result = self._send(args)
+            self.assertIsNone(result.check_fn, args)
+            self.assertEqual(result.response["status"], "error", args)
+            self.assertIn("Not read", result.response["message"])
+            self.assertIsNone(self.rs.APPROVALS.current())
+
+    def test_refused_in_every_approval_mode_too(self):
+        for mode in ("ASK", "RISKY", "AUTO"):
+            self._setup(mode, "EXTERNAL_AGENT")
+            result = self._send("{")
+            self.assertEqual(result.response["status"], "error", mode)
+
+    def test_an_address_with_a_key_is_refused(self):
+        self._setup()
+        secret = "sk-" + "Zq7Rk2" * 6
+        result = self._send(json.dumps({"url": "https://example.com/?k=" + secret}))
+        self.assertIn("key or password", result.response["message"])
+        self.assertIsNone(self.rs.APPROVALS.current())
+
+    def test_no_settings_means_no_read(self):
+        self._setup(broken_prefs=True)
+        result = self._send(json.dumps({"url": "https://example.com/"}))
+        self.assertIsNone(result.check_fn)
+        self.assertEqual(result.response["status"], "error")
+        self.assertIn("can't be asked", result.response["message"])
+
+    def test_the_mode_that_never_asks_still_reads_without_a_card(self):
+        # Like the other risky steps in that mode (reviewer's note: network code is allowed there already).
+        self._setup("AUTO")
+        result = self._send(json.dumps({"url": "https://example.com/"}))
+        self.assertIsNone(result.check_fn)
+        self.assertEqual(result.response["status"], "ok")
+        self.assertIsNone(self.rs.APPROVALS.current())
+
+
+class TestStatusLine(unittest.TestCase):
+
+    def test_every_read_names_its_site_in_the_status_line(self):
+        ac = _agent_controller_source()
+        self.assertIn('"Reading a web page ({:s})"', ac)
+        self.assertIn("_friendly_tool_status(tool_name, args)", ac)
+
+    def test_keywords_match_links_not_linked_libraries(self):
+        ac = _agent_controller_source()
+        block = ac[ac.index('    "web": [\n'):]
+        block = block[:block.index("],")]
+        self.assertNotIn("the link", block)
+        self.assertNotIn("this link", block)
+        for word in ("https://", "http://", "www.", "web page", "website"):
+            self.assertIn(word, block)
+
+
+def _agent_controller_source():
+    return (_ROOT / "addon" / "bfa_coworker" / "agent_controller.py").read_text(encoding="utf-8")
 
 
 class TestRegistered(unittest.TestCase):

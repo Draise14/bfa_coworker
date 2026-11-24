@@ -34,6 +34,7 @@ from typing import Any, Callable
 CHOICES = ("once", "always", "deny")
 
 _DETAIL_CHARS = 160
+_URL_CARD_CHARS = 500   # a web address on its card, before it is cut (#637)
 _VALUE_CHARS = 48       # one argument's value on the card, before it is cut (#500)
 _ids = itertools.count(1)
 
@@ -111,16 +112,17 @@ class ApprovalRequest:
     @property
     def detail(self) -> str:
         """The card's line: the tool and its input (#500), or the code it runs."""
-        if self.tool.startswith("web:"):        # #637: the whole address, never cut
+        if self.tool.startswith("web:"):        # #637: the address, up to 500 characters
             args = self.args
             if isinstance(args, str):
                 try:
                     args = json.loads(args)
                 except ValueError:
                     pass
-            url = args.get("url") if isinstance(args, dict) else ""
+            url = " ".join(str(args.get("url") or "").split()) if isinstance(args, dict) else ""
             if url:
-                return _line(str(url), 2200, "…")
+                return url if len(url) <= _URL_CARD_CHARS else "{:s}... ({:d} more characters)".format(
+                    url[:_URL_CARD_CHARS], len(url) - _URL_CARD_CHARS)
         name = self.name or (self.tool if self.coworker_tool and ":" not in self.tool else "")
         return _detail(self.args, name)
 
@@ -136,6 +138,7 @@ class Approvals:
         self._pending: list[tuple[ApprovalRequest, Callable[[str], None]]] = []
         self._always: set[str] = set()
         self._turn_all: set[str] = set()   # threads whose "Allow this turn" holds, until their turn ends
+        self._turn_web: dict[str, set[str]] = {}   # per thread: the web hosts it allowed for this turn (#637)
         self.on_change: Callable[[], None] | None = None     # redraw hook (any thread)
 
     @staticmethod
@@ -148,18 +151,21 @@ class Approvals:
         with self._lock:
             return thread in self._turn_all
 
-    def allowed_kind(self, kind: str) -> bool:
-        """*kind* (a web host, #637) was answered "Always": until Blender restarts or the mode changes."""
+    def allowed_kind(self, kind: str, thread: str = "") -> bool:
+        """*kind* (a web host, "web:<host>", #637) was allowed with "Allow this turn" in *thread*: until
+        that chat's next turn.  A bare "web:" (no host) is never allowed."""
         with self._lock:
-            return kind in self._always
+            return kind in self._turn_web.get(thread, ()) and kind != "web:"
 
     def new_turn(self, thread: str | None = None) -> None:
         """A new turn (your next message): ask again (in *thread*, or every thread)."""
         with self._lock:
             if thread is None:
                 self._turn_all.clear()
+                self._turn_web.clear()
             else:
                 self._turn_all.discard(thread)
+                self._turn_web.pop(thread, None)
 
     def ask(self, request: ApprovalRequest, respond: Callable[[str], None]) -> None:
         """Queue *request*; *respond* gets one of :data:`CHOICES` or "cancel", once."""
@@ -182,6 +188,7 @@ class Approvals:
         with self._lock:
             self._always.clear()
             self._turn_all.clear()
+            self._turn_web.clear()
         self._changed()
 
     def end_session(self) -> None:
@@ -190,6 +197,7 @@ class Approvals:
         with self._lock:
             self._always.clear()
             self._turn_all.clear()
+            self._turn_web.clear()
 
     # -- chat side -----------------------------------------------------------------
     def current(self, thread: str | None = None) -> ApprovalRequest | None:
@@ -211,15 +219,19 @@ class Approvals:
             if index is None:
                 return False
             request, respond = self._pending.pop(index)
-            web = request.tool.startswith("web:")      # #637: "Always" is for that host only
+            web = request.tool.startswith("web:")      # #637: the button allows that host, for this turn
             if choice == "always":
-                self._always.add(request.tool)
-                if not web:
+                if web:
+                    if request.tool != "web:":          # a bare "web:" is never remembered
+                        self._turn_web.setdefault(request.thread, set()).add(request.tool)
+                else:
+                    self._always.add(request.tool)
                     self._turn_all.add(request.thread)
             # The rest of the turn is allowed: what else waits in that thread is answered too.
             # A web page's "Always" lets only its own host's waiting cards through.
             also = [(r, f) for r, f in self._pending if choice == "always" and (
-                r.tool == request.tool if web else r.thread == request.thread and not r.tool.startswith("web:"))]
+                (r.tool == request.tool and r.thread == request.thread and request.tool != "web:") if web
+                else r.thread == request.thread and not r.tool.startswith("web:"))]
             self._pending = [p for p in self._pending if p not in also]
         respond(choice)
         for _r, other in also:

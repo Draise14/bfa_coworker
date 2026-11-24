@@ -1755,7 +1755,7 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "preset", "template", "stock", "material library",
     ],
     "web": [
-        "http://", "https://", "www.", "web page", "webpage", "website", "web site", "this link", "the link",
+        "http://", "https://", "www.", "web page", "webpage", "website", "web site",
         "read this page", "open this url", "this url",
     ],
 }
@@ -5163,9 +5163,14 @@ _TOOL_FRIENDLY_NAMES: dict[str, str] = {
 }
 
 
-def _friendly_tool_status(tool_name: str) -> str:
-    """Return a user-friendly status string for a tool name."""
+def _friendly_tool_status(tool_name: str, args: Any = None) -> str:
+    """Return a user-friendly status string for a tool name (a web read names its site, #637)."""
     friendly = _TOOL_FRIENDLY_NAMES.get(tool_name)
+    if tool_name == "read_web_page" and isinstance(args, dict):
+        from . import risky_steps
+        host = risky_steps.web_target(args)[0]
+        if host:
+            friendly = "Reading a web page ({:s})".format(risky_steps.web_label(host))
     if tool_name == "delegate_task":
         from . import magic_wording     # on screen only (#528); the tool and its name stay as they are
         if magic_wording.enabled():
@@ -8753,7 +8758,7 @@ def _run_conversation_turn_inner(
                     continue
 
                 if on_status:
-                    on_status(_friendly_tool_status(tool_name))
+                    on_status(_friendly_tool_status(tool_name, args))
 
                 # -- Smart undo: auto-undo before re-executing code -----
                 # If this is execute_blender_code and the previous call

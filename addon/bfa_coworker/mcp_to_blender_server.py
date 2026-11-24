@@ -1405,6 +1405,11 @@ def _execute_code_from_request(
     # digest, approvals and repeat count are its own.
     from . import threads
     _thread = threads.tag(str(request.get("thread") or ""))
+    from . import risky_steps as _risky
+    # #637: a web read whose address can't be told (or holds a key) is never asked and never run.
+    _web_refused = "" if _internal else _risky.web_refusal(_tool, request.get("args"))
+    if _web_refused:
+        return _ExecResult({"status": "error", "message": _web_refused}), strict_json
     try:
         import bpy as _bpy  # pylint: disable=import-error
         from . import risky_steps
@@ -1415,6 +1420,9 @@ def _execute_code_from_request(
                                                  inputs=request.get("args"))
     except (KeyError, AttributeError, ImportError):
         _kind, _why = "", ""
+        if _tool == _risky.WEB_TOOL and not _internal:      # #637: no way to ask means no read
+            return _ExecResult({"status": "error", "message": "Not read: Coworker's settings could not be "
+                                                              "reached, so the user can't be asked."}), strict_json
 
     def _for_thread(fn: Callable[..., Any]) -> Callable[..., Any]:
         """*fn*, run as the calling thread (also when a deferred check runs it later).

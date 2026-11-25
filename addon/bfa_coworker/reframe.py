@@ -385,7 +385,7 @@ def _reset_transform(strip: Any) -> None:
 def reframe_strip(scene: Any, strip: Any, mode: str, reset: bool = False) -> str:
     """Give *strip* its Reframe modifier (or update its sizes); returns added / kept / reset."""
     if _layouts.is_split_part(strip):
-        raise ReframeError("'{:s}' is part of a split: use the Reframe layouts (Strip > Coworker > Reframe Layout) to change it.".format(strip.name))
+        raise ReframeError("'{:s}' is part of a split: use the Reframe layouts (Strip > Reframe Layout) to change it.".format(strip.name))
     ng = ensure_group()
     w, h = canvas_size(scene)
     sw, sh = source_size(strip)
@@ -440,7 +440,7 @@ def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resoluti
     left_alone = [s.name for s in strips if _layouts.is_split_part(s)]
     strips = [s for s in strips if s.name not in left_alone]
     if not strips and left_alone:
-        raise ReframeError("All the strips are parts of a split: use the Reframe layouts (Strip > Coworker > "
+        raise ReframeError("All the strips are parts of a split: use the Reframe layouts (Strip > "
                            "Reframe Layout) to change them.")
     if not strips:
         raise ReframeError("No visible movie, image or scene strips in '{:s}'.".format(scene.name))
@@ -487,7 +487,7 @@ def _set_animated(scene: Any, mod: Any, name: str, value: Any) -> None:
 
 def apply_reframe(scene: Any, strip: Any, action: str, step: float = 0.1) -> str:
     if _layouts.is_split_part(strip):          # a split's parts have crop and transform, not the modifier (#606)
-        raise ReframeError("'{:s}' is part of a split: use the Reframe layouts (Strip > Coworker > Reframe Layout) to change it.".format(strip.name))
+        raise ReframeError("'{:s}' is part of a split: use the Reframe layouts (Strip > Reframe Layout) to change it.".format(strip.name))
     mod = find_modifier(strip)
     if mod is None:
         reframe_strip(scene, strip, "BLUR_FILL" if action == "BLUR_FILL" else "CROP")
@@ -810,7 +810,7 @@ class BFACW_OT_reframe(Operator):
             strips = [s for s in strips if s.name not in parts]
             if not strips:
                 self.report({'ERROR'}, "This strip is part of a split: use the Reframe layouts "
-                                       "(Strip > Coworker > Reframe Layout).")
+                                       "(Strip > Reframe Layout).")
                 return {'CANCELLED'}
             self.report({'WARNING'}, "{:d} part(s) of a split left alone: use the Reframe layouts.".format(len(parts)))
         try:

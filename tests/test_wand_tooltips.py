@@ -12,7 +12,8 @@ started (#607).  bpy-free: the add-on's sources are read with ``ast``.
    ``bl_description`` (or ``description()`` classmethod) goes through ``agent_line`` /
    ``needs_agent_line``.
 3. Every operator drawn with a wand icon (``wand/icons.operator``, ``_wand_op``) or listed in
-   the Strip > Coworker section is in ``WAND_OPERATORS``, so a new wand cannot skip the line.
+   among the Coworker entries of the Strip menu is in ``WAND_OPERATORS``, so a new wand cannot skip
+   the line.
 
 Run with::
 
@@ -90,7 +91,7 @@ def _calls_helper(tree: ast.AST) -> bool:
 
 
 def _wand_drawn() -> set:
-    """Operator ids drawn with a wand icon or listed in the Strip > Coworker section."""
+    """Operator ids drawn with a wand icon or listed in the Coworker entries of the Strip menu."""
     ids = set()
     for path in sorted(_ADDON.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))

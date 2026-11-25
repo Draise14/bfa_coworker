@@ -39,7 +39,7 @@ SCOPES = ("selection", "editor", "scene", "file")
 NO_AGENT_LINE = "Works without the agent started."
 
 # Every wand operator that is not built from an OperatorSpec (those are the ``coworker.*``
-# ones): the stand-alone ones, in the Coworker tabs, the Strip > Coworker menus, the
+# ones): the stand-alone ones, in the Coworker tabs, the Coworker entries of the Strip menu, the
 # Transcript editor and the right-click menus.  ``tests/test_wand_tooltips.py`` walks this
 # and the operators drawn with a wand icon; a new wand is added here and gets the line.
 WAND_OPERATORS = (

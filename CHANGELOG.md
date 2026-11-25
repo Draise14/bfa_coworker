@@ -109,6 +109,9 @@ Release notes: `_misc/release_notes/release_notes_v1.1.44.md`.
 - **The bridge reads what has arrived (#547, #554).** A 120 KB tool call went from 30 s to under 0.1 s.
 - **The chat loses no press in the autosave gap (#488, #495).** 64 % of presses were lost before.
 - **Bridge and baseline (#502, #505, #503, #509, #513, #514).** Stopping the MCP server closes its pipes; the turn's first code step always takes the baseline snapshot; the compositor tree is read through `compositor_effects`.
+- **A tool counts as Coworker's own only by its exact name (#642, PR #645).** <!-- #642: confirm wording against its PR before release --> On External Agent, a word such as "blender" in a tool's title (for example in a web address) made the agent's own tool count as Coworker's and skip the card or the "only Coworker's tools" refusal. Now the whole title must be the exact form (Claude Code: `mcp__bfa-coworker__<tool>`, OpenCode: `bfa-coworker_<tool>`, reported as a plain tool call, and Claude Code's own report must agree).
+  - Codex CLI, Gemini CLI and Copilot CLI are not recorded yet (#646), so with "only Coworker's tools" on, their Coworker tools may be refused.
+- **The Reframe messages name the menu that is on screen (#643, PR #644).** <!-- #643: confirm wording against its PR before release --> They say "Strip > Reframe Layout"; they named a "Strip > Coworker" menu that does not exist.
 - **Operating Mode from a script (#489, #490)** no longer raises when the agent is running. **The prompt's highlight ring (#532, #533)** stays on while its top edge is dragged.
 
 ## [v1.1.43] - 2026-11-13

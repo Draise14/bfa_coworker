@@ -101,6 +101,10 @@
 - **The first code step of a turn always takes its snapshot,** so Revert returns the scene exactly. (#505)
 - **The compositor tree is read through its current API,** so "add a glare" no longer fails on newer builds. (#503)
 - **The chat no longer loses a click or key** when the autosave runs. (#488) **Autosave is now written in a quiet moment** (no render, no agent step, no mouse button held, nothing typed for 2 seconds), and each write leaves a trace in `autosave_trace.txt`. This is a stability change, not a proven fix. (#638)
+<!-- #642: confirm wording against its PR before release -->
+- **A tool is Coworker's own only when it has Coworker's exact name (External Agent).** Before, a word like "blender" in a web address could make the agent's own tool skip the card or the "only Coworker's tools" refusal. (#642)
+<!-- #643: confirm wording against its PR before release -->
+- **The Reframe messages name the right menu,** Strip > Reframe Layout. (#643)
 - **Changing the Operating Mode from a script no longer raises an error.** (#489)
 - **A render that makes no progress for 3 minutes is reported as stuck,** and the agent stops polling it after three "stuck" answers. A step that hit its time limit may still be running in Blender; nothing is undone then. (#591)
 - **Repeated transcriptions after a set-up change are no longer called a loop,** and Stop says "Transcription stopped." (#499)
@@ -118,6 +122,7 @@
   - **Video and render follow-ups (#541, #527):** smaller findings from the real-footage test and render previews are still open.
 - **Reading a web page (#637) has not been tried on a real page yet;** it was tested with stand-ins only.
 - **Not yet tried by hand:** most video tools were checked live by the builders on Blender 5.2.4, Blender 5.4 and Bforartists 5.2.3, with generated clips and made-up speech. Please try them on real footage, and tell us what looks off (hand-test list: #561, 1.1.44 hand tests).
+- **Codex CLI, Gemini CLI and Copilot CLI are not recorded yet (#646),** so with "only Coworker's tools" on, their Coworker tools may be refused.
 - **Chats side by side were tested with stand-in models,** not yet with real ones. Only Claude Code runs chats at the same time on External Agent; the other agents stay chained until they are measured.
 - **Follow Subject** needs a vision model and wasn't tried on a real person. **Track All** is greyed out ("coming").
 - **Speech set-up is for Windows (64-bit) only** for now; on macOS and Linux use **Use Remote for speech**.

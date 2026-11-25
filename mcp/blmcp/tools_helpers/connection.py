@@ -34,10 +34,16 @@ _ARGS_CHARS = 400
 _ARG_VALUE_CHARS = 120
 
 
-def _args_text(inputs: dict[str, object]) -> str:
+def _args_text(inputs: dict[str, object], tool: str = "") -> str:
     """The tool's input as short JSON text, for the bridge's activity view and approval card
-    (#500): a long text value is cut on its own, so the whole stays JSON the card can read."""
-    short = {key: value[:_ARG_VALUE_CHARS] + "…" if isinstance(value, str) and len(value) > _ARG_VALUE_CHARS
+    (#500): a long text value is cut on its own, so the whole stays JSON the card can read.
+
+    ``read_web_page`` (#637) is never cut: the bridge reads the host out of this text to ask
+    about, and a text cut in the middle is not JSON.  The tool refuses addresses over 2000
+    characters before it gets here, so the text stays bounded."""
+    if tool == "read_web_page":
+        return json.dumps(inputs, ensure_ascii=False, default=str)
+    short = {key: value[:_ARG_VALUE_CHARS] + "\u2026" if isinstance(value, str) and len(value) > _ARG_VALUE_CHARS
              else value for key, value in inputs.items()}
     return json.dumps(short, ensure_ascii=False, default=str)[:_ARGS_CHARS]
 
@@ -77,7 +83,7 @@ def send_code(code: str, strict_json: bool) -> dict[str, object]:
     if tool:
         payload["tool"] = tool
         try:
-            payload["args"] = _args_text(inputs)
+            payload["args"] = _args_text(inputs, tool)
         except (TypeError, ValueError):
             pass
     # Engine 8: the bridge refuses requests without the user's session token.

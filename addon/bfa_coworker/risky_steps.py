@@ -30,17 +30,24 @@ from __future__ import annotations
 __all__ = (
     "APPROVALS",
     "MODEL_CODE_TOOLS",
+    "WEB_KIND",
+    "WEB_TOOL",
     "ask_kind",
     "card_args",
     "is_toolcode",
     "reason",
     "untrusted",
+    "web_label",
+    "web_refusal",
+    "web_target",
     "wrap",
 )
 
 import ast
 import functools
+import json
 import re
+import urllib.parse
 from typing import Any, Callable
 
 from .answer_envelope import answer_of, answers_in_full
@@ -189,13 +196,62 @@ def reason(code: str, blend_path: str | None = None) -> str:
     return " and ".join(found)
 
 
-def ask_kind(tool: str, code: str, approval: str, engine: str, blend_path: str | None = None) -> tuple[str, str]:
+WEB_TOOL = "read_web_page"
+WEB_KIND = "web:"       # the kind of a web read is "web:<host>": the card's second button allows that host for the turn
+
+
+def web_target(inputs: Any) -> tuple[str, str]:
+    """``(host, url)`` of a ``read_web_page`` call's input (the bridge request's ``args``: JSON text or a
+    dict).  *host* is in its ASCII (``xn--``) form; ``("", url)`` when there is none or it isn't a valid name."""
+    if isinstance(inputs, str):
+        try:
+            inputs = json.loads(inputs)
+        except ValueError:
+            return "", ""
+    url = str(inputs.get("url") or "").strip() if isinstance(inputs, dict) else ""
+    try:
+        host = (urllib.parse.urlsplit(url).hostname or "").lower().rstrip(".")
+        return (host.encode("idna").decode("ascii") if host else ""), url
+    except (ValueError, UnicodeError):
+        return "", url
+
+
+def web_label(host: str) -> str:
+    """The host as the card shows it: the ``xn--`` form, with the Unicode form next to it when it differs."""
+    try:
+        shown = host.encode("ascii").decode("idna")
+    except UnicodeError:
+        return host
+    return host if shown == host else "{:s}, {:s}".format(host, shown)
+
+
+def web_refusal(tool: str, inputs: Any) -> str:
+    """Why a ``read_web_page`` call is refused before any card (the host can't be told, or the address holds a
+    key the card would hide): the answer's text; "" for any other call or one that may ask."""
+    if tool != WEB_TOOL:
+        return ""
+    host, url = web_target(inputs)
+    if not host:
+        return ("Not read: the address could not be understood, so the user can't be asked about it. "
+                "Give the page's full address (https://host/path).")
+    from .approvals import _redact
+    if _redact(url) != url:
+        return ("Not read: the address seems to contain a key or password, which the card would hide and the "
+                "request would send. Ask the user for an address without it.")
+    return ""
+
+
+def ask_kind(tool: str, code: str, approval: str, engine: str, blend_path: str | None = None,
+             inputs: Any = None) -> tuple[str, str]:
     """What to ask before *code* runs, by the approval mode (#240): ``(kind, why)``, or
     ``("", "")`` to run it.  *kind* is what "Always" remembers: ``risky:<why>`` for a risky
     step, the tool's name for one that changes the scene (Ask, our own loop only -- an
     External Agent asks through its own permission card, a Harness client per tool itself)."""
     if approval == "AUTO":
         return "", ""
+    if tool == WEB_TOOL and is_toolcode(code):      # #637: every read asks, its kind is the host
+        host = web_target(inputs)[0]
+        return WEB_KIND + host, "read a web page" + (" ({:s})".format(web_label(host)) if host else "")
     why = reason(code, blend_path) or _TOOL_RISKS.get(str(tool or ""), "")
     if why:
         return "risky:" + why, why
@@ -229,7 +285,9 @@ def wrap(code: str, strict_json: bool, why: str, execute: Callable[[str, bool], 
             return result.response, result.check_fn
         return {"status": "error", "message": "Auto mode doesn't {:s} without the user. Leave this step for "
                                               "them, or do it another way.".format(why)}, None
-    if APPROVALS.allowed_always(kind, thread):
+    # "Allow this turn" lets every other kind through, but a web page asks per host (#637):
+    # the button allows that host, for the rest of the turn in this chat.
+    if APPROVALS.allowed_kind(kind, thread) if kind.startswith(WEB_KIND) else APPROVALS.allowed_always(kind, thread):
         result = execute(code, strict_json)
         return result.response, result.check_fn
     state: dict[str, Any] = {"answer": None, "inner": None, "extra": None}

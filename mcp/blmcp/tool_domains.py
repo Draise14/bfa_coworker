@@ -71,6 +71,7 @@ DOMAINS: dict[str, frozenset[str]] = {
         "get_active_node_tree", "get_node_group_interface", "wire_node_group",
         "get_node_tree_as_code", "build_node_tree_from_code",
     }),
+    "web": frozenset({"read_web_page"}),     # #637: a page the user links, after they say yes
     "assets": frozenset({
         "search_assets", "get_asset_libraries", "get_asset_tags", "list_asset_catalogs", "load_asset_in_context",
         "download_polyhaven_asset", "search_polyhaven_assets", "assign_material_to_objects",

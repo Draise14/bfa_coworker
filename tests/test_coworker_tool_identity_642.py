@@ -115,5 +115,56 @@ class TestHandler(unittest.TestCase):
         self.assertEqual(_ask(engine, {"title": "bfa-coworker_search_api_docs"}), ["a1"])
 
 
+_SHELL = {"title": "bfa-coworker_execute_blender_code", "kind": "execute",
+          "rawInput": {"command": "bfa-coworker_execute_blender_code"}}
+_FETCH = {"title": "Fetch https://x.example/?blender", "kind": "fetch",
+          "_meta": {"claudeCode": {"toolName": "WebFetch"}},
+          "rawInput": {"url": "https://x.example/?blender"}}
+
+
+def _texts(engine):
+    return [e.data["text"] for e in engine.bus.drain() if e.kind == "status"]
+
+
+class TestKindAndWording(unittest.TestCase):
+    def test_shell_call_named_like_ours(self):
+        for call in (_SHELL, dict(_SHELL, title="bfa-coworker_search_api_docs")):
+            self.assertEqual(_coworker_tool()(call), "")
+            self.assertEqual(_ask(_engine(True), call), ["r1"])
+            engine = _engine(False)
+            self.assertEqual(_ask(engine, call), [])
+            self.assertIsNotNone(engine.approvals.current())
+            engine = _engine(True)
+            engine._turn_mode = "PLAN"
+            self.assertEqual(_ask(engine, call), ["r1"])
+
+    def test_claude_code_web_fetch(self):
+        engine = _engine(True)
+        self.assertEqual(_ask(engine, _FETCH), ["r1"])
+        self.assertIn("only use Coworker's Blender tools", _texts(engine)[0])
+
+    def test_foreign_call_in_plan_mode(self):
+        engine = _engine(True)
+        engine._turn_mode = "PLAN"
+        self.assertEqual(_ask(engine, _FETCH), ["r1"])
+
+    def test_kind_missing_or_other_is_ours(self):
+        tool = _coworker_tool()
+        for kind in (None, "", "other"):
+            call = {"title": "bfa-coworker_search_api_docs"}
+            if kind is not None:
+                call["kind"] = kind
+            self.assertEqual(tool(call), "search_api_docs")
+        for kind in ("execute", "fetch", "read"):
+            self.assertEqual(tool({"title": "bfa-coworker_search_api_docs", "kind": kind}), "")
+
+    def test_refusal_wording(self):
+        engine = _engine(True)
+        _ask(engine, {"title": "bfa-coworker_x; echo hi"})
+        text = _texts(engine)[0]
+        self.assertIn("not recognised as one of Coworker's tools", text)
+        self.assertNotIn("only use", text)
+
+
 if __name__ == "__main__":
     unittest.main()

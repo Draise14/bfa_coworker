@@ -45,7 +45,7 @@ import re
 from typing import Any, Callable
 
 from . import store_paths
-from .acp_client import AcpClient, AcpError, coworker_tool, stdio_mcp_server, update_to_events
+from .acp_client import MCP_SERVER_NAME, AcpClient, AcpError, coworker_tool, stdio_mcp_server, update_to_events
 from .approvals import ApprovalRequest, Approvals
 from .chat_state import ChatStateApplier
 from .engine import PLAN_NOTE, PLAN_SAFE_TOOLS, EngineCaps, EventBus, Prompt, new_turn_id
@@ -827,8 +827,12 @@ class AcpEngine:
         if not ours and self.only_coworker_tools:
             answer("deny")
             if turn:
-                self.bus.emit("status", turn, text="Refused {:s}: the agent can only use "
-                              "Coworker's Blender tools".format(title or "a tool"))
+                if MCP_SERVER_NAME in title:      # display only: say we are not sure (#642)
+                    text = "Refused {:s}: not recognised as one of Coworker's tools".format(title)
+                else:
+                    text = ("Refused {:s}: the agent can only use "
+                            "Coworker's Blender tools".format(title or "a tool"))
+                self.bus.emit("status", turn, text=text)
             return
         if ours and mode == "PLAN" and tool not in PLAN_SAFE_TOOLS:
             answer("deny")              # Plan mode (#194): looking is fine, changing isn't

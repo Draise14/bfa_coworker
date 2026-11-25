@@ -414,11 +414,14 @@ def coworker_tool(call: dict) -> str:
 
     Only the whole title counts, never a word in it: a shell command or a web address
     is titled with what the model wrote.  Claude Code also reports the tool and its
-    server in ``_meta.claudeCode``; when it does, that must agree with the title."""
+    server in ``_meta.claudeCode``; when it does, that must agree with the title.
+    The call's ``kind`` must be absent or "other": both recorded calls of our tools
+    have "other", an OpenCode shell call (titled with the command) has "execute" and
+    Claude Code's web fetch "fetch"."""
     if not isinstance(call, dict):
         return ""
     title = call.get("title")
-    if not isinstance(title, str):
+    if not isinstance(title, str) or call.get("kind") not in (None, "", "other"):
         return ""
     found = _OUR_TITLE.fullmatch(title)
     if found is None:

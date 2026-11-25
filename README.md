@@ -25,22 +25,22 @@ build it, with every change one undo away. You choose the model:
 - **Safe by default.** Permissions (Strict / Permissive / Auto) ask before changes. Every turn is one undo step you can **Revert**. Local servers only answer your own programs.
 - **Actually useful.** 40+ tools to inspect scenes, run and check code, render previews, browse assets and Poly Haven, wire node groups and more, plus plans that tick off as Coworker works.
 
-## What's new in 1.1.43
+## What's new in 1.1.44
 
-A fixes-and-polish release:
+Video tools in the Sequencer, and chats side by side:
 
-- **Works in Blender too,** not only in Bforartists, and **Claude Code gets Coworker's tools** on a fresh install.
-- **Each .blend brings its chats back:** its tabs, Goal & Plan and each area's tab. History is grouped by file.
-- **Paste an image** with Ctrl V, **select text with the mouse** and copy it, **right-click** for the chat's own menu, and a **chat input you can scroll and resize**.
-- **+ starts a chat for All editors;** the editor's icon button starts one about that editor. **Start This Chat Fresh** clears a tab.
-- **Since 1.1.40:** a conversation per job in **chat tabs**, long renders and bakes that don't time out, and keys kept out of logs (1.1.42).
+- **Captions for any clip.** Transcribe speech on your own computer, then **Auto Captions** in four looks, with motion, easing, position and a channel per speaker. **SRT** in and out.
+- **Remove Silences**, **Edit by Transcript** (delete a line of text, the video follows) and **Make Vertical** with **Reframe layouts**: a 9:16 short in a few clicks, no agent needed.
+- **Chats side by side,** and **helper chats** that take parts of a job. Remote API and Claude Code work at the same time; Local takes turns by default.
+- **Node trees as code,** a safer agent (the co-work lock, steps that wait while you drag, one undo per turn) and a more reliable Local engine.
+- **New icons**, **Magic Wording**, and **Blender / Bforartists 5.2** as the minimum version.
 
 | | |
 |---|---|
 | ![Sidebar chat in the 3D View](docs/images/v1.1.40/sidebar_3d_view.png) | **The Coworker tab in every editor.** The same chat in each editor's sidebar, with Queue, Plan, History and Status. *Use Editor Context Only* keeps Coworker to what that editor shows. |
 | ![Approval card](docs/images/v1.1.40/permissions.png) | **Permissions and approvals.** A card asks before a tool runs: *Allow once*, *Allow this turn* or *Deny*. Switch between Strict, Permissive and Auto at any time. |
 
-See the [release notes](https://github.com/Draise14/bfa_coworker/releases/tag/v1.1.43) and the [CHANGELOG](CHANGELOG.md).
+See the [release notes](https://github.com/Draise14/bfa_coworker/releases/tag/v1.1.44) and the [CHANGELOG](CHANGELOG.md).
 
 ---
 
@@ -86,7 +86,7 @@ Full guides: [Wiki](https://github.com/Draise14/bfa_coworker/wiki) ·
 
 | | |
 |---|---|
-| **Latest release** | [Download v1.1.43](https://github.com/Draise14/bfa_coworker/releases/latest) |
+| **Latest release** | [Download v1.1.44](https://github.com/Draise14/bfa_coworker/releases/latest) |
 | **All releases** | [GitHub Releases](https://github.com/Draise14/bfa_coworker/releases) |
 | **Update repository** | `https://raw.githubusercontent.com/Draise14/bfa_coworker/main/extensions/index.json` |
 | **Source code** | [Clone this repo](https://github.com/Draise14/bfa_coworker) |

@@ -45,7 +45,7 @@ import re
 from typing import Any, Callable
 
 from . import store_paths
-from .acp_client import MCP_SERVER_NAME, AcpClient, AcpError, _tool_name, stdio_mcp_server, update_to_events
+from .acp_client import AcpClient, AcpError, coworker_tool, stdio_mcp_server, update_to_events
 from .approvals import ApprovalRequest, Approvals
 from .chat_state import ChatStateApplier
 from .engine import PLAN_NOTE, PLAN_SAFE_TOOLS, EngineCaps, EventBus, Prompt, new_turn_id
@@ -820,9 +820,10 @@ class AcpEngine:
         thread = found if slot is not None else owner if owner is not None else self.thread
         turn = str(slot.get("turn", "")) if slot is not None else ""
         mode = str(slot.get("mode", "AGENT")) if slot is not None else self._turn_mode
-        # OpenCode: "bfa-coworker_<tool>"; Claude Code: "mcp__bfa-coworker__<tool>".
-        ours = MCP_SERVER_NAME in title or "blender" in title.lower()
-        tool = _tool_name(title) if ours else title
+        # Ours only by the whole title (and the agent's own report), never a word in it (#642).
+        name = coworker_tool(call)
+        ours = bool(name)
+        tool = name if ours else title
         if not ours and self.only_coworker_tools:
             answer("deny")
             if turn:

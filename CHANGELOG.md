@@ -23,7 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
 - [x] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc — Polyhaven tools implemented in v1.1.37.
 
-## [v1.1.44] - 2026-11-24
+## [v1.1.44] - 2026-11-27
 
 Video tools in the Sequencer and chats side by side. Coworker transcribes speech on your computer,
 adds styled and animated captions, removes silences, edits a video by its text and makes 9:16

@@ -23,6 +23,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] **Add Model Generator** locally, Ultrashape, Hunyuan, similar to here: https://github.com/ahujasid/blender-mcp
 - [x] **Add CC0 resource downloader** from Polyhaven, AmbientC00, Sketchfab, etc — Polyhaven tools implemented in v1.1.37.
 
+## [v1.1.44] - 2026-11-24
+
+Video tools in the Sequencer and chats side by side. Coworker transcribes speech on your computer,
+adds styled and animated captions, removes silences, edits a video by its text and makes 9:16
+shorts with Reframe layouts. Chat tabs run at the same time, a chat hands work to helper chats,
+and whole node trees are read and built as code. The agent got safer (co-work lock, risky steps,
+steps that wait while you drag, one undo per turn) and the Local engine got more reliable.
+Blender / Bforartists 5.2 is now the oldest supported version.
+Release notes: `_misc/release_notes/release_notes_v1.1.44.md`.
+
+### Added
+
+- **Local transcription with whisper.cpp (#374, #375, #482, #485).** **Preferences → Speech** downloads and starts a whisper.cpp server (CPU, or CUDA 12 with an NVIDIA card; models tiny to large-v3-turbo) and the tool `transcribe_strip` returns the words of a strip with their times.
+  - Transcripts are cached next to the .blend. A long clip is handed to a job after 45 s.
+  - **Use Remote for Speech** sends the sound to an OpenAI-compatible `/v1/audio/transcriptions` endpoint instead.
+  - Speech set-up is for Windows (64-bit); macOS and Linux say "not available on this platform yet"; Remote speech works there.
+- **Auto Captions (#376, #491, #516, #519).** **Strip → Auto Captions...** makes text strips from a transcript in four styles (Clean, Bold Pop, Word-by-word highlight, Boxed), safe-area aware for 16:9 and 9:16; one undo step per run. The tool is `add_captions`.
+  - **Without a transcript it transcribes first**, as a modal with progress and Esc to stop.
+  - **SRT:** Strip → Captions → **Import SRT...** / **Export SRT...** (our own reader and writer, so it works without a window). **Translate Captions (N)...** in the right-click menu translates the selected caption lines in one go.
+  - **Every selected strip is captioned** with exactly the part of the media it shows; strips that can't be (retimed, muted, no speech) are named with the reason; a re-run keeps hand-edited captions unless *Replace Edited Captions* is ticked (#538, #552).
+  - **Position, animation and speakers (#542, #583):** Bottom / Top / Middle with a margin; Fade, Slide Up, Pop, Typewriter or None on any style; **A Channel per Speaker** and **Name Labels** for one sound file per speaker.
+  - **Look (#594, #597):** letter case, font, bold, italic, size and colours; word highlights follow their caption when its text style changes; **Refit Word Highlights** lays them out again; the dialog is grouped into *Style* and *Motion*.
+  - **Per line, per word or both (#594, #604):** **Animate** (Per Line / Per Word / Both / None), **Line Animation** (None, Fade, Pop, Slide Up, Slide Down, Typewriter) and **Word Animation** (Highlight, Pop, Scale, Rise, Fade In, and Highlight with any motion). A word motion makes each word its own strip (up to 24 words per line).
+  - **Easing and speed (#605, #619):** **Line Easing** and **Word Easing** (As the Style, Linear, Ease In, Ease Out, Ease In and Out, Back, Bounce, Elastic) and **Speed** (Fast, Normal, Slow); every drop-down entry and section of the dialog has an icon.
+- **Remove Silences (#331, #483, #539, #559).** In **Strip → Remove Silences...** and the Coworker tab. Cuts the silences of the selected sound strips and closes the gaps, listening to all selected sounds and cutting where all are quiet.
+  - The same cut is made in every track, so pictures, other sounds, titles and captions stay in step; captions are shortened instead of stacked; the scene end follows the new length; a locked strip stops it and is named; one undo step.
+  - The agent has a `remove_silences` tool that says what it cut.
+- **Edit by Transcript (#498, #587, #596).** **Strip → Edit Transcript** shows the clip's words in the Text Editor, one line per sentence with a time mark. **Apply** turns deleted lines into cuts of the whole edit (picture, sound, other tracks, captions), moved lines into moved clips, and a typo fix into a caption change; one undo step.
+  - **Nothing is cut by guessing:** lines that can't be matched with certainty are flagged in red and change nothing; a cut of more than half the clip asks first.
+  - **Play from Line**, **Live**, **Make Captions** (opens the Auto Captions dialog) and **Remove Filler Words...**; the tool `apply_transcript_edit`.
+- **Make Vertical (#333, #494).** **Strip → Make Vertical...** (also in the Coworker tab): Centre Crop or Blur Fill, 1080x1920 / 720x1280 / 2160x3840, *In a Copy of the Scene* (on by default), *Reset Framing* and *Follow Subject* (off; needs a vision model). Each visible movie, image and scene strip gets an editable **Reframe** compositor modifier (one shared group, values per modifier); one undo step.
+- **Reframe layouts (#606, #621, #622, #628).** A **Reframe** box in the Sequencer sidebar's Coworker tab, in the Strip menu (**Reframe Layout**) and in the Coworker tab (the toolshelf grid in Bforartists, also in the Preview): Full Frame, Blur Fill, Tracked and three splits (half and half, two thirds on top, one third on top), plus **Swap** and **Reset Framing**. One undo step per click. The tool `reframe_strips` reads and sets the layout. *Track All* is greyed out ("coming").
+- **Five Video Sequencer tools for the agent (#304, #486).** `get_vse_timeline_overview`, `get_vse_strips_summary`, `get_vse_strip_detail`, `set_strip_frame_range` and `render_vse_preview`.
+- **Chats side by side (#359, #496).** Remote API and, on External Agent, Claude Code run chats at the same time; Codex, Gemini, Copilot and custom agents take one chat at a time (**Chats Running at Once**, default 3, up to 8); Local takes turns by default, so the graphics card is not shared by several chats (**Local Side by Side** is opt-in). The bridge interleaves tool calls per chat.
+  - Two chats changing the same object, node tree, strip, text, collection or material ask first; **Stop** ends one chat, **Stop All Chats** (tab menu) ends all; Remote waits on HTTP 429 per chat.
+  - Revert offers **Revert Both Turns** or **Cancel** when another chat stepped in between; every request carries a line about what other chats are changing.
+- **Helper chats (#479, #484, #521, #523).** The tool `delegate_task` opens a helper chat as a tab and answers at once; helpers are chained on Local and run side by side online. The **Helpers** card lists them; **Helpers per Turn** caps them; Stop and Stop All end them. External Harness refuses it.
+- **Magic Wording (#528, #598, #608, #620).** A preference (Preferences → Advanced → Chat Display, on by default): helpers read as wizards ("Wizard 1: Scene check"), the model's thinking shows a word like "Conjuring...", and the agent itself is "the Wizard" (Start Wizard, Ask Wizard..., a wizard icon). Off gives the plain wording. The Coworker mode button keeps its ghost either way (#624, #630).
+- **Node trees as code (#480, #492).** Coworker reads a whole node tree (Geometry Nodes, shader, compositor) as compact build code, one line per node, with links, interface, zones, frames and nested groups, and builds or rebuilds a tree from the same text.
+- **The chat tab's right-click menu (#573, #578).** Rename..., Close, Close Other Tabs, Start This Chat Fresh, Stop, Copy Whole Chat and New Chat act on the tab you clicked; a name stays after save and reopen.
+- **Permissions in External Harness mode (#385, #586).** A **Permissions** button on the card, in the sidebar's top row and a dropdown in the editor header.
+- **Agent steps wait while you drag, and a step log (#576, #601).** A step that changes the scene waits (at most 8 s) while a modal tool such as Grab runs or a value is being dragged, then answers "Not run: ... Nothing was changed". Each step's code is written to `steps_<pid>.txt` first.
+- **Autosave trace (#638, #639).** `autosave_trace.txt` in the logs folder gets a line before and after each autosave the chat writes.
+- **New icons in the Bforartists style (#563, #570).** Filled, coloured icons built from Bforartists' own, a purple wand as the Coworker mark, and a small wand only on tools that need the agent. In Bforartists the Sequencer's toolshelf has a Coworker tab with icon buttons; in Blender the same tools are in the sidebar's Coworker tab, in one Video panel.
+- **Wand tooltips (#607, #618, #623).** Every Coworker tool's tooltip ends with whether it works without the agent started.
+- **Read a web page (#637, PR #641).** The tool `read_web_page` reads one page when you give the agent a link, after you say yes on a card titled "Coworker wants to read a web page (example.com)" that shows the address (the first 500 characters of a long one). Buttons: **Allow once**, **Allow this turn** (that site again for the rest of the turn in that chat; your next message asks again; another site always asks) and **Deny**.
+  - Addresses on your own computer or a private network are refused. Only text pages (HTML, plain text, Markdown, JSON, XML) are read, not PDFs, images or downloads. A redirect to another site is not followed: the agent has to ask again.
+  - While Auto mode (the Plan panel toggle) runs, it is declined, unless Approval is set to Auto, which never asks: then pages are read without a card, like other risky steps; on Local and Remote the chat's status line shows "Reading a web page (site)"; on External Agent the read shows in the step list. Not tried on a real page yet (stand-in tests only).
+
+### Changed
+
+- **The Classic chat is gone (#430, #481).** The **Sidebar Chat** preference is removed; every editor's Coworker tab and the Coworker editor show the new chat.
+- **Blender 5.2 is the oldest supported version (#515, #534).** Both manifests say `blender_version_min = "5.2.0"`; the 5.1-and-older fallbacks are removed.
+- **One Ctrl+Z per chat turn (#501, #530).** Tools and the loop push no undo step of their own in a turn, and a turn that changed nothing adds none. With chats side by side each write keeps its own step, named by its chat.
+- **Preview renders use one capped profile (#524, #526, #527, #580).** `render_viewport_to_path` has `quality` (`preview` by default, `viewport`, `final`). Sequencer previews cap scene strips and render the frame asked for; a render you stop answers "stopped" with the unfinished image.
+- **Local context presets start at 16K (#631, #634).** 16K, 32K, 64K, 128K and Custom; a saved 4K or 8K becomes 16K.
+- **Local requests are made to fit (#544, #560).** Unrelated tool groups are left out first, the chat says what was left out, and a request that still can't fit is not sent. Waiting uses a real clock (3 minutes to the first word) and a cut-off reply is retried once with thinking off.
+- **Preset memory texts come from the models' own headers (#558, #566).** Real download sizes and memory per model; the GGUF layer count works.
+- **The chat input keeps a dragged size (#626, #629).** A size you drag or set with Ctrl+Up / Ctrl+Down stays, empty or full; double-click the top edge to grow with the text again.
+- **The chat's scroll bar is easy to see (#627, #633).** A faint track and a clear handle with the mouse away; the text doesn't reflow.
+- **The approval card shows the tool and its arguments (#500, #510).** The Workshop shows the tool's own answer first.
+- **Tool images reach the model on Local and Remote (#487, #493).** One envelope per tool answer.
+- **The Sequencer's Coworker UI (#504, #518).** One Video panel and one Strip-menu section, Video first, greyed without a Sequencer scene.
+- **The Coworker settings are saved on quit (#575, #584).** Choices stored from code (Set Context Size, Swap Languages, Load Provider, presets) now mark the preferences changed; the settings restore never undoes a newer change.
+- **The chat writes the autosave in a quiet moment (#639, for #638).** No render, bake or compositor job, no agent step, no mouse button held and no input for 2 s; otherwise it tries again every second. A stability change; it cannot prevent the save crash, which is a fault in Blender itself (see Known Limits in the release notes).
+
+### Fixed
+
+- **Local server start (#543, #555).** One slot, a context sized from the model's file and free graphics memory (32K for the 27B), and every preference reaches the server (Quantize KV Cache, backend, verbose log). The first message is answered in 44 s instead of failing; a freeze in Preferences and false "file truncated" warnings are gone.
+- **Local keeps its prompt cache (#546, #567).** The system message and tool list stay byte-identical; goal, plan and memory travel in the request instead. Full re-reads per run went from 35-37 to 24 on the 27B.
+- **Checkpoint summaries return text (#545, #569).** The summary request goes out with thinking off, compaction counts only history, and the step-thinking policy ships switched off (the model's extra thinking between steps is off for now).
+- **Co-work lock (#548, #557).** The lock is lifted only while the agent's own code runs, so Apply Modifier and other operators work; undo steps and saves never capture it; an operator that does nothing is reported.
+- **Risky steps (#549, #550, #558, #565).** Removing an object from a collection (`collection.objects.unlink()`) no longer shows the "delete files" card, file removals behind an alias are caught, and nine export operators ask first. The MCP server start waits longer and leaves no orphan; autosave drops the lock; a clip with no speech says so.
+- **Crashes with the preview showing (#536, #556, #558, #568).** Strips removed by Coworker or by agent-written code stop the prefetch first.
+- **Edit Transcript (#593, #595, #596).** Apply no longer crashes after deleting words of a Word-by-word caption; Play from Line plays; Make Captions opens its dialog.
+- **Long transcriptions (#540, #551).** Audio is cut into 20-55 s pieces at pauses, silent pieces are skipped, looping pieces are retried once, and progress shows "piece n of m".
+- **Sound files (#520, #529).** 44.1 kHz stereo WAV, FLAC, MP3, Ogg and AAC transcribe.
+- **Stop ends the transcription its turn started (#522, #531)**, and a repeated `transcribe_strip` after a set-up change is no loop (#499, #512).
+- **Remove Silences and captions after Make Vertical (#497, #517, #537, #553).** Captions are laid out again for 9:16 (a hand-moved one stays); the vertical copy survives save and reopen.
+- **Render safety (#591, #599).** While a render or bake runs, steps that would touch the scene are refused; a render with no progress for 3 minutes is reported as stuck and polling on is refused after three "stuck" answers; a failed script's objects are removed without an undo, and a step that timed out is not undone.
+- **Keys stay hidden (#511, #525, #528, #574, #598).** In the Workshop, the job row, the card's title, the status line, the Helpers card, helper chats and the tool history, also when stuck to an underscore or containing quotes.
+- **A question card stays in its own chat (#572, #582)** and **Restart Coworker** runs Start's own path, with the port offset and the Local server back (#564, #581). **All editors keeps its own chat** after save and reopen (#579, #585).
+- **Asset tools (#535, #588, #589, #600, #602, #603, #617).** Node-group assets report real socket counts, the Asset Browser is created from an area (no workspace copy), catalog paths map to the library's catalog IDs, `list_asset_catalogs` answers with real catalogs, and no all-zero ID shows as a catalog.
+- **The bridge reads what has arrived (#547, #554).** A 120 KB tool call went from 30 s to under 0.1 s.
+- **The chat loses no press in the autosave gap (#488, #495).** 64 % of presses were lost before.
+- **Bridge and baseline (#502, #505, #503, #509, #513, #514).** Stopping the MCP server closes its pipes; the turn's first code step always takes the baseline snapshot; the compositor tree is read through `compositor_effects`.
+- **A tool counts as Coworker's own only by its exact name (#642, PR #645).** On External Agent, a word such as "blender" in a tool's title (for example in a web address) made the agent's own tool count as Coworker's and skip the card or the "only Coworker's tools" refusal. Now the whole title must be exactly one of the two known forms (Claude Code: `mcp__bfa-coworker__<tool>`, OpenCode: `bfa-coworker_<tool>`), the call must be reported with kind "other" (or no kind), and Claude Code's own report of the tool and server name must agree.
+  - Codex CLI, Gemini CLI and Copilot CLI are not recorded yet (#646), so with "only Coworker's tools" on, their Coworker tools may be refused.
+- **The Reframe messages name the menu that is on screen (#643, PR #644).** They say "Strip > Reframe Layout"; they named a "Strip > Coworker" menu that does not exist.
+- **Operating Mode from a script (#489, #490)** no longer raises when the agent is running. **The prompt's highlight ring (#532, #533)** stays on while its top edge is dragged.
+
 ## [v1.1.43] - 2026-11-13
 
 Fixes and polish from the 1.1.42 test round. Coworker now registers in Blender, Claude Code

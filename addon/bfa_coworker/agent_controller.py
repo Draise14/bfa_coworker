@@ -1701,6 +1701,7 @@ _TOOL_DOMAINS: dict[str, frozenset[str]] = {
         "get_node_tree_as_code",       # #480: whole node trees as text
         "build_node_tree_from_code",
     }),
+    "web": frozenset({"read_web_page"}),     # #637: a page the user links, after they say yes
     "assets": frozenset({
         "search_assets",
         "get_asset_libraries",
@@ -1752,6 +1753,10 @@ _DOMAIN_KEYWORDS: dict[str, list[str]] = {
         "asset", "library", "catalog", "browse", "import asset",
         "append", "link asset", "asset browser",
         "preset", "template", "stock", "material library",
+    ],
+    "web": [
+        "http://", "https://", "www.", "web page", "webpage", "website", "web site",
+        "read this page", "open this url", "this url",
     ],
 }
 
@@ -5136,6 +5141,7 @@ _TOOL_FRIENDLY_NAMES: dict[str, str] = {
     "get_blendfile_summary_datablocks_toolcode": "Reading scene data",
     "download_polyhaven_asset": "Downloading asset",
     "search_polyhaven_assets": "Searching Poly Haven",
+    "read_web_page": "Reading a web page",
     "place_asset_in_scene": "Placing asset in scene",
     "jump_to_asset_browser": "Opening Asset Browser",
     "setup_pbr_material": "Setting up PBR material",
@@ -5157,9 +5163,14 @@ _TOOL_FRIENDLY_NAMES: dict[str, str] = {
 }
 
 
-def _friendly_tool_status(tool_name: str) -> str:
-    """Return a user-friendly status string for a tool name."""
+def _friendly_tool_status(tool_name: str, args: Any = None) -> str:
+    """Return a user-friendly status string for a tool name (a web read names its site, #637)."""
     friendly = _TOOL_FRIENDLY_NAMES.get(tool_name)
+    if tool_name == "read_web_page" and isinstance(args, dict):
+        from . import risky_steps
+        host = risky_steps.web_target(args)[0]
+        if host:
+            friendly = "Reading a web page ({:s})".format(risky_steps.web_label(host))
     if tool_name == "delegate_task":
         from . import magic_wording     # on screen only (#528); the tool and its name stay as they are
         if magic_wording.enabled():
@@ -8747,7 +8758,7 @@ def _run_conversation_turn_inner(
                     continue
 
                 if on_status:
-                    on_status(_friendly_tool_status(tool_name))
+                    on_status(_friendly_tool_status(tool_name, args))
 
                 # -- Smart undo: auto-undo before re-executing code -----
                 # If this is execute_blender_code and the previous call

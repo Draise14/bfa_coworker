@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import threading
 from collections import deque
@@ -42,6 +43,7 @@ __all__ = (
     "AcpError",
     "AgentInfo",
     "MCP_SERVER_NAME",
+    "coworker_tool",
     "PROTOCOL_VERSION",
     "stdio_mcp_server",
     "update_to_events",
@@ -52,6 +54,11 @@ PROTOCOL_VERSION = 1
 # Our MCP server's tools reach the agent prefixed with the server name.
 MCP_SERVER_NAME = "bfa-coworker"
 _TOOL_PREFIX = MCP_SERVER_NAME + "_"
+
+# The two titles our tools have, matched in full (#642): Claude Code
+# "mcp__bfa-coworker__<tool>", OpenCode "bfa-coworker_<tool>".
+_OUR_TITLE = re.compile(
+    "(?:mcp__{0}__|{0}_)([A-Za-z0-9_]+)".format(re.escape(MCP_SERVER_NAME)))
 
 # Longest tool result kept in an event (the Workshop shows a preview).
 _RESULT_PREVIEW_CHARS = 2000
@@ -400,6 +407,36 @@ def _tool_name(title: str) -> str:
         if title.startswith(prefix):
             return title[len(prefix):]
     return title
+
+
+def coworker_tool(call: dict) -> str:
+    """Our tool's name when the agent's tool call is one of ours, else "" (#642).
+
+    Only the whole title counts, never a word in it: a shell command or a web address
+    is titled with what the model wrote.  Claude Code also reports the tool and its
+    server in ``_meta.claudeCode``; when it does, that must agree with the title.
+    The call's ``kind`` must be absent or "other": both recorded calls of our tools
+    have "other", an OpenCode shell call (titled with the command) has "execute" and
+    Claude Code's web fetch "fetch"."""
+    if not isinstance(call, dict):
+        return ""
+    title = call.get("title")
+    if not isinstance(title, str) or call.get("kind") not in (None, "", "other"):
+        return ""
+    found = _OUR_TITLE.fullmatch(title)
+    if found is None:
+        return ""
+    meta = call.get("_meta")
+    claude = meta.get("claudeCode") if isinstance(meta, dict) else None
+    if claude is not None:
+        if not isinstance(claude, dict):
+            return ""
+        if "toolName" in claude and claude["toolName"] != title:
+            return ""
+        server = claude.get("mcpServer")
+        if server is not None and (not isinstance(server, dict) or server.get("name") != MCP_SERVER_NAME):
+            return ""
+    return found.group(1)
 
 
 def _plan_steps(entries: list[Any], text_key: str) -> list[dict[str, str]]:

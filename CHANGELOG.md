@@ -70,7 +70,7 @@ Release notes: `_misc/release_notes/release_notes_v1.1.44.md`.
 - **Wand tooltips (#607, #618, #623).** Every Coworker tool's tooltip ends with whether it works without the agent started.
 - **Read a web page (#637, PR #641).** The tool `read_web_page` reads one page when you give the agent a link, after you say yes on a card titled "Coworker wants to read a web page (example.com)" that shows the address (the first 500 characters of a long one). Buttons: **Allow once**, **Allow this turn** (that site again for the rest of the turn in that chat; your next message asks again; another site always asks) and **Deny**.
   - Addresses on your own computer or a private network are refused. Only text pages (HTML, plain text, Markdown, JSON, XML) are read, not PDFs, images or downloads. A redirect to another site is not followed: the agent has to ask again.
-  - Auto mode declines it. In the approval mode that never asks, pages are read without a card, like other risky steps; on Local and Remote the chat's status line shows "Reading a web page (site)"; on External Agent the read shows in the step list. Not tried on a real page yet (stand-in tests only).
+  - While Auto mode (the Plan panel toggle) runs, it is declined, unless Approval is set to Auto, which never asks: then pages are read without a card, like other risky steps; on Local and Remote the chat's status line shows "Reading a web page (site)"; on External Agent the read shows in the step list. Not tried on a real page yet (stand-in tests only).
 
 ### Changed
 
@@ -87,7 +87,7 @@ Release notes: `_misc/release_notes/release_notes_v1.1.44.md`.
 - **Tool images reach the model on Local and Remote (#487, #493).** One envelope per tool answer.
 - **The Sequencer's Coworker UI (#504, #518).** One Video panel and one Strip-menu section, Video first, greyed without a Sequencer scene.
 - **The Coworker settings are saved on quit (#575, #584).** Choices stored from code (Set Context Size, Swap Languages, Load Provider, presets) now mark the preferences changed; the settings restore never undoes a newer change.
-- **The chat writes the autosave in a quiet moment (#639, for #638).** No render, bake or compositor job, no agent step, no mouse button held and no input for 2 s; otherwise it tries again every second. It lowers the exposure but cannot prevent the crash: it is a fault in Blender itself (see Known Limits in the release notes).
+- **The chat writes the autosave in a quiet moment (#639, for #638).** No render, bake or compositor job, no agent step, no mouse button held and no input for 2 s; otherwise it tries again every second. A stability change; it cannot prevent the save crash, which is a fault in Blender itself (see Known Limits in the release notes).
 
 ### Fixed
 

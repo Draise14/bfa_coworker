@@ -71,7 +71,7 @@
 ### 🌐 **Read a Web Page** (#637)
 - **Give the agent a link and it can read the page.** It first asks on a card, "Coworker wants to read a web page (example.com)", that shows the address (the first 500 characters of a very long one). Press **Allow once**, **Allow this turn** or **Deny**. **Allow this turn** lets it read that site again for the rest of that turn in that chat; your next message asks again, and another site always asks.
 - **Only text pages are read,** not PDFs, images or downloads. Addresses on your own computer or network are refused, and a link that redirects to another site is not followed: the agent has to ask again.
-- **In Auto mode it is declined.** In the approval mode that never asks, pages are read without a card, like other risky steps; on Local and Remote the chat's status line shows "Reading a web page (site)"; on External Agent the read shows in the step list.
+- **While Auto mode (the Plan panel toggle) runs, it is declined**, unless Approval is set to Auto, which never asks: then pages are read without a card, like other risky steps; on Local and Remote the chat's status line shows "Reading a web page (site)"; on External Agent the read shows in the step list.
 
 ---
 
@@ -111,7 +111,7 @@
 
 - **Open bugs that can touch you:**
   - **Crashes while the agent changes a modifier you are dragging, or after Paste Image (#576).** The agent now waits for your drag, but a crash isn't ruled out. If it happens, keep the crash log and `steps_*.txt` from `~/.cache/bfa_coworker/logs`.
-  - **Crash on save in files with library overrides (#638):** this is a fault in Blender itself, reproduced in stock Blender 5.4 alpha with no add-ons. It also happens on a plain Ctrl+S. Since 1.1.44 the chat writes its autosave only in a quiet moment and keeps a trace file, but it cannot prevent the crash. Keep the crash log and `autosave_trace.txt`.
+  - **Crash on save in files with library overrides (#638):** this is a fault in Blender itself, the same crash can be produced in stock Blender 5.4 alpha with no add-ons; what sets it off in real sessions is not known yet. It also happens on a plain Ctrl+S. Since 1.1.44 the chat writes its autosave only in a quiet moment and keeps a trace file, but it cannot prevent the crash. Keep the crash log and `autosave_trace.txt`.
   - **Local, unattended runs (#591):** a crash after a timed-out step and a render that never ends were reported; steps are refused during a render now, but this is not confirmed fixed.
   - **Make Vertical with a plain Centre Crop (#632)** can halve playback speed in the Sequencer.
   - **Local checkpoints (#545):** summaries return text now, but the model still re-reads the conversation after each checkpoint, and the model's extra thinking between steps is switched off for now.

@@ -68,9 +68,9 @@ Release notes: `_misc/release_notes/release_notes_v1.1.44.md`.
 - **Autosave trace (#638, #639).** `autosave_trace.txt` in the logs folder gets a line before and after each autosave the chat writes.
 - **New icons in the Bforartists style (#563, #570).** Filled, coloured icons built from Bforartists' own, a purple wand as the Coworker mark, and a small wand only on tools that need the agent. In Bforartists the Sequencer's toolshelf has a Coworker tab with icon buttons; in Blender the same tools are in the sidebar's Coworker tab, in one Video panel.
 - **Wand tooltips (#607, #618, #623).** Every Coworker tool's tooltip ends with whether it works without the agent started.
-- **Read a web page (#637, PR #641).** <!-- #637: confirm wording against its PR before release --> The tool `read_web_page` reads one page when you give the agent a link, after you say yes on a card titled "Coworker wants to read a web page (example.com)" that shows the address (the first 500 characters of a long one). Buttons: **Allow once**, **Allow this turn** (that site again for the rest of the turn in that chat; your next message asks again; another site always asks) and **Deny**.
+- **Read a web page (#637, PR #641).** The tool `read_web_page` reads one page when you give the agent a link, after you say yes on a card titled "Coworker wants to read a web page (example.com)" that shows the address (the first 500 characters of a long one). Buttons: **Allow once**, **Allow this turn** (that site again for the rest of the turn in that chat; your next message asks again; another site always asks) and **Deny**.
   - Addresses on your own computer or a private network are refused. Only text pages (HTML, plain text, Markdown, JSON, XML) are read, not PDFs, images or downloads. A redirect to another site is not followed: the agent has to ask again.
-  - Auto mode declines it. In the approval mode that never asks, pages are read without a card, like other risky steps; the status line shows "Reading a web page (site)". Not tried on a real page yet (stand-in tests only).
+  - While Auto mode (the Plan panel toggle) runs, it is declined, unless Approval is set to Auto, which never asks: then pages are read without a card, like other risky steps; on Local and Remote the chat's status line shows "Reading a web page (site)"; on External Agent the read shows in the step list. Not tried on a real page yet (stand-in tests only).
 
 ### Changed
 
@@ -87,7 +87,7 @@ Release notes: `_misc/release_notes/release_notes_v1.1.44.md`.
 - **Tool images reach the model on Local and Remote (#487, #493).** One envelope per tool answer.
 - **The Sequencer's Coworker UI (#504, #518).** One Video panel and one Strip-menu section, Video first, greyed without a Sequencer scene.
 - **The Coworker settings are saved on quit (#575, #584).** Choices stored from code (Set Context Size, Swap Languages, Load Provider, presets) now mark the preferences changed; the settings restore never undoes a newer change.
-- **The chat writes the autosave in a quiet moment (#639, for #638).** No render, bake or compositor job, no agent step, no mouse button held and no input for 2 s; otherwise it tries again every second. Lowers the exposure; not a proven fix.
+- **The chat writes the autosave in a quiet moment (#639, for #638).** No render, bake or compositor job, no agent step, no mouse button held and no input for 2 s; otherwise it tries again every second. A stability change; it cannot prevent the save crash, which is a fault in Blender itself (see Known Limits in the release notes).
 
 ### Fixed
 
@@ -109,9 +109,9 @@ Release notes: `_misc/release_notes/release_notes_v1.1.44.md`.
 - **The bridge reads what has arrived (#547, #554).** A 120 KB tool call went from 30 s to under 0.1 s.
 - **The chat loses no press in the autosave gap (#488, #495).** 64 % of presses were lost before.
 - **Bridge and baseline (#502, #505, #503, #509, #513, #514).** Stopping the MCP server closes its pipes; the turn's first code step always takes the baseline snapshot; the compositor tree is read through `compositor_effects`.
-- **A tool counts as Coworker's own only by its exact name (#642, PR #645).** <!-- #642: confirm wording against its PR before release --> On External Agent, a word such as "blender" in a tool's title (for example in a web address) made the agent's own tool count as Coworker's and skip the card or the "only Coworker's tools" refusal. Now the whole title must be the exact form (Claude Code: `mcp__bfa-coworker__<tool>`, OpenCode: `bfa-coworker_<tool>`, reported as a plain tool call, and Claude Code's own report must agree).
+- **A tool counts as Coworker's own only by its exact name (#642, PR #645).** On External Agent, a word such as "blender" in a tool's title (for example in a web address) made the agent's own tool count as Coworker's and skip the card or the "only Coworker's tools" refusal. Now the whole title must be exactly one of the two known forms (Claude Code: `mcp__bfa-coworker__<tool>`, OpenCode: `bfa-coworker_<tool>`), the call must be reported with kind "other" (or no kind), and Claude Code's own report of the tool and server name must agree.
   - Codex CLI, Gemini CLI and Copilot CLI are not recorded yet (#646), so with "only Coworker's tools" on, their Coworker tools may be refused.
-- **The Reframe messages name the menu that is on screen (#643, PR #644).** <!-- #643: confirm wording against its PR before release --> They say "Strip > Reframe Layout"; they named a "Strip > Coworker" menu that does not exist.
+- **The Reframe messages name the menu that is on screen (#643, PR #644).** They say "Strip > Reframe Layout"; they named a "Strip > Coworker" menu that does not exist.
 - **Operating Mode from a script (#489, #490)** no longer raises when the agent is running. **The prompt's highlight ring (#532, #533)** stays on while its top edge is dragged.
 
 ## [v1.1.43] - 2026-11-13

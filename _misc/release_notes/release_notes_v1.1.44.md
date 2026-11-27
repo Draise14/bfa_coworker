@@ -68,11 +68,10 @@
 - Coworker's icons are redrawn from Bforartists' own icons: filled, coloured and readable at menu size, in the dark and the light theme. The purple wand is the Coworker mark, and a small wand shows only on tools that need the agent (Translate, Explain, Tidy Nodes).
 - **In Bforartists the Sequencer's toolshelf has a Coworker tab** with icon buttons; in Blender the same tools are in the sidebar's Coworker tab, in one **Video** panel. Every tool's tooltip ends with whether it works without the agent started. (#504, #607)
 
-<!-- #637: confirm wording against its PR before release -->
 ### 🌐 **Read a Web Page** (#637)
 - **Give the agent a link and it can read the page.** It first asks on a card, "Coworker wants to read a web page (example.com)", that shows the address (the first 500 characters of a very long one). Press **Allow once**, **Allow this turn** or **Deny**. **Allow this turn** lets it read that site again for the rest of that turn in that chat; your next message asks again, and another site always asks.
 - **Only text pages are read,** not PDFs, images or downloads. Addresses on your own computer or network are refused, and a link that redirects to another site is not followed: the agent has to ask again.
-- **In Auto mode it is declined.** In the approval mode that never asks, pages are read without a card, like other risky steps; the chat's status line shows "Reading a web page (site)".
+- **While Auto mode (the Plan panel toggle) runs, it is declined**, unless Approval is set to Auto, which never asks: then pages are read without a card, like other risky steps; on Local and Remote the chat's status line shows "Reading a web page (site)"; on External Agent the read shows in the step list.
 
 ---
 
@@ -100,10 +99,8 @@
 - **Restart Coworker** uses the same path as Start: your port offset, a true status, and the Local server back. Stopping the MCP server leaves no pipes or process behind. (#564, #502)
 - **The first code step of a turn always takes its snapshot,** so Revert returns the scene exactly. (#505)
 - **The compositor tree is read through its current API,** so "add a glare" no longer fails on newer builds. (#503)
-- **The chat no longer loses a click or key** when the autosave runs. (#488) **Autosave is now written in a quiet moment** (no render, no agent step, no mouse button held, nothing typed for 2 seconds), and each write leaves a trace in `autosave_trace.txt`. This is a stability change, not a proven fix. (#638)
-<!-- #642: confirm wording against its PR before release -->
-- **A tool is Coworker's own only when it has Coworker's exact name (External Agent).** Before, a word like "blender" in a web address could make the agent's own tool skip the card or the "only Coworker's tools" refusal. (#642)
-<!-- #643: confirm wording against its PR before release -->
+- **The chat no longer loses a click or key** when the autosave runs. (#488) **Autosave is now written in a quiet moment** (no render, no agent step, no mouse button held, nothing typed for 2 seconds), and each write leaves a trace in `autosave_trace.txt`. This is a stability change; it cannot prevent the save crash, which is a fault in Blender itself (see Known Limits). (#638)
+- **A tool is Coworker's own only when its whole title is one of the two known forms (External Agent).** Before, a word like "blender" in a web address could make the agent's own tool skip the card or the "only Coworker's tools" refusal. (#642)
 - **The Reframe messages name the right menu,** Strip > Reframe Layout. (#643)
 - **Changing the Operating Mode from a script no longer raises an error.** (#489)
 - **A render that makes no progress for 3 minutes is reported as stuck,** and the agent stops polling it after three "stuck" answers. A step that hit its time limit may still be running in Blender; nothing is undone then. (#591)
@@ -114,7 +111,7 @@
 
 - **Open bugs that can touch you:**
   - **Crashes while the agent changes a modifier you are dragging, or after Paste Image (#576).** The agent now waits for your drag, but a crash isn't ruled out. If it happens, keep the crash log and `steps_*.txt` from `~/.cache/bfa_coworker/logs`.
-  - **A crash in the autosave (#638).** The change above lowers the chance; it isn't proven to fix it. Keep the crash log and `autosave_trace.txt`.
+  - **Crash on save in files with library overrides (#638):** this is a fault in Blender itself, the same crash can be produced in stock Blender 5.4 alpha with no add-ons; what sets it off in real sessions is not known yet. It also happens on a plain Ctrl+S. Since 1.1.44 the chat writes its autosave only in a quiet moment and keeps a trace file, but it cannot prevent the crash. Keep the crash log and `autosave_trace.txt`.
   - **Local, unattended runs (#591):** a crash after a timed-out step and a render that never ends were reported; steps are refused during a render now, but this is not confirmed fixed.
   - **Make Vertical with a plain Centre Crop (#632)** can halve playback speed in the Sequencer.
   - **Local checkpoints (#545):** summaries return text now, but the model still re-reads the conversation after each checkpoint, and the model's extra thinking between steps is switched off for now.

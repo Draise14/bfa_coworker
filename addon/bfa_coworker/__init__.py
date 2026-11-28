@@ -268,6 +268,9 @@ def _register() -> None:
     # Make Vertical / Reframe (#333): in the Sequencer's Coworker section and Video panel (wand).
     from . import reframe
     reframe.register()
+    # Highlights (#614): the picks on the scene and the panel in the Sequencer's Coworker tab.
+    from . import highlight_picks_ops
+    highlight_picks_ops.register()
     # Edit by Transcript (#498): Edit Transcript in the Video panel / Strip menu, the Text Editor's panel.
     from . import transcript_edit_ops
     transcript_edit_ops.register()
@@ -514,6 +517,8 @@ def unregister() -> None:
     # Unregister chat UI (the Coworker editor first: it builds on ui_chat's panels).
     from . import transcript_edit_ops
     transcript_edit_ops.unregister()
+    from . import highlight_picks_ops
+    highlight_picks_ops.unregister()
     from . import reframe
     reframe.unregister()
     from . import captions_ops

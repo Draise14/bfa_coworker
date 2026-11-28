@@ -65,6 +65,13 @@ WAND_OPERATORS = (
     "bfacw.translate",
     "bfacw.explain",
     "bfacw.explain_spot",
+    "bfacw.highlights_find",
+    "bfacw.highlights_stop",
+    "bfacw.highlights_check",
+    "bfacw.highlights_preview",
+    "bfacw.highlights_make_short",
+    "bfacw.highlights_dismiss",
+    "bfacw.highlights_markers",
 )
 
 

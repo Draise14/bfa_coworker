@@ -55,7 +55,7 @@ from .wand.spec import agent_line, model_line
 CATEGORY = "Coworker"
 PANEL_LABEL = "Reframe"
 SWAP_ICON, RESET_ICON = "ARROW_LEFTRIGHT", "LOOP_BACK"
-INSIDE_KEY = "coworker_inside"          # a part's Frame Inside keys the artist set: {frame: [u, v, zoom]} (#625)
+INSIDE_KEY = "coworker_inside"          # a part's Frame Inside keys the artist set: {frame - origin: [u, v, zoom]} (#625)
 INSIDE_ICON, KEY_ICON = "VIEW_ZOOM", "KEY_HLT"
 # Strip properties a duplicate takes over (it is a faithful copy: only crop and transform are the layout's).
 _COPIED = ("blend_type", "blend_alpha", "color_multiply", "color_saturation", "mute", "use_flip_x", "use_flip_y",
@@ -274,10 +274,23 @@ class BlenderBackend(ra.Backend):
 
     # -- Frame Inside (#625) --
 
+    @staticmethod
+    def _origin(strip: Any) -> int:
+        """Where the strip's content starts in time.  Blender moves a strip's F-curve keys with it, so the
+        anchors are stored relative to this and move with the keys (Remove Silences, a drag in the timeline)."""
+        for name in ("content_start", "frame_start"):
+            try:
+                return int(round(float(getattr(strip, name))))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return 0
+
     def anchors(self, strip: Any) -> dict[int, tuple[float, float, float]]:
+        """The anchors in scene frames (stored relative to the strip's start)."""
         try:
             raw = strip.get(INSIDE_KEY)
-            return {int(frame): (float(v[0]), float(v[1]), float(v[2])) for frame, v in raw.items()}
+            origin = self._origin(strip)
+            return {int(frame) + origin: (float(v[0]), float(v[1]), float(v[2])) for frame, v in raw.items()}
         except (AttributeError, TypeError, ValueError, IndexError, KeyError):
             return {}
 
@@ -299,7 +312,8 @@ class BlenderBackend(ra.Backend):
                 if fc.data_path.startswith(prefixes):
                     for kp in fc.keyframe_points:
                         kp.interpolation = 'LINEAR'
-        strip[INSIDE_KEY] = {str(int(f)): [float(a) for a in v] for f, v in anchors.items()}
+        origin = self._origin(strip)
+        strip[INSIDE_KEY] = {str(int(f) - origin): [float(a) for a in v] for f, v in anchors.items()}
         if parts:                                                  # the strip shows the framing of the current frame
             ra.set_part(strip, min(parts, key=lambda row: abs(row[0] - scene.frame_current))[1])
 
@@ -493,7 +507,9 @@ def _inside_set(name: str) -> Any:
 
 
 def _register_sliders() -> None:
-    wm = bpy.types.WindowManager
+    # On the Scene, not the WindowManager: the UI pushes an undo step for a button whose owner is an undoable ID
+    # (a WindowManager's are left out), so one drag is one Ctrl+Z.
+    wm = bpy.types.Scene
     wm.bfacw_inside_x = FloatProperty(
         name="X", description="Pan the picture inside this part sideways (0 centred, -1 far left, 1 far right)",
         min=-1.0, max=1.0, precision=2, subtype='FACTOR', get=_inside_get("x", 0.0), set=_inside_set("x"))
@@ -508,7 +524,7 @@ def _register_sliders() -> None:
 def _unregister_sliders() -> None:
     for name in ("bfacw_inside_x", "bfacw_inside_y", "bfacw_inside_zoom"):
         try:
-            delattr(bpy.types.WindowManager, name)
+            delattr(bpy.types.Scene, name)
         except AttributeError:
             pass
 
@@ -521,7 +537,7 @@ def _draw_inside(layout: Any, context: Any) -> None:
     row = layout.row(align=True)
     row.label(text="Frame Inside", icon=safe_icon(INSIDE_ICON))
     row.operator("bfacw.reframe_inside_key", text="", icon=safe_icon(KEY_ICON))
-    wm = context.window_manager
+    wm = scene
     col = layout.column(align=True)
     col.prop(wm, "bfacw_inside_x", slider=True)
     col.prop(wm, "bfacw_inside_y", slider=True)

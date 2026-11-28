@@ -18,12 +18,12 @@ No compositor modifier is involved (the probe of #625 measured one at 100 to 140
 two framed parts at 4 to 6 fps; crop and transform play at full speed): the sliders rewrite the
 part's crop and transform scale and offset.
 
-A keyed pan: the strip's crop and transform are animated, but the two ends of a zoom move are not
-enough: crop (whole pixels) and scale move linearly between keys while the visible edge is their
-product, so in between the picture slips off the window and black shows (measured, see the PR).  So
-the artist's keys are kept as *anchors* (``{frame: (u, v, zoom)}``) and :func:`bake` turns them into
-the keys the strip carries: only the anchors where the zoom stays the same between two of them,
-every frame where it changes.
+A keyed pan: the strip's crop and transform are animated, but crop is a whole number and Blender rounds
+it, while the offset (and the scale) move smoothly.  The visible edge is their combination, so with only two
+keys the picture slips off the window by up to a pixel or two and black shows (measured, see the PR).  So the
+artist's keys are kept as *anchors* (``{frame: (u, v, zoom)}``) and :func:`bake` turns them into the keys the
+strip carries: only the anchors where the framing stays the same between two of them, every frame where the
+pan or the zoom changes.
 """
 
 from __future__ import annotations
@@ -83,9 +83,10 @@ def inside_from_framing(framing: rl.Framing, rect: rl.Rect, sw: int, sh: int) ->
 def bake(anchors: dict[int, tuple[float, float, float]]) -> list[tuple[int, rl.Framing]]:
     """The framings to key, ``[(frame, Framing)]`` by frame, for the artist's *anchors* (``frame -> (u, v, zoom)``).
 
-    Between two anchors of the same zoom a straight line is exact, so those two keys do; where the zoom
-    differs every frame in between is keyed, the framing interpolated linearly.  Outside the first and
-    last anchor the framing stays (the curves are constant there)."""
+    Between two anchors of the same framing a straight line is exact, so those two keys do.  Wherever the
+    pan or the zoom differs, every frame in between is keyed, the framing interpolated linearly: Blender
+    rounds the animated crop to a whole pixel, so a line between two keys would not stay on the picture.
+    Outside the first and last anchor the framing stays (the curves are constant there)."""
     frames = sorted(int(f) for f in anchors)
     out: list[tuple[int, rl.Framing]] = []
     for index, frame in enumerate(frames):
@@ -96,7 +97,7 @@ def bake(anchors: dict[int, tuple[float, float, float]]) -> list[tuple[int, rl.F
         if index + 1 < len(frames):
             nxt = frames[index + 1]
             u2, v2, zoom2 = anchors[nxt]
-            if abs(float(zoom2) - float(zoom)) > 1e-6:
+            if max(abs(float(u2) - float(u)), abs(float(v2) - float(v)), abs(float(zoom2) - float(zoom))) > 1e-9:
                 span = nxt - frame
                 for step in range(1, span):
                     t = step / span

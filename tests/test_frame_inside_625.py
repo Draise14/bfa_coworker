@@ -18,7 +18,11 @@ Run with::
 
 __all__ = ()
 
+import sys
+import types
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 from tests.test_reframe_layouts import FRAMES, SOURCES, SPLITS, Stand, _apply, _edit, ra, rl, _import
 
@@ -32,15 +36,16 @@ class KeyedStand(Stand):
         super().__init__(*args, **kw)
         self.frame = 1
 
-    def anchors(self, strip):
-        return {int(k): tuple(v) for k, v in dict(strip.props.get("inside", {})).items()}
+    def anchors(self, strip):          # stored relative to the strip's start, like the Blender backend
+        origin = getattr(strip, "origin", 0)
+        return {int(k) + origin: tuple(v) for k, v in dict(strip.props.get("inside", {})).items()}
 
     def has_keys(self, scene, strip):
         return bool(getattr(strip, "keys", None))
 
     def key_part(self, scene, strip, anchors, parts):
         strip.keys = {frame: part for frame, part in parts}
-        strip.props["inside"] = {str(f): list(v) for f, v in anchors.items()}
+        strip.props["inside"] = {str(f - getattr(strip, "origin", 0)): list(v) for f, v in anchors.items()}
         ra.set_part(strip, min(parts, key=lambda row: abs(row[0] - self.frame))[1])
 
     def current_frame(self, scene):
@@ -50,6 +55,12 @@ class KeyedStand(Stand):
         super().clear_keys(scene, strip)
         strip.keys = {}
         strip.props.pop("inside", None)
+
+
+def _move(strip, delta):
+    """Move a strip in time the way Blender does: its keys go with it, the custom properties stay."""
+    strip.keys = {frame + delta: part for frame, part in strip.keys.items()}
+    strip.origin = getattr(strip, "origin", 0) + delta
 
 
 def _split(layout_id="split_top", **kw):
@@ -133,9 +144,13 @@ class TestBake(unittest.TestCase):
         self.assertEqual(ri.bake({}), [])
         self.assertEqual(ri.bake({7: (0.4, 0.5, 2.0)}), [(7, rl.Framing(0.4, 0.5, 2.0))])
 
-    def test_a_pan_at_one_zoom_is_two_keys(self):
-        out = ri.bake({50: (0.7, 0.5, 1.5), 1: (0.3, 0.5, 1.5)})
+    def test_the_same_framing_between_two_anchors_is_two_keys(self):
+        out = ri.bake({50: (0.7, 0.5, 1.5), 1: (0.7, 0.5, 1.5)})
         self.assertEqual([f for f, _ in out], [1, 50])
+
+    def test_a_pan_at_one_zoom_keys_every_frame(self):
+        out = ri.bake({50: (0.7, 0.5, 1.5), 1: (0.3, 0.5, 1.5)})
+        self.assertEqual([f for f, _ in out], list(range(1, 51)))
 
     def test_a_zoom_move_keys_every_frame_between(self):
         out = ri.bake({1: (0.3, 0.5, 1.0), 11: (0.7, 0.5, 3.0), 21: (0.7, 0.5, 3.0)})
@@ -146,7 +161,7 @@ class TestBake(unittest.TestCase):
 
     def _worst_gap(self, keys, rect, sw, sh, fw=1080, fh=1920):
         """How many frame pixels short of *rect* the picture falls at any frame between *keys*, with Blender's
-        linear interpolation of crop, scale and offset between them."""
+        linear interpolation of scale and offset between them and its rounding of the (integer) crop."""
         rows = []
         for frame, framing in keys:
             part = rl.part_for(0, rect, sw, sh, fw, fh, framing)
@@ -158,7 +173,7 @@ class TestBake(unittest.TestCase):
                 mix = lambda a, b: a + (b - a) * t                                  # noqa: E731
                 part = rl.Part(0, rect, mix(p0.scale, p1.scale), (mix(p0.offset[0], p1.offset[0]),
                                                                      mix(p0.offset[1], p1.offset[1])),
-                               tuple(mix(a, b) for a, b in zip(p0.crop, p1.crop)), rl.DEFAULT_FRAMING)
+                               tuple(round(mix(a, b)) for a, b in zip(p0.crop, p1.crop)), rl.DEFAULT_FRAMING)
                 vis = rl.visible_rect(part, sw, sh, fw, fh)
                 worst = max(worst, vis[0] - rect[0], vis[1] - rect[1], rect[2] - vis[2], rect[3] - vis[3])
         return worst
@@ -166,16 +181,31 @@ class TestBake(unittest.TestCase):
     def test_two_keys_with_a_zoom_change_leave_gaps_and_the_bake_does_not(self):
         rect = rl.part_rects("split_half", 1080, 1920)[0]
         a, b = (1, rl.Framing(0.35, 0.5, 1.0)), (21, rl.Framing(0.65, 0.5, 3.0))
-        self.assertGreater(self._worst_gap([a, b], rect, 1920, 1080), 3.0)       # the reason for the bake
+        self.assertGreater(self._worst_gap([a, b], rect, 1920, 1080), 2.0)       # the reason for the bake
         baked = ri.bake({1: a[1][:3], 21: b[1][:3]})
         self.assertEqual(len(baked), 21)
         self.assertLess(self._worst_gap(baked, rect, 1920, 1080), 0.5)
 
-    def test_a_pan_at_one_zoom_between_two_keys_stays_covered(self):
+    def test_a_pan_at_one_zoom_stays_covered_with_the_crop_rounded(self):
+        for layout_id in SPLITS:
+            for zoom in (1.0, 2.0, 4.0):
+                for index, rect in enumerate(rl.part_rects(layout_id, 1080, 1920)):
+                    rows = ri.bake({1: (0.2, 0.2, zoom), 40: (0.8, 0.8, zoom)})
+                    keys = [(f, fr) for f, fr in rows]
+                    worst = 0.0
+                    for (f0, _a), (f1, _b) in zip(keys, keys[1:]):                 # every frame is keyed: no line between
+                        self.assertEqual(f1 - f0, 1)
+                    for _f, fr in keys:
+                        part = rl.part_for(index, rect, 1920, 1080, 1080, 1920, fr)
+                        part = rl.Part(index, rect, part.scale, part.offset, tuple(round(c) for c in part.crop), rl.DEFAULT_FRAMING)
+                        vis = rl.visible_rect(part, 1920, 1080, 1080, 1920)
+                        worst = max(worst, vis[0] - rect[0], vis[1] - rect[1], rect[2] - vis[2], rect[3] - vis[3])
+                    self.assertLess(worst, 0.5, (layout_id, zoom, index))
+
+    def test_two_keys_of_a_same_zoom_pan_leave_a_gap_with_the_crop_rounded(self):
         rect = rl.part_rects("split_half", 1080, 1920)[0]
-        baked = ri.bake({1: (0.35, 0.5, 2.0), 40: (0.65, 0.5, 2.0)})
-        self.assertEqual(len(baked), 2)
-        self.assertLess(self._worst_gap(baked, rect, 1920, 1080), 1.0)
+        a, b = (1, rl.Framing(0.2, 0.2, 4.0)), (40, rl.Framing(0.8, 0.8, 4.0))
+        self.assertGreater(self._worst_gap([a, b], rect, 1920, 1080), 0.5)        # why a pan is keyed every frame
 
 
 class TestSetInside(unittest.TestCase):
@@ -268,6 +298,107 @@ class TestSetInside(unittest.TestCase):
             self.assertGreaterEqual(vis[2], rect[2] - 1e-6, frame)
             self.assertLessEqual(vis[1], rect[1] + 1e-6, frame)
             self.assertGreaterEqual(vis[3], rect[3] - 1e-6, frame)
+
+
+class TestTimeMoves(unittest.TestCase):
+
+    def test_a_keyed_part_moved_in_time_is_edited_where_it_now_is(self):
+        strips, top, _b, backend = _split()
+        backend.frame = 1
+        ra.set_inside(None, strips, ["clip"], backend, x=-0.5, zoom=1.0, key=True)
+        backend.frame = 11
+        ra.set_inside(None, strips, ["clip"], backend, x=0.5, zoom=2.0)
+        _move(top, 20)                                                             # Remove Silences, a drag
+        self.assertEqual(sorted(backend.anchors(top)), [21, 31])
+        backend.frame = 31
+        ra.set_inside(None, strips, ["clip"], backend, x=0.1)
+        self.assertEqual(sorted(backend.anchors(top)), [21, 31])
+        self.assertEqual(sorted(top.keys), list(range(21, 32)))                    # re-keyed where the strip is now
+        self.assertAlmostEqual(backend.anchors(top)[31][2], 2.0, 6)
+
+    def test_anchors_outside_the_strip_after_a_cut_survive_a_swap(self):
+        strips, top, bottom, backend = _split()
+        backend.frame = 1
+        ra.set_inside(None, strips, ["clip"], backend, x=-0.5, zoom=1.0, key=True)
+        backend.frame = 200                                                        # later than the strip's last frame
+        ra.set_inside(None, strips, ["clip"], backend, x=0.5, zoom=2.0)
+        a_top = backend.anchors(top)
+        out = ra.swap_parts(None, strips, ["clip"], backend)
+        self.assertEqual(out["status"], "ok")
+        self.assertEqual(backend.anchors(bottom), a_top)
+        self.assertEqual(max(bottom.keys), 200)
+
+
+def _fake_modules():
+    """A bpy that is only good enough to import ``reframe_layouts`` and call its tool."""
+    base = type("Base", (), {})
+    bpy_types = types.ModuleType("bpy.types")
+    for name in ("Menu", "Operator", "Panel", "PropertyGroup", "AddonPreferences", "Header", "UIList"):
+        setattr(bpy_types, name, type(name, (base,), {}))
+    bpy_types.__getattr__ = lambda _name: mock.MagicMock()
+    bpy = mock.MagicMock(name="bpy")
+    bpy.types = bpy_types
+    props = mock.MagicMock()
+    bpy.props = props
+    return {"bpy": bpy, "bpy.types": bpy_types, "bpy.props": props, "bpy.utils": bpy.utils,
+            "mathutils": mock.MagicMock(), "gpu": mock.MagicMock(), "blf": mock.MagicMock(),
+            "bpy_extras": mock.MagicMock()}
+
+
+class TestTool(unittest.TestCase):
+    """``tool_reframe_strips`` with the Frame Inside arguments, on the stand-in Sequencer."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._patch = mock.patch.dict(sys.modules, _fake_modules())
+        cls._patch.start()
+        cls.mod = _import("reframe_layouts")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._patch.stop()
+
+    def _run(self, level, backend, **kw):
+        mod = self.mod
+        scene = SimpleNamespace(name="Scene", sequence_editor=object())
+        with mock.patch.object(mod._wand, "_tool_scene", return_value=scene),                 mock.patch.object(mod, "_level_strips", return_value=level),                 mock.patch.object(mod, "BlenderBackend", lambda _scene: backend),                 mock.patch.object(mod._wand, "_push_undo") as undo:
+            out = mod.tool_reframe_strips(**kw)
+        return out, undo
+
+    def test_pan_zoom_and_key_frame_the_part_with_one_undo_step(self):
+        strips, top, _b, backend = _split()
+        backend.frame = 4
+        out, undo = self._run(strips, backend, strips=["clip"], pan_x=-1, zoom=2, key=True)
+        self.assertEqual((out["status"], out["framed"]), ("ok", ["clip"]))
+        self.assertEqual(undo.call_count, 1)
+        self.assertEqual(list(backend.anchors(top)), [4])
+        self.assertAlmostEqual(ra.inside_of(None, top, backend)["zoom"], 2.0, 3)
+
+    def test_read_mode_gives_the_inside_framing(self):
+        strips, _top, _b, backend = _split()
+        ra.set_inside(None, strips, ["clip"], backend, zoom=3.0)
+        out, undo = self._run(strips, backend, strips=["clip", "clip (bottom)"])
+        self.assertEqual(out["status"], "ok")
+        self.assertEqual(out["layouts"]["clip"]["inside"]["zoom"], 3.0)
+        self.assertEqual(out["layouts"]["clip (bottom)"]["inside"]["zoom"], 1.0)
+        undo.assert_not_called()
+
+    def test_a_layout_and_a_pan_in_one_call_is_one_undo_step(self):
+        strips = _edit()
+        backend = KeyedStand()
+        out, undo = self._run(strips, backend, layout="split_half", strips=["clip"], pan_x=0.5, zoom=1.5)
+        self.assertEqual(out["status"], "ok")
+        self.assertEqual(out["framed"], ["clip"])
+        self.assertTrue(out["changed"])
+        self.assertEqual(undo.call_count, 1)
+        top = strips[0]
+        self.assertAlmostEqual(ra.inside_of(None, top, backend)["zoom"], 1.5, 3)
+
+    def test_a_pan_on_a_strip_with_no_split_is_not_an_ok(self):
+        strips = _edit()
+        out, undo = self._run(strips, KeyedStand(), strips=["clip"], pan_x=0.5)
+        self.assertEqual(out["status"], "nothing")
+        undo.assert_not_called()
 
 
 class TestSwapResetRead(unittest.TestCase):

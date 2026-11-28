@@ -333,7 +333,8 @@ def _fake_bpy(toolshelf_tabs: bool):
         properties=_Props(["view_type"] + (["show_toolshelf_tabs"] if toolshelf_tabs else [])))})
     bpy.types = types.SimpleNamespace(Operator=type("Operator", (), {}), Panel=type("Panel", (), {}),
                                       SEQUENCER_MT_strip=_Menu(), SpaceSequenceEditor=space)
-    bpy.props = types.SimpleNamespace(FloatProperty=lambda **kw: ("float", kw), BoolProperty=lambda **kw: ("bool", kw))
+    bpy.props = types.SimpleNamespace(FloatProperty=lambda **kw: ("float", kw), BoolProperty=lambda **kw: ("bool", kw),
+                                      EnumProperty=lambda **kw: ("enum", kw))
     bpy.utils = types.SimpleNamespace(register_class=registered.append,
                                       unregister_class=registered.remove)
     bpy.path = types.SimpleNamespace(abspath=lambda p, library=None: p)

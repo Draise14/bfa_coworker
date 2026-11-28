@@ -52,11 +52,17 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
 ## Video Sequencer
 
 - `remove_silences(strips, threshold_db=-40, min_silence=0.4, padding=0.15, min_keep=0.1, close_gaps=True,
-  update_scene_end=True)` — Cut the quiet parts out of the edit; one undo step. With sounds from several files
+  update_scene_end=True, mode="cut", speed=4)` — Cut the quiet parts out of the edit; one undo step. With sounds from several files
   only the time where all of them are quiet goes; the same cuts go through every strip (picture, voice-over,
   titles, captions), so nothing drifts. A locked or retimed strip in the way: nothing changes, `refused` names
   it. Strips cut in pieces keep their name on the first piece: use `new_names` (original -> pieces) and
   `end_frame` from the answer, not the names you read before. Captions made before are trimmed with the edit.
+  `mode="speed_up"` keeps the quiet parts and plays them `speed` times as fast (2, 4 or 8) instead of cutting
+  them: picture and sound are split at the silence edges and the quiet pieces retimed together (the sound keeps its
+  pitch), everything after moves left by the time saved, captions over them are trimmed in proportion.
+  `seconds_removed` is then the time saved. The sped pieces are retimed strips: a second call leaves them alone, and
+  a tool that reads the edit's words skips them (they were quiet). Needs a Blender window (the retiming tools run in
+  a Sequencer area).
 - `add_captions(strips, style="CLEAN", animation="STYLE", position="BOTTOM", margin=0, speakers=False,
   speaker_labels=False, speaker_settings=None, case="STYLE", font=None, bold=None, italic=None, size=1.0,
   text_color=None, highlight_color=None, animate=None, line_animation=None, word_animation=None,
@@ -84,8 +90,8 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   Works in a copy of the scene by default (`in_copy`); one undo step. `follow="auto"|"face"|"screen"` (CROP only) also finds the subject (faces need a vision model; what moves and the pointer do not);
   `layout="auto"|"single"|"split"`: two subjects apart become two crops, top and bottom. The keys come a moment after the call returns, as a second undo step (see `following`). Change a shot's framing afterwards
   with Strip > Reframe, or select the strip and run `bpy.ops.bfacw.reframe(action=...)` (`LEFT` `RIGHT` `UP` `DOWN`
-  `ZOOM_IN` `ZOOM_OUT` `RESET_FRAMING`; `step` 0.1 by default): it works on either form. `reframe_strips` only changes layouts.
-- `reframe_strips(layout, strips=None, swap=False)` — Change the vertical layout of the named (or selected) movie /
+  `ZOOM_IN` `ZOOM_OUT` `RESET_FRAMING`; `step` 0.1 by default): it works on either form. `reframe_strips` changes layouts and zooms into a region.
+- `reframe_strips(layout, strips=None, swap=False, zoom_to="", zoom=2, punch_in=False)` — Change the vertical layout of the named (or selected) movie /
   image / scene strips, after `reframe_vertical` or on any strips; one undo step. `layout`: `full` (centre fills
   the frame), `full_blur` (whole shot over a blurred copy), `full_tracked` (follows the subject: the tracking needs
   a vision model, the layout does not), `split_half` (two crops, 50 / 50), `split_top` (2/3 on top, 1/3 below),
@@ -95,7 +101,16 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   top and bottom (alone with `layout=""`). With neither a layout nor `swap` it only reads: `layouts` gives each
   named / selected strip's current layout (and its part and partner in a split). The layout is stored on each strip (`coworker_layout`). Captions and
   audio are never touched; Remove Silences and Edit by Transcript cut both parts together. It adds and removes
-  strips, so it waits while a render or bake runs.
+  strips, so it waits while a render or bake runs. `zoom_to` (`centre`, `top_left`, `top_right`, `bottom_left`,
+  `bottom_right`; after the layout) with `zoom` 1.5 or 2 zooms each strip into that region with its own crop and
+  transform, the shot still covering the frame (no black edges); `punch_in=true` keys it over the strip instead (eases
+  in, holds, eases out; for tutorials). Reset Framing undoes either. The same from a script:
+  `bpy.ops.bfacw.reframe_zoom_to(region='TOP_LEFT', zoom='2.0', punch_in=False)` on the selected strips.
+- Chapters for a video's description: the user's Make Chapters wand (Strip > Coworker, the Video panel, the Transcript
+  panel) asks the model for sentence numbers and titles and makes timeline markers `CH1: Title` ... and a text
+  "Chapters" with `0:00 Title` lines. It needs Local or Remote (an External Agent or Harness runs its own model); from
+  a script: `bpy.ops.bfacw.make_chapters(count_auto=True, min_seconds=10)`; it runs in the background and writes when it
+  is done. `bpy.ops.bfacw.chapters_remove()` takes its markers off again (the user's own stay).
 - `get_transcript_text(strip)` — A transcribed clip's words as they play now, one numbered line per sentence
   with its time, and a `version`. `apply_transcript_edit(strip, cut_lines=[...] + version | lines=[{line, text}] |
   text=..., dry_run=False, confirm_large_cut=False)` — Edit the clip by its text; one undo step: lines / words

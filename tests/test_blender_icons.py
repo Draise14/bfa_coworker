@@ -53,6 +53,7 @@ _SHARED = _load_shared()
 _NOT_ICONS = {
     "CENTER",       # layout.alignment
     "DELETE", "EDIT",   # queue actions (enum ids)
+    "CUT",          # Remove Silences' mode id (#542)
     "NEW",          # a status word
     "STRING",       # property types
     "TYPE",         # an @ suggestion category

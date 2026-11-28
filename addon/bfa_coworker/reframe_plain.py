@@ -28,6 +28,7 @@ from __future__ import annotations
 
 __all__ = (
     "MARKER",
+    "PUNCH",
     "marker_canvas",
     "plain_framing",
     "plain_part",
@@ -42,6 +43,8 @@ from .wand import reframe_layout as rl
 # The strip's custom property that says "this strip's framing is crop + transform made by Make Vertical",
 # holding the frame size it was made for.
 MARKER = "coworker_plain_crop"
+# The strip's custom property that says "this strip's zoom is keyed by Zoom To (a punch-in)": its region, zoom and ease.
+PUNCH = "coworker_punch_in"
 
 
 def _rect(fw: int, fh: int) -> rl.Rect:

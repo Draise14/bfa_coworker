@@ -45,7 +45,10 @@ _DRAWN_IN = (("captions_ops.py", ("BFACW_MT_captions", "_draw_context_menu")),
               ),
              ("wand/reframe_entries.py", ("LayoutEntry", "ActionEntry", "_SWAP", "_RESET")),
              # the Highlights panel (#614)
-             ("highlight_picks_ops.py", ("_draw_panel", "_draw_pick")))
+             ("highlight_picks_ops.py", ("_draw_panel", "_draw_pick")),
+             # Make Chapters' dialog and Zoom To's menu (#542)
+             ("chapters_ops.py", ("_draw_dialog", "_draw_progress")),
+             ("reframe_zoom.py", ("BFACW_MT_reframe_zoom_to",)))
 
 
 def _load_spec():

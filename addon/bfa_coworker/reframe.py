@@ -461,14 +461,53 @@ def _apply_part(strip: Any, part: Any) -> None:
     _layouts.set_part(strip, part)
 
 
-def build_plain(scene: Any, strip: Any, framing: dict[str, float] | None = None) -> None:
-    """Give *strip* a plain Centre Crop for the scene's frame, at *framing* (default centred)."""
+def _set_marker(scene: Any, strip: Any) -> None:
+    """Say which frame size the strip's numbers are for (so a later read uses the right cover scale)."""
+    fw, fh = frame_size(scene)
+    strip[rp.MARKER] = {"w": fw, "h": fh}
+
+
+def _offset_fcurves(scene: Any, strip: Any) -> list[Any]:
+    path = _offset_path(strip)
+    return [fc for bag in _channelbags(scene) for fc in bag.fcurves if fc.data_path == path]
+
+
+def _key_fractions(scene: Any, strip: Any) -> list[tuple[Any, list[float]]]:
+    """Each pan key of a followed plain strip as the picture fraction at the frame's middle (0..1), read
+    with the strip's scale as it is now: call before the numbers change."""
+    sw, _sh = source_size(strip)
+    span = max(1e-9, sw * float(strip.transform.scale_x))
+    return [(fc, [0.5 - float(kp.co[1]) / span for kp in fc.keyframe_points]) for fc in _offset_fcurves(scene, strip)]
+
+
+def _restore_keys(scene: Any, strip: Any, saved: list[tuple[Any, list[float]]]) -> None:
+    """Write the saved subject fractions back as pan keys for the strip's new scale and frame."""
+    sw, sh = source_size(strip)
+    fw, fh = frame_size(scene)
+    f = plain_framing_of(scene, strip)
+    for fc, fractions in saved:
+        for kp, u in zip(fc.keyframe_points, fractions):
+            part = rp.subject_part(sw, sh, fw, fh, u, f["Offset Y"], f["Zoom"])
+            delta = part.offset[0] - float(kp.co[1])
+            kp.co[1] = part.offset[0]
+            kp.handle_left[1] += delta
+            kp.handle_right[1] += delta
+        fc.update()
+
+
+def build_plain(scene: Any, strip: Any, framing: dict[str, float] | None = None, tracked: bool = False) -> None:
+    """Give *strip* a plain Centre Crop for the scene's frame, at *framing* (default centred).
+    *tracked*: a followed strip (no horizontal crop): its pan keys are kept, in the new frame's pixels."""
     sw, sh = source_size(strip)
     fw, fh = frame_size(scene)
     f = framing or {}
-    part = rp.plain_part(sw, sh, fw, fh, f.get("Offset X", 0.0), f.get("Offset Y", 0.0), f.get("Zoom", 1.0))
+    saved = _key_fractions(scene, strip) if tracked else []
+    part = rp.plain_part(sw, sh, fw, fh, f.get("Offset X", 0.0), f.get("Offset Y", 0.0), f.get("Zoom", 1.0),
+                         tracked=tracked)
     _apply_part(strip, part)
-    strip[rp.MARKER] = {"w": fw, "h": fh}
+    _set_marker(scene, strip)
+    if saved:
+        _restore_keys(scene, strip, saved)
 
 
 def _key_free(scene: Any, mod: Any) -> bool:
@@ -508,7 +547,8 @@ def reframe_strip(scene: Any, strip: Any, mode: str, reset: bool = False) -> str
     if mode == "CROP":
         if mod is None:
             if plain and not reset:
-                build_plain(scene, strip, plain_framing_of(scene, strip))
+                # A followed strip keeps its pan keys (rescaled to this frame), not a horizontal crop.
+                build_plain(scene, strip, plain_framing_of(scene, strip), tracked=plain_keyed(scene, strip))
                 return "kept"
             if plain:
                 clear_plain(scene, strip)
@@ -642,11 +682,10 @@ def _nudge_plain(scene: Any, strip: Any, action: str, step: float) -> str:
         z = f["Zoom"] * ((1.0 + step) if action == "ZOOM_IN" else 1.0 / (1.0 + step))
         f["Zoom"] = min(10.0, max(1.0, z))
         result = "zoomed"
-    sw, sh = source_size(strip)
-    fw, fh = frame_size(scene)
     keyed = plain_keyed(scene, strip)
-    _apply_part(strip, rp.plain_part(sw, sh, fw, fh, f["Offset X"], f["Offset Y"], f["Zoom"], tracked=keyed))
-    if keyed:
+    # Every pan key follows the new scale / frame (a zoom or a resolution change moves them all).
+    build_plain(scene, strip, f, tracked=keyed)
+    if keyed and result == "nudged":                 # a zoom keeps each key's subject, it adds none
         strip.transform.keyframe_insert("offset_x", frame=scene.frame_current)
     return result
 
@@ -826,6 +865,7 @@ def _follow_plain(scene: Any, strip: Any, samples: list[tuple[int, Any]], fps: f
         part = rp.subject_part(sw, sh, fw, fh, x, f["Offset Y"], f["Zoom"])
         _apply_part(strip, part)
         strip.transform.keyframe_insert("offset_x", frame=frame)
+    _set_marker(scene, strip)
     return len(keys)
 
 

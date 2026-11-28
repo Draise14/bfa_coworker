@@ -71,7 +71,7 @@ def main(params: Params) -> Any:
     where = ("a vertical copy '{:s}' (the Sequencer shows it now; '{:s}' is unchanged)".format(
         done["scene"], done["source_scene"]) if done["copied"] else "'{:s}'".format(done["scene"]))
     msg = "Made {:s} {:d}x{:d} with {:s}: {:d} strip(s) reframed{:s}. Pan and zoom each shot " \
-          "afterwards with reframe_strips or Strip > Reframe; Blur Fill strips also have a 'Reframe' modifier.".format(
+          "afterwards with Strip > Reframe, or select the strip and run bpy.ops.bfacw.reframe(action='LEFT' / 'RIGHT' / "           "'UP' / 'DOWN' / 'ZOOM_IN' / 'ZOOM_OUT' / 'RESET_FRAMING'); Blur Fill strips also have a 'Reframe' modifier.".format(
               where, done["resolution"][0], done["resolution"][1],
               "Centre Crop" if mode == "CROP" else "Blur Fill", len(changed),
               ", {:d} kept their framing".format(len(kept)) if kept else "")

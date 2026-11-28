@@ -1972,10 +1972,12 @@ def autodetect_gpu_layers(model_path: Path, context_size: int, *, free_mib: "int
 # margin, the same as llama.cpp's own --fit-target default.
 
 # The first request of a new Local chat: 18,359 tokens on Bforartists (#543) before skills and tools
-# went on demand (#635, #311); now ~10.0K by the add-on's own count (chars / 3.5: system text 1.4K, the
-# version-drift skills 2.4K, the skill index 0.4K, 29 core tools 5.5K) plus ~10% for a tokenizer that
-# counts JSON denser.  Tools of the request's domains come on top; a request too big is made to fit (#544).
-_FIRST_REQUEST_TOKENS = 11264
+# went on demand (#635, #311); now ~8.6K by the add-on's own count (chars / 3.5: system text 1.4K, the
+# version-drift skills 2.4K, the skill index 0.4K, 29 core tools with short descriptions 4.1K, a short
+# message 0.2K) plus ~7% for a tokenizer that counts JSON denser.  The tools of the request's domains
+# come on top; a request too big is made to fit (#544).  tests/test_skills_on_demand_635.py checks it
+# against the real prompt and the real tool list.
+_FIRST_REQUEST_TOKENS = 9216
 _REPLY_ROOM_TOKENS = 4096           # a reply on top of it (--no-context-shift: both must fit)
 _VRAM_MARGIN_MIB = 1024
 _DESKTOP_VRAM_MIB = 1024            # the desktop and Blender, when only the card's total is known

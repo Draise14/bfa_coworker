@@ -355,6 +355,34 @@ class TestFirstRequest(_LoopBase):
 
 class TestLoadingASkillKeepsThePrefix(_LoopBase):
 
+    def _same_prefix_after_loading(self, skill, ctx):
+        body = skill_index.load_skill_body(skill)
+        self._serve([self._call("s1", "load_skill", name=skill), {"content": "Read it."}], ctx=ctx)
+        self.server.named_tool_replies["load_skill"] = [{"__content__": [{"type": "text", "text": body}]}]
+        self.ac._detect_domain_from_scene = lambda: {"material", "lighting", "modeling"}      # a default scene's
+        self._turn("Tidy the scene names")
+        sent = self._sent()
+        self.assertEqual(len(sent), 2)
+        self.assertEqual(_canon(sent[0]["messages"][0]), _canon(sent[1]["messages"][0]), "system message")
+        self.assertEqual(_canon(sent[0]["tools"]), _canon(sent[1]["tools"]), "tool list")
+        return sent
+
+    def test_on_16k_the_biggest_skill_and_a_small_one_leave_the_tool_list_alone(self):
+        # The scene's domains (a default scene has a light and a mesh) wait for load_tools on the 16K
+        # preset, so the first request has room for a skill: reading one must not make the fit step
+        # take tools out in mid-chat (it did, with 6 of the scene's tools, before this).
+        for skill in ("materials", "best_practices"):
+            sent = self._same_prefix_after_loading(skill, 16384)
+            names = {t["function"]["name"] for t in sent[0]["tools"]}
+            self.assertNotIn("three_point_lighting_rig", names, skill)       # a scene domain: on demand
+            self.assertIn("load_tools", names)
+            self.assertIn("load_skill", names)
+
+    def test_on_32k_the_scenes_domains_are_there_from_the_start(self):
+        sent = self._same_prefix_after_loading("best_practices", 32768)
+        names = {t["function"]["name"] for t in sent[0]["tools"]}
+        self.assertTrue({"three_point_lighting_rig", "setup_pbr_material"} <= names)
+
     def test_a_skill_loaded_mid_chat_is_a_tool_result_read_whole_and_rewrites_nothing_before_it(self):
         body = skill_index.load_skill_body("best_practices")
         self.assertGreater(len(body), 10000)
@@ -419,14 +447,17 @@ class TestStripAndTrim(_LoopBase):
                "        Args:\n            a: the a.\n            b: the b.\n\n"
                "        Returns:\n            ``status`` and lots more.\n")
         out = self.ac._compact_tool_description(doc)
-        self.assertTrue(out.startswith("Do the thing."))
-        self.assertIn("Args:\na: the a.\nb: the b.", out)
+        nl = chr(10)
+        self.assertEqual(out, nl.join(["Do the thing.", "", "Args:", "a: the a.", "b: the b."]))      # first paragraph + Args
         self.assertNotIn("Returns", out)
         self.assertNotIn("lots more", out)
-        # Over the limit: later prose goes, the first paragraph and Args stay, never a cut sentence.
-        long_doc = "First.\n\n" + ("x" * 700) + "\n\nArgs:\n    q: question."
-        short = self.ac._compact_tool_description(long_doc, limit=100)
-        self.assertEqual(short, "First.\n\nArgs:\nq: question.")
+        # More prose when asked for (the code tool keeps two paragraphs), never a cut sentence.
+        two = self.ac._compact_tool_description(doc, keep=2)
+        self.assertEqual(two, nl.join(["Do the thing.", "", "More about it, in a long second paragraph.", "",
+                                       "Args:", "a: the a.", "b: the b."]))
+        long_doc = nl.join(["First.", "", "x" * 700, "", "Args:", "    q: question."])
+        self.assertEqual(self.ac._compact_tool_description(long_doc), nl.join(["First.", "", "Args:", "q: question."]))
+        self.assertEqual(self.ac._COMPACT_KEEP_PARAGRAPHS, {"execute_blender_code": 2})
         one = "y" * 3000
         self.assertEqual(self.ac._compact_tool_description(one), one)
         self.assertEqual(self.ac._compact_tool_description(""), "")

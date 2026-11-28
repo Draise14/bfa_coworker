@@ -347,6 +347,9 @@ _SKILLS_LOAD_RATIO = 0.15
 _SKILLS_LOAD_MAX = 4500
 _SKILLS_LOAD_MIN = 1024
 
+# The smallest Local window (the 16K preset, #631): the scene's domains are not pre-loaded there (#635).
+_SMALL_WINDOW_CTX = 16384
+
 # Remote modes keep ``prompt_budget = 0`` (no client-side window), so the
 # spare-minus-reserve formula has no input.  Use a conservative flat cap for
 # the remote domain-skill allowance (whole files only).  Remote models
@@ -4835,25 +4838,30 @@ def _list_tools_sync(port: int = _MCP_SERVER_DEFAULT_PORT, operating_mode: str =
 # ---------------------------------------------------------------------------
 # LLM conversation loop (synchronous, called from timer)
 
-_COMPACT_DESCRIPTION_CHARS = 600
+# Local's tool descriptions (#635): the first paragraph (what the tool is for) and its ``Args:``
+# list; this many paragraphs for the tools named here (the code tool's second paragraph says
+# when NOT to use it).  The ``Returns:`` text and the long usage notes are left out: on a 16K
+# window the tool list was 7.7K tokens, half of the first request.
+_COMPACT_KEEP_PARAGRAPHS = {"execute_blender_code": 2}
 
 
-def _compact_tool_description(text: str, limit: int = _COMPACT_DESCRIPTION_CHARS) -> str:
-    """A tool description for a small window (#635): the prose that says what the tool is
-    for and its ``Args:`` list, without the ``Returns:`` block (the result describes itself)
-    and without the later paragraphs once *limit* characters are reached.  Whole paragraphs
-    only, never a cut sentence; the first paragraph and ``Args:`` always stay.  Fixed text
-    for a given tool, so the tool list stays the same bytes for the whole session."""
+def _compact_tool_description(text: str, keep: int = 1) -> str:
+    """A tool description for a small window (#635): the first *keep* paragraphs of prose
+    (what the tool is for) and its ``Args:`` list, without the ``Returns:`` block (the result
+    describes itself) and the later paragraphs.  Whole paragraphs, never a cut sentence.  Fixed
+    text for a given tool, so the tool list stays the same bytes for the whole session."""
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", textwrap.dedent(str(text or "")).strip())]
     out: list[str] = []
-    used = 0
+    args = ""
     for p in paragraphs:
         if p.startswith("Returns:"):
             continue
-        if not out or p.startswith("Args:") or used + len(p) <= limit:
-            out.append("\n".join(ln.strip() for ln in p.splitlines()) if p.startswith("Args:")
-                       else " ".join(p.split()))
-            used += len(p)
+        if p.startswith("Args:"):
+            args = "\n".join(ln.strip() for ln in p.splitlines())
+        elif len(out) < max(1, keep):
+            out.append(" ".join(p.split()))
+    if args:
+        out.append(args)
     return "\n\n".join(out)
 
 
@@ -4872,7 +4880,8 @@ def _mcp_tools_to_openai(mcp_tools: list[dict[str, Any]], compact: bool = False)
             "type": "function",
             "function": {
                 "name": t["name"],
-                "description": (_compact_tool_description(t.get("description", ""))
+                "description": (_compact_tool_description(t.get("description", ""),
+                                                          _COMPACT_KEEP_PARAGRAPHS.get(t["name"], 1))
                                 if compact else t.get("description", "")),
                 "parameters": t.get("inputSchema", {}),
             },
@@ -7628,8 +7637,13 @@ def _run_conversation_turn_inner(
         # API-docs tools remain the always-available fallback).
         _detected_domains: set[str] = set()
         _detected_domains.update(_detect_domains(user_message))
-        # Also detect domains from scene content (armatures, materials, etc.).
-        _detected_domains.update(_detect_domain_from_scene())
+        # Also detect domains from scene content (armatures, materials, etc.) -- except on the
+        # smallest window (#635): there the first request is the core tools plus what the message
+        # names, and the model asks for the rest (load_tools).  A skill or a tool result read
+        # later then does not push the request over the window and make the fit step rewrite
+        # the tool list in mid-chat (#546).
+        if not 0 < ctx_size_used <= _SMALL_WINDOW_CTX:
+            _detected_domains.update(_detect_domain_from_scene())
         _session_loaded_domains.update(_detected_domains)
         _loaded_domains.update(_detected_domains)
         openai_tools = _build_tool_set(_all_tools, _loaded_domains)

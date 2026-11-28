@@ -407,7 +407,7 @@ class TestSizingRule(unittest.TestCase):
                 mock.patch.object(self.llm, "resolve_gpu_backend", lambda b: "cuda"):
             text = self.llm.hardware_context_hint(15.3, "cuda", free_vram_mib=21612, projector_bytes=self.proj27)
             self.assertIn("16K", text)           # the fallback profile (no header): 32K f16 would not fit
-            self.assertIn("11K tokens", text)    # #635: the first request, now with skills and tools on demand
+            self.assertIn("9K tokens", text)    # #635: the first request, now with skills and tools on demand
             self.assertIn("21.1 GB free VRAM", text)
             low = self.llm.hardware_context_hint(15.3, "cuda", free_vram_mib=12000, projector_bytes=self.proj27)
             self.assertIn("only 11.7 GB", low)

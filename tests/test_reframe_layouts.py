@@ -972,8 +972,6 @@ class TestTool(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.assertIn("reframe_strips", module.DOMAINS["vse"])
-        text = (_ADDON / "agent_controller.py").read_text(encoding="utf-8")
-        self.assertIn('"reframe_strips"', re.search(r'"vse": frozenset\(\{(.*?)\}\)', text, re.S).group(1))
         self.assertIn("reframe_strips", (_ADDON / "skills" / "mcp_tools.md").read_text(encoding="utf-8"))
         self.assertIn("reframe_strips", (_TOOLS / "load_tools.py").read_text(encoding="utf-8"))
         self.assertIn('"reframe_strips"', (_ADDON / "coworker_api.py").read_text(encoding="utf-8"))

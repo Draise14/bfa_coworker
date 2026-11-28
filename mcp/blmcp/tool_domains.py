@@ -13,8 +13,11 @@ appear after ``load_tools(domains)``, which tells the client the list changed
 (``notifications/tools/list_changed``).  Hidden tools stay callable by name,
 and a tool in no domain is always listed, so nothing can get lost.
 
-The sets are the same as the local loop's (``agent_controller._SURFACE_TOOLS``
-and ``_TOOL_DOMAINS``); ``tests/test_tool_coverage.py`` keeps them equal.
+#651: ``DOMAINS`` is the ONE hand-edited tool-to-domain map.  The local loop
+reads this file by path (``agent_controller._load_tool_domains``: ``mcp/blmcp``
+in a checkout, ``vendor/blmcp`` in the zip), so keep it importable with ``typing``
+alone.  ``SURFACE`` still has a twin, ``agent_controller._SURFACE_TOOLS`` (the loop
+adds its own tools); ``tests/test_tool_coverage.py`` keeps those two equal.
 """
 
 __all__ = (

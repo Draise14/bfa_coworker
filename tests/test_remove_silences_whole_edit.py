@@ -634,10 +634,6 @@ class TestTool(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.assertIn("remove_silences", module.DOMAINS["vse"])
-        source = (_ROOT / "addon" / "bfa_coworker" / "agent_controller.py").read_text(encoding="utf-8")
-        block = source[source.index('"vse": frozenset({'):]
-        block = block[:block.index("}),")]
-        self.assertIn('"remove_silences"', block)
         docs = (_ROOT / "addon" / "bfa_coworker" / "skills" / "mcp_tools.md").read_text(encoding="utf-8")
         self.assertIn("`remove_silences(", docs)
 

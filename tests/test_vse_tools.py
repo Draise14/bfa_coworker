@@ -480,12 +480,9 @@ class TestRegistration(unittest.TestCase):
 
     def test_in_the_vse_domain_of_both_lists(self):
         server = (_REPO / "mcp" / "blmcp" / "tool_domains.py").read_text(encoding="utf-8")
-        loop = (_REPO / "addon" / "bfa_coworker" / "agent_controller.py").read_text(encoding="utf-8")
         server_vse = re.search(r'"vse": frozenset\(\{(.*?)\}\)', server, re.S).group(1)
-        loop_vse = re.search(r'"vse": frozenset\(\{(.*?)\}\)', loop, re.S).group(1)
         for name in _NAMES:
             self.assertIn('"{:s}"'.format(name), server_vse, name)
-            self.assertIn('"{:s}"'.format(name), loop_vse, name)
             self.assertTrue((_TOOLS / (name + ".py")).is_file() and (_TOOLS / (name + "_toolcode.py")).is_file())
 
     def test_the_read_tools_never_ask_in_ask_mode(self):

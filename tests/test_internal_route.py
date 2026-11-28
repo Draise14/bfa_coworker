@@ -245,10 +245,11 @@ class TestModelCantReachTheRoute(unittest.TestCase):
 
     def test_not_in_the_agents_tool_list(self):
         source = (_ADDON / "agent_controller.py").read_text(encoding="utf-8")
-        for start, end in (("_SURFACE_TOOLS = frozenset({", "})"),
-                           ("_TOOL_DOMAINS: dict[str, frozenset[str]] = {", "_DOMAIN_KEYWORDS")):
-            i = source.index(start)
-            self.assertNotIn(route.TOOL, source[i:source.index(end, i)])
+        i = source.index("_SURFACE_TOOLS = frozenset({")
+        self.assertNotIn(route.TOOL, source[i:source.index("})", i)])
+        # #651: the domains live in the server's file, which the add-on reads.
+        domains = (_REPO / "mcp" / "blmcp" / "tool_domains.py").read_text(encoding="utf-8")
+        self.assertNotIn(route.TOOL, domains)
 
     def test_the_key_is_in_memory_only(self):
         self.assertGreaterEqual(len(route._KEY), 32)

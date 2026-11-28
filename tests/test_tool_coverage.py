@@ -8,7 +8,8 @@ Tool-coverage guard (issue #74, D17).
 Every real MCP tool must be reachable from at least one of:
 
 * ``_SURFACE_TOOLS`` (always offered), or
-* a ``_TOOL_DOMAINS`` entry (offered when that domain is loaded).
+* a domain of ``mcp/blmcp/tool_domains.py`` (offered when that domain is loaded;
+  #651: the add-on's ``_TOOL_DOMAINS`` is read from that same file).
 
 A tool that appears in neither can never be selected by the model -- it is
 invisible even in local mode, and would stay invisible under remote tool
@@ -23,6 +24,7 @@ Run with::
 
 __all__ = ()
 
+import importlib.util
 import re
 import unittest
 from pathlib import Path
@@ -30,6 +32,7 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[1]
 _AC = _REPO / "addon" / "bfa_coworker" / "agent_controller.py"
 _TOOLS_DIR = _REPO / "mcp" / "blmcp" / "tools"
+_TOOL_DOMAINS = _REPO / "mcp" / "blmcp" / "tool_domains.py"
 
 
 def _region(text: str, start_marker: str, end_marker: str) -> str:
@@ -68,13 +71,19 @@ def _mcp_tool_names() -> set[str]:
     return names
 
 
+def _server_domains() -> dict:
+    spec = importlib.util.spec_from_file_location("_tool_domains_coverage", _TOOL_DOMAINS)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.DOMAINS
+
+
 class TestToolCoverage(unittest.TestCase):
 
     def test_every_mcp_tool_is_reachable(self):
         text = _AC.read_text(encoding="utf-8")
         surface = _quoted_names(_region(text, "_SURFACE_TOOLS = frozenset({", "})"))
-        domains_block = _region(text, "_TOOL_DOMAINS: dict[str, frozenset[str]] = {", "_DOMAIN_KEYWORDS")
-        domain_names = _quoted_names(domains_block)
+        domain_names = set().union(*_server_domains().values())
         reachable = surface | domain_names
 
         mcp_tools = _mcp_tool_names()
@@ -105,14 +114,10 @@ class TestServerDomainsMatchTheLoop(unittest.TestCase):
         server_surface = {c.value for c in _ast.walk(values["SURFACE"]) if isinstance(c, _ast.Constant)}
         # The loop's own (not MCP tools) aren't in the server's set.
         self.assertEqual(server_surface, surface - {"execute_blender_plan", "list_blender_templates"})
-        domains_block = _region(text, "_TOOL_DOMAINS: dict[str, frozenset[str]] = {", "_DOMAIN_KEYWORDS")
-        loop = {}
-        server = {k.value: {c.value for c in _ast.walk(v) if isinstance(c, _ast.Constant)}
-                  for k, v in zip(values["DOMAINS"].keys, values["DOMAINS"].values)}
-        for domain, names in server.items():
-            block = _region(domains_block, '"{:s}": frozenset({{'.format(domain), "})")
-            loop[domain] = _quoted_names(block) - {domain}
-        self.assertEqual(server, loop)
+        # #651: the loop keeps NO copy of the domains; it reads the server's file.
+        self.assertNotIn('"vse": frozenset', text)
+        self.assertIn("_TOOL_DOMAINS: dict[str, frozenset[str]] = _load_tool_domains()", text)
+        self.assertEqual(text.count("_TOOL_DOMAINS: dict[str, frozenset[str]]"), 1)
 
 
 if __name__ == "__main__":

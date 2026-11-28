@@ -32,6 +32,7 @@ __all__ = ()
 import json
 import re
 import unittest
+from unittest import mock
 
 import highlights_texts_613 as TEXTS
 import test_wand_remove_silences as W
@@ -570,6 +571,45 @@ class TestGroupsAndKind(unittest.TestCase):
         self.assertLess(len(ranked), len(cands))           # the group losers are out
         self.assertGreaterEqual(len(ranked), 5)
         self.assertEqual(kind, "talk")
+
+    def test_grouped_ranking_comes_down_to_one_final_group(self):
+        ss = simple_sentences(400)
+        for context in (8192, 4096):
+            for n in (10, 15, 30, 40):
+                by_n, cands = self.candidates(ss, n)
+                group = HL.rank_group_size(context)
+                if n <= group:
+                    continue
+                transport, calls = self.scripted(lambda text: {"hook": 1, "alone": 1, "complete": 1,
+                                                              "one_idea": 1, "energy": 1, "tease": 1})
+                ask = AJ.make_asker(("http://127.0.0.1:1/v1/chat/completions", "", ""), transport)
+                chunk_ids = []
+                real = HL._score_group
+
+                def spy(run, chapter, ch, *a, _real=real, **kw):
+                    chunk_ids.append({c["id"] for c in ch})
+                    return _real(run, chapter, ch, *a, **kw)
+                with mock.patch.object(HL, "_score_group", spy):
+                    ranked, _kind = HL.rank(HL._Run(ask, None, None), HL.load_chapter(), cands, ss, by_n, count=5,
+                                            context=context)
+                sizes = [len(re.findall(r"^Clip [A-Z]+:", c[1]["content"], re.M)) for c in calls]
+                label = "context %d, %d candidates, requests %s" % (context, n, sizes)
+                self.assertTrue(all(z <= group for z in sizes), label)
+                self.assertLessEqual(len(calls), HL.estimate_requests(ss, context, 5, n)["rank"], label)
+                last = sizes[-1]
+                self.assertEqual(last, len(ranked), label)       # the last request holds every survivor
+                times: dict[int, int] = {}                      # how often each id was scored = its round
+                by_round: dict[int, set] = {}
+                for ids in chunk_ids:
+                    r = times.get(next(iter(ids)), 0)
+                    for i in ids:
+                        times[i] = times.get(i, 0) + 1
+                    by_round.setdefault(r, set()).update(ids)
+                totals = [len(by_round[r]) for r in sorted(by_round)]
+                self.assertEqual(totals[0], n, label)
+                for before, after in zip(totals, totals[1:]):
+                    self.assertLess(after, before, label)
+                self.assertLessEqual(totals[-1], group, label)
 
     def test_unscored_pieces_sink_and_are_labelled(self):
         ss = simple_sentences(60)

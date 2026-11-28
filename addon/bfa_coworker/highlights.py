@@ -7,7 +7,7 @@
 Highlights H3 (#613): find and rank.  The two model passes, and the checks around them, that turn the
 numbered sentences of the scene reader (#611) into a short list of picks.  No Blender needed.
 
-The model never sees or returns a time.  It names sentence numbers; the code turns them into frames.
+The model sees the length and start of each sentence but never returns a time.  It names sentence numbers; the code turns them into frames.
 
 1. **Find** (per window of sentences, :func:`scene_reader.windows`): the model names up to three
    ranges (first sentence, last sentence, a short label).
@@ -46,6 +46,7 @@ __all__ = (
     "merge_candidates",
     "parse_chapter",
     "rank",
+    "rank_group_size",
     "rank_schema",
     "total",
 )
@@ -74,9 +75,9 @@ CANDIDATE_WORDS = 220         # the text of a candidate shown to the ranker (hea
 CANDIDATE_HEAD = 140
 CANDIDATE_TAIL = 70
 MAX_RANK_GROUP = 20
-ANSWER_TOKENS_PER_CANDIDATE = 110
+ANSWER_TOKENS_PER_CANDIDATE = 150
 OPENING_WORDS = 120           # what the ranker reads of the start of the video when the kind is Auto
-MAX_RANK_ROUNDS = 3
+MAX_RANK_ROUNDS = 8            # a safety cap; every round at least halves the pool, so it is rarely reached
 FIND_MAX_TOKENS = 400
 SCORE_MAX = 3
 _FULL_STOP = (".", "!", "?")
@@ -363,12 +364,17 @@ def estimate_requests(sentences: Sequence[dict], context: int | None = None, cou
         ranks += groups
         if groups == 1:
             break
-        left = groups * _keep(count, groups, group)
+        nxt = groups * _keep(count, groups, group)
+        if nxt >= left:
+            break
+        left = nxt
     return {"find": len(wins), "rank": ranks, "total": len(wins) + ranks}
 
 
 def _keep(count: int, groups: int, group: int) -> int:
-    return max(1, min(group - 1, max(2, math.ceil(2.0 * count / groups))))
+    """How many each of *groups* groups passes on: few enough that all survivors fit one group, so the
+    next round is the last.  *count* is kept for the signature; the fit decides."""
+    return max(1, group // max(1, groups))
 
 
 # -- the passes --------------------------------------------------------------------------------------
@@ -529,7 +535,7 @@ def rank(run_or_ask: Any, chapter: dict, cands: Sequence[dict], sentences: Seque
             ordered = sorted(ch, key=lambda c: (-known[c["id"]]["total"], c["start"]))
             survivors += ordered[:_keep(count, n_groups, group_size)] if n_groups > 1 else ordered
         final = survivors + unprocessed
-        if n_groups == 1:
+        if n_groups == 1 or len(survivors) >= len(pool):
             break
         pool = survivors
     final_kind = decided or DEFAULT_KIND

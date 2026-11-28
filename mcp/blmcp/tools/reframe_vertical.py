@@ -33,6 +33,8 @@ def register(mcp: FastMCP) -> None:
         in_copy: bool = True,
         resolution: str = "1080x1920",
         reset: bool = False,
+        follow: str = "",
+        layout: str = "auto",
     ) -> dict[str, object]:
         """
         Make the Sequencer's edit vertical (9:16), one undo step.
@@ -50,10 +52,14 @@ def register(mcp: FastMCP) -> None:
                 Sequencer, leaving the 16:9 edit as it is.
             resolution: Output size, e.g. 1080x1920, 720x1280, 2160x3840.
             reset: Give strips that already have a framing fresh framing too.
+            follow: "auto", "face" or "screen": find the subject (a face, what moves on screen)
+                and key the crop to it; CROP only. Empty: off.
+            layout: With follow: "auto" (two crops, top and bottom, when two subjects are apart),
+                "single" or "split".
 
         Returns:
             ``status``, the ``scene`` used (and ``source_scene``, ``copied``), ``mode``,
             ``resolution``, ``strips_changed``, ``strips_kept`` and a ``message``.
         """
-        p = Params(strips=list(strips or []), mode=mode, in_copy=in_copy, resolution=resolution, reset=reset)
+        p = Params(strips=list(strips or []), mode=mode, in_copy=in_copy, resolution=resolution, reset=reset, follow=follow, layout=layout)
         return send_code(toolcode_format_call(_TOOL_CALL, p), strict_json=True)

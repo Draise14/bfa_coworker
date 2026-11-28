@@ -50,6 +50,7 @@ WAND_OPERATORS = (
     "bfacw.make_vertical",
     "bfacw.reframe",
     "bfacw.reframe_follow_subject",
+    "bfacw.reframe_follow_stop",
     "bfacw.reframe_layout",
     "bfacw.reframe_swap",
     "bfacw.reframe_reset",

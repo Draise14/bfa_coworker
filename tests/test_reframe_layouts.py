@@ -54,6 +54,7 @@ SOURCES = ((1920, 1080), (1440, 1080), (1000, 1000), (3840, 1600), (1080, 1920))
 FRAMES = ((1080, 1920), (1080, 1080), (720, 1280), (1920, 1080), (1081, 1919), (541, 961))
 LAYOUT_IDS = rl.buildable()
 SPLITS = ("split_half", "split_top", "split_bottom")
+SPLIT_LIKE = SPLITS + ("track_all",)
 
 
 class TestLayoutTable(unittest.TestCase):
@@ -63,8 +64,8 @@ class TestLayoutTable(unittest.TestCase):
                          ["full", "full_blur", "full_tracked", "split_half", "split_top", "split_bottom",
                           "track_all"])
         self.assertEqual(rl.buildable(), ("full", "full_blur", "full_tracked", "split_half", "split_top",
-                                          "split_bottom"))
-        self.assertFalse(rl.layout("track_all").ready)
+                                          "split_bottom", "track_all"))
+        self.assertTrue(rl.layout("track_all").ready)
 
     def test_tooltips_say_what_they_do_and_that_no_agent_is_needed(self):
         for item in rl.LAYOUTS:
@@ -77,7 +78,9 @@ class TestLayoutTable(unittest.TestCase):
         tracked = rl.layout("full_tracked").description
         self.assertTrue(tracked.endswith("\nWorks without the agent started, except the tracking, which needs a "
                                           "connected vision-capable model."))
-        self.assertTrue(rl.layout("track_all").description.endswith("\nNeeds subject finding (coming)."))
+        self.assertTrue(rl.layout("track_all").description.endswith(
+            "\nWorks without the agent started, except the faces, which need a connected vision-capable "
+            "model (without one it follows what moves)."))
 
     def test_every_layout_has_its_icon(self):
         icons = _import("wand.icons")
@@ -265,6 +268,8 @@ class Stand(ra.Backend):
     def __init__(self, source=(1920, 1080), canvas=(1080, 1920), tracking="started"):
         self.source, self.canvas, self.tracking = source, canvas, tracking
         self.log = []
+        self.cleared = []
+        self.tracked_names = []
 
     def source_size(self, strip):
         return self.source
@@ -310,9 +315,14 @@ class Stand(ra.Backend):
     def reset_full(self, scene, strip):
         strip.keyed = False
 
+    def clear_keys(self, scene, strip):
+        self.cleared.append(strip.name)
+        strip.part_keys = False
+
     def start_tracking(self, scene, strips):
         if self.tracking != "started":
             raise ra.LayoutError(self.tracking)
+        self.tracked_names = [s.name for s in strips]
         for strip in strips:
             strip.keyed = True
         return "Following the subject in {:d} shot(s)".format(len(strips))
@@ -356,7 +366,7 @@ class TestReplace(unittest.TestCase):
             # the tag never says Tracked: that is read from the keys
             self.assertEqual(ra.tag_of(clip)["layout"], layout_id if layout_id != "full_tracked" else "full")
             names = sorted(s.name for s in strips)
-            if layout_id in SPLITS:
+            if layout_id in SPLIT_LIKE:
                 self.assertEqual(names, ["Caption 1", "clip", "clip (bottom)", "talk"])
                 twin = next(s for s in strips if s.name == "clip (bottom)")
                 self.assertEqual((twin.left_handle, twin.right_handle), (1, 76))
@@ -440,9 +450,6 @@ class TestReplace(unittest.TestCase):
         out = _apply(strips, "thirds", ["clip"])
         self.assertEqual(out["status"], "error")
         self.assertIn("split_half", out["message"])
-        out = _apply(strips, "track_all", ["clip"])
-        self.assertEqual(out["status"], "error")
-        self.assertIn("needs subject finding (coming)", out["message"])
         self.assertEqual(_snap(strips), before)
 
     def test_locked_and_retimed_strips_are_skipped_and_named(self):
@@ -612,6 +619,55 @@ class TestSwapAndReset(unittest.TestCase):
         self.assertEqual([r for r in now if r[0] == "clip (bottom)"], [r for r in before if r[0] == "clip (bottom)"])
         self.assertEqual(strips[0].transform.offset_x, 33)
         ra.reset_framing(None, strips, ["clip", "clip (bottom)"], Stand())
+        self.assertEqual(_snap(strips), before)
+
+    def test_track_all_builds_the_split_and_asks_for_tracking_of_the_top_strip(self):
+        strips = _edit()
+        backend = Stand()
+        out = _apply(strips, "track_all", ["clip"], backend)
+        self.assertEqual(out["status"], "ok")
+        self.assertEqual(out["created"], ["clip (bottom)"])
+        self.assertEqual(ra.current_layout(strips[0], backend), "track_all")
+        self.assertIn("Following the subject in 1 shot(s)", out["tracking"])
+        self.assertEqual(backend.tracked_names, ["clip"])
+        # The parts start as the plain half and half crops (what a fixed split gives) until the keys come.
+        halves = rl.plan("track_all", 1920, 1080, 1080, 1920).parts
+        self.assertEqual((strips[0].transform.offset_x, strips[0].transform.offset_y), halves[0].offset)
+
+    def test_track_all_without_a_model_still_builds_and_says_so(self):
+        strips = _edit()
+        out = _apply(strips, "track_all", ["clip"], Stand(tracking="Nothing to follow"))
+        self.assertEqual(out["status"], "ok")
+        self.assertIn("Tracking did not start (Nothing to follow)", out["message"])
+        self.assertEqual(ra.tag_of(strips[0])["layout"], "track_all")
+
+    def test_leaving_track_all_clears_the_keys_of_both_parts(self):
+        strips = _edit()
+        backend = Stand()
+        _apply(strips, "track_all", ["clip"], backend)
+        twin = next(s for s in strips if s.name == "clip (bottom)")
+        strips[0].part_keys = twin.part_keys = True
+        _apply(strips, "split_half", ["clip"], backend)
+        self.assertFalse(getattr(strips[0], "part_keys", False))
+        self.assertNotIn("clip (bottom)", [s.name for s in strips if getattr(s, "part_keys", False)])
+        self.assertIn("clip", backend.cleared)
+
+    def test_reset_of_a_track_all_part_drops_its_keys_first(self):
+        strips = _edit()
+        backend = Stand()
+        _apply(strips, "track_all", ["clip"], backend)
+        backend.cleared.clear()
+        out = ra.reset_framing(None, strips, ["clip (bottom)"], backend)
+        self.assertEqual(out["changed"], ["clip (bottom)"])
+        self.assertEqual(backend.cleared, ["clip (bottom)"])
+
+    def test_swap_is_refused_for_track_all(self):
+        strips = _edit()
+        _apply(strips, "track_all", ["clip"])
+        before = _snap(strips)
+        out = ra.swap_parts(None, strips, ["clip"], Stand())
+        self.assertEqual(out["status"], "nothing")
+        self.assertIn("Swap is not available for Track All", out["message"])
         self.assertEqual(_snap(strips), before)
 
     def test_reset_of_full_frame_and_tracked(self):

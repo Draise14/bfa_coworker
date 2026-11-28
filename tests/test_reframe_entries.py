@@ -83,7 +83,7 @@ class TestEntries(unittest.TestCase):
         got = self._real()
         layouts = [e for e in got if isinstance(e, E.LayoutEntry)]
         self.assertEqual([e.item.id for e in layouts if e.enabled], list(rl.buildable()))
-        self.assertEqual([e.item.id for e in layouts if not e.enabled], ["track_all"])
+        self.assertEqual([e.item.id for e in layouts if not e.enabled], [])
         self.assertEqual([e.operator for e in got[-2:]], ["bfacw.reframe_swap", "bfacw.reframe_reset"])
         self.assertEqual(got.index(next(e for e in layouts if e.item.id == "track_all")), len(layouts) - 1)
 
@@ -106,12 +106,11 @@ class TestEntries(unittest.TestCase):
             self.assertEqual(pressed, [item.id])
         self.assertFalse(any(_draw(e, True)[0][1]["depress"] for e in self._real("") if isinstance(e, E.LayoutEntry)))
 
-    def test_track_all_is_greyed_out(self):
+    def test_track_all_is_enabled_now_that_subjects_are_found(self):
         got = self._real()
         track = next(e for e in got if isinstance(e, E.LayoutEntry) and e.item.id == "track_all")
-        self.assertFalse(track.enabled)
-        self.assertFalse(_draw(track, True)[0][3])
-        self.assertTrue(all(_draw(e, True)[0][3] for e in got if e is not track))
+        self.assertTrue(track.enabled)
+        self.assertTrue(all(_draw(e, True)[0][3] for e in got))
 
     def test_icons_are_pngs_with_the_blender_fallback(self):
         entry = self._real("full")[0]

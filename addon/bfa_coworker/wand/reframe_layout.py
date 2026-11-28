@@ -12,8 +12,8 @@ A *layout* says how one picture (``sw`` x ``sh`` pixels) fills the frame (``fw``
 * ``full_tracked``: one part that follows the subject (today's Follow Subject);
 * ``split_half`` / ``split_top`` / ``split_bottom``: two parts, one above the other, 1/2 + 1/2,
   2/3 + 1/3, 1/3 + 2/3 of the frame's height, each a centred cover crop of the whole picture;
-* ``track_all``: a split whose parts each follow their own subject (needs the subject finding of
-  #592: listed here, not buildable yet).
+* ``track_all``: a split whose parts each follow their own subject (the subject finding of #592, in
+  ``subject_find``; the parts are keyed by ``reframe_subjects``).
 
 The first three are drawn by the Reframe compositor modifier (``reframe.py``); a split is two
 ordinary strips of the same source whose ``crop`` and ``transform`` this module computes.
@@ -118,10 +118,10 @@ LAYOUTS: tuple[Layout, ...] = (
            "move in the preview.",
            ((1, 3), (2, 3)), "", False, "reframe_split_bottom", "ALIGN_BOTTOM"),
     Layout("track_all", "Track All",
-           "In a split, every part follows its own subject. Until then the parts keep a fixed crop you can "
-           "move.",
-           ((1, 2), (1, 2)), "", True, "reframe_track_all", "TRACKING", False,
-           line="Needs subject finding (coming)."),
+           "Two crops of the same footage, one above the other, each following its own subject: the face on top, "
+           "what changes on the screen below. It looks at a few frames of each shot first.",
+           ((1, 2), (1, 2)), "", True, "reframe_track_all", "TRACKING",
+           needs="the faces, which need a connected vision-capable model (without one it follows what moves)"),
 )
 _SHORT = {'full': 'Full Frame', 'full_blur': 'Blur Fill', 'full_tracked': 'Tracked', 'split_half': 'Half and Half', 'split_top': 'Top Bias', 'split_bottom': 'Bottom Bias', 'track_all': 'Track All'}
 LAYOUTS = tuple(Layout(**{**item.__dict__, "short": _SHORT[item.id]}) for item in LAYOUTS)

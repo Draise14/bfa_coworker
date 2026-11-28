@@ -7,9 +7,14 @@ Skills Loader -- injects version-aware built-in skill files into the system prom
 
 Always-loaded skills (injected into every conversation):
 - Version-specific API changes (``blender_*.md``, cumulative <= current version)
-- Best practices (``best_practices.md``)
-- Naming conventions (``naming.md``)
-- MCP tool guidance (``mcp_tools.md``)
+
+Skills on demand (#311, #635): the rest (best practices, MCP tool guide, naming,
+asset browser and the domain skills) are not pasted into the prompt.  The prompt
+carries a short index (name + one line each, ``get_skill_index()``) and the model
+reads a skill with the ``load_skill`` tool (``load_skill_body(name)``).  The index
+and the loader live in ``mcp/blmcp/skill_index.py`` (one implementation for the
+server's External Agent / External Harness and this add-on).  With
+``on_demand=False`` ``get_always_loaded_skills`` still returns the old full block.
 
 Searchable domain skills live in ``mcp/blmcp/data/skills/`` and are
 discovered by the LLM through the existing bundled-docs search tools.
@@ -18,11 +23,14 @@ discovered by the LLM through the existing bundled-docs search tools.
 __all__ = (
     "get_always_loaded_skills",
     "get_domain_skills",
+    "get_skill_index",
+    "load_skill_body",
     "get_user_skills",
     "list_loaded_skills",
     "clear_cache",
 )
 
+import importlib.util
 from pathlib import Path
 
 # Approximate characters per token -- must match agent_controller._CHARS_PER_TOKEN.
@@ -55,6 +63,7 @@ def get_always_loaded_skills(
     bpy_version: tuple[int, int, int] | None = None,
     custom_text: str = "",
     max_tokens: int | None = None,
+    on_demand: bool = False,
 ) -> str:
     """Return concatenated built-in skill content for the system prompt.
 
@@ -68,6 +77,10 @@ def get_always_loaded_skills(
     still make it.  This keeps the most important guidance on a small window
     instead of dropping the entire skills block.
 
+    *on_demand* -- skills on demand (#311): only the version-drift files are
+    returned; the other files are reached through ``get_skill_index()`` and
+    ``load_skill_body()``.
+
     Result is cached until ``clear_cache()`` is called.
     """
     # pylint: disable=global-statement
@@ -76,6 +89,7 @@ def get_always_loaded_skills(
     key = (
         bpy_version[1] if bpy_version and len(bpy_version) > 1 else None,
         max_tokens,
+        bool(on_demand),
     )
     if (_skills_cache is not None and _skills_list is not None
             and _skills_cache_key == key):
@@ -112,9 +126,11 @@ def get_always_loaded_skills(
             if _version_loaded(ver_part, _current):
                 _add(_read_skill(fname), fname.name)
 
-    # 2. Always-loaded reference files, in priority order.
-    for name in _ALWAYS_FILES:
-        _add(_read_skill(skills_dir / name), name)
+    # 2. Always-loaded reference files, in priority order (not on demand: those
+    #    are in the index and load with load_skill).
+    if not on_demand:
+        for name in _ALWAYS_FILES:
+            _add(_read_skill(skills_dir / name), name)
 
     _skills_cache = "\n\n".join(parts) if parts else ""
     _skills_list = loaded
@@ -203,6 +219,47 @@ def _build_final(built_in: str, custom_text: str) -> str:
     if custom_text and custom_text.strip():
         result += "\n\n## User Custom Skills\n{:s}".format(custom_text.strip())
     return result
+
+
+# -- Skills on demand (#311): the index and the loader ----------------
+# Both live in mcp/blmcp/skill_index.py (stdlib only), read by path like
+# tool_domains.py: the dev checkout's mcp/blmcp or the zip's vendor/blmcp.
+
+_index_mod: object = None
+
+
+def _skill_index_module():
+    """The ``skill_index`` module, or ``None`` when its file is not found."""
+    # pylint: disable=global-statement
+    global _index_mod
+    if _index_mod is None:
+        this_dir = Path(__file__).resolve().parent
+        for path in (this_dir.parent.parent.parent / "mcp" / "blmcp" / "skill_index.py",
+                     this_dir.parent / "vendor" / "blmcp" / "skill_index.py"):
+            if path.is_file():
+                spec = importlib.util.spec_from_file_location("_bfacw_skill_index", str(path))
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                _index_mod = module
+                break
+        else:
+            _index_mod = False
+    return _index_mod or None
+
+
+def get_skill_index() -> str:
+    """The skill index for the prompt: each on-demand skill's name and one line.
+
+    Empty when no skill file or module is found (then nothing is promised that
+    ``load_skill`` cannot deliver)."""
+    mod = _skill_index_module()
+    return mod.get_skill_index() if mod else ""
+
+
+def load_skill_body(name: str) -> str | None:
+    """A skill's full text by index name, ``None`` for an unknown name."""
+    mod = _skill_index_module()
+    return mod.load_skill_body(name) if mod else None
 
 
 # -- Domain-to-skill mapping ----------------------------------------

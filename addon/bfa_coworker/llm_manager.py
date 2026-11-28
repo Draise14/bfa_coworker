@@ -1971,7 +1971,11 @@ def autodetect_gpu_layers(model_path: Path, context_size: int, *, free_mib: "int
 # "hangs") when its need came within ~1 GB of the card's free memory: hence the
 # margin, the same as llama.cpp's own --fit-target default.
 
-_FIRST_REQUEST_TOKENS = 18432       # the first request on Bforartists: 18,359 tokens (#543; #544 trims it)
+# The first request of a new Local chat: 18,359 tokens on Bforartists (#543) before skills and tools
+# went on demand (#635, #311); now ~10.0K by the add-on's own count (chars / 3.5: system text 1.4K, the
+# version-drift skills 2.4K, the skill index 0.4K, 29 core tools 5.5K) plus ~10% for a tokenizer that
+# counts JSON denser.  Tools of the request's domains come on top; a request too big is made to fit (#544).
+_FIRST_REQUEST_TOKENS = 11264
 _REPLY_ROOM_TOKENS = 4096           # a reply on top of it (--no-context-shift: both must fit)
 _VRAM_MARGIN_MIB = 1024
 _DESKTOP_VRAM_MIB = 1024            # the desktop and Blender, when only the card's total is known
@@ -2238,14 +2242,20 @@ def preset_profile(preset: "ModelPreset | None") -> "dict[str, float] | None":
             "recurrent_bytes": float(preset.recurrent_bytes), "from_header": 1.0}
 
 
+# The context the presets' memory texts describe (#558).  It was the smallest context that held the
+# first request (32K); that is 16K now (#635), but the texts keep describing a comfortable size, so the
+# card notes users read do not change with the floor.
+_PRESET_TEXT_CTX = 32768
+
+
 def preset_vram_mib(preset: "ModelPreset", kv_q8: bool, ctx: int = 0, slots: int = 1) -> int:
     """:func:`estimate_server_vram_mib` for *preset* from its header numbers
-    (0 when it has none); *ctx* 0 is :func:`min_agent_ctx`."""
+    (0 when it has none); *ctx* 0 is :data:`_PRESET_TEXT_CTX` (32K)."""
     profile = preset_profile(preset)
     if profile is None:
         return 0
     return estimate_server_vram_mib(preset.file_bytes, preset.projector_bytes, profile,
-                                    ctx or min_agent_ctx(), kv_q8, slots)
+                                    ctx or _PRESET_TEXT_CTX, kv_q8, slots)
 
 
 def _smallest_card_gb(need_mib: int) -> "int | None":
@@ -2256,7 +2266,7 @@ def _smallest_card_gb(need_mib: int) -> "int | None":
 def preset_memory_note(preset: "ModelPreset") -> tuple[str, str]:
     """``(vram line, card note)`` for *preset*, both from its header numbers.
 
-    At :func:`min_agent_ctx` (32K), one slot, every layer on the GPU, with the
+    At :data:`_PRESET_TEXT_CTX` (32K), one slot, every layer on the GPU, with the
     projector; the 8-bit and 16-bit KV cache figures, rounded up.  A card size
     is named only when the estimate plus the plan's 1 GB margin and ~1 GB for
     the desktop fits in it.  With sliding-window layers the estimate counts
@@ -2266,7 +2276,7 @@ def preset_memory_note(preset: "ModelPreset") -> tuple[str, str]:
     f16 = preset_vram_mib(preset, False)
     if not q8:
         return "", ""
-    ctx = ctx_preset_label(min_agent_ctx())
+    ctx = ctx_preset_label(_PRESET_TEXT_CTX)
     upto = "at most " if preset.sliding_window else ""
     extras = ["every layer on the GPU"]
     if preset.projector_bytes:

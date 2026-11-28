@@ -110,7 +110,7 @@ _prompt_preflight = _extract_func(
     },
 )
 _BUILTIN_SKILLS_RE = re.compile(
-    r"\n\n## Built-in Skills\n.*?(?=\n\n## |\Z)", re.DOTALL)
+    r"\n\n## Built-in Skills\n.*?(?=\n\n## (?:Skills on demand|Project Rules|Instructions)\n|\Z)", re.DOTALL)
 _strip_builtin_skills = _extract_func(
     _src, "_strip_builtin_skills", {"_BUILTIN_SKILLS_RE": _BUILTIN_SKILLS_RE})
 _collapse_poll_failed_error = _extract_func(

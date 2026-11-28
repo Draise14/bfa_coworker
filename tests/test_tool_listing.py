@@ -2133,6 +2133,27 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "load_skill",
+        "description": "\n"
+"        Read a skill (reference notes for a kind of task) from the list in your instructions,\n"
+"        before the task it covers. No name: lists them.\n"
+"\n"
+"        Args:\n"
+"            name: A skill name from the list, e.g. \"materials\".\n"
+"        ",
+        "inputSchema": {
+            "properties": {
+                "name": {
+                    "default": "",
+                    "title": "Name",
+                    "type": "string"
+                }
+            },
+            "title": "load_skillArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "load_tools",
         "description": "\n"
 "        Make a group of specialised tools available when the task needs them. If a tool\n"

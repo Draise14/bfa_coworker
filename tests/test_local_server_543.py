@@ -369,15 +369,21 @@ class TestSizingRule(unittest.TestCase):
         roomy = plan(self.model27, self.proj27, self.p27, 21612)        # ~2.5 GB used elsewhere
         self.assertEqual((roomy.ctx, roomy.kv_q8, roomy.fits), (32768, False, True))
         tight = plan(self.model27, self.proj27, self.p27, 20092)        # ~4 GB used: f16 32K spilled
-        self.assertEqual((tight.ctx, tight.kv_q8, tight.fits), (16384, False, True))     # #635: 16K is a size now
+        self.assertEqual((tight.ctx, tight.kv_q8, tight.fits), (32768, True, True))
         full = plan(self.model27, self.proj27, self.p27, 17566)         # ~6.5 GB used
-        self.assertEqual((full.ctx, full.kv_q8, full.fits), (16384, True, False))
+        self.assertEqual((full.ctx, full.kv_q8, full.fits), (32768, True, False))
         big = plan(self.model27, self.proj27, self.p27, 40000)          # a 48 GB card
         self.assertEqual((big.ctx, big.kv_q8), (65536, False))          # capped at 64K
         unknown = plan(self.model27, self.proj27, self.p27, None)
-        self.assertEqual((unknown.ctx, unknown.fits), (16384, None))
+        self.assertEqual((unknown.ctx, unknown.fits), (32768, None))
         capped = plan(self.model27, self.proj27, self.p27, 40000, ctx_cap=16384)
         self.assertEqual(capped.ctx, 16384)                             # the model's own window
+
+    def test_16k_is_recommended_only_when_32k_fits_in_neither_kv_type(self) -> None:
+        plan = self.llm.plan_server_memory
+        small = plan(self.model27, self.proj27, self.p27, 18950)       # neither 32K f16 nor 32K q8 fits
+        self.assertEqual((small.ctx, small.kv_q8, small.fits), (16384, True, True))
+        self.assertEqual(self.llm.min_agent_ctx(), 16384)              # the warning's floor stays 16K
 
     def test_forced_q8_skips_16_bit(self) -> None:
         p = self.llm.plan_server_memory(self.model27, self.proj27, self.p27, 21612, kv_q8_forced=True)
@@ -406,8 +412,8 @@ class TestSizingRule(unittest.TestCase):
         with mock.patch.object(self.llm, "_detect_hardware_cached", lambda: (64.0, 24.0)), \
                 mock.patch.object(self.llm, "resolve_gpu_backend", lambda b: "cuda"):
             text = self.llm.hardware_context_hint(15.3, "cuda", free_vram_mib=21612, projector_bytes=self.proj27)
-            self.assertIn("16K", text)           # the fallback profile (no header): 32K f16 would not fit
-            self.assertIn("9K tokens", text)    # #635: the first request, now with skills and tools on demand
+            self.assertIn("32K", text)
+            self.assertIn("11K tokens", text)    # #635: the first request, now with skills and tools on demand
             self.assertIn("21.1 GB free VRAM", text)
             low = self.llm.hardware_context_hint(15.3, "cuda", free_vram_mib=12000, projector_bytes=self.proj27)
             self.assertIn("only 11.7 GB", low)

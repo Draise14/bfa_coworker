@@ -54,7 +54,8 @@ _DESCRIPTIONS: dict[str, str] = {
 }
 
 # Which skills go with which tool domain (``tool_domains.DOMAINS``): a loaded
-# domain's result points at them.  The add-on's ``get_domain_skills`` reads this too.
+# domain's result points at them (the add-on keeps the same map as file names for ``get_domain_skills``;
+# a test keeps the two equal).
 DOMAIN_SKILLS: dict[str, tuple[str, ...]] = {
     "animation": ("animation",),
     "material": ("materials",),

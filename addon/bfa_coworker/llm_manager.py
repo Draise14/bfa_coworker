@@ -1972,12 +1972,12 @@ def autodetect_gpu_layers(model_path: Path, context_size: int, *, free_mib: "int
 # margin, the same as llama.cpp's own --fit-target default.
 
 # The first request of a new Local chat: 18,359 tokens on Bforartists (#543) before skills and tools
-# went on demand (#635, #311); now ~8.6K by the add-on's own count (chars / 3.5: system text 1.4K, the
-# version-drift skills 2.4K, the skill index 0.4K, 29 core tools with short descriptions 4.1K, a short
+# went on demand (#635, #311); now ~11.0K by the add-on's own count (chars / 3.5: system text 1.4K, the
+# version-drift skills 2.4K, the skill index 0.4K, 29 core tools with short descriptions 6.6K, a short
 # message 0.2K) plus ~7% for a tokenizer that counts JSON denser.  The tools of the request's domains
 # come on top; a request too big is made to fit (#544).  tests/test_skills_on_demand_635.py checks it
-# against the real prompt and the real tool list.
-_FIRST_REQUEST_TOKENS = 9216
+# against the real prompt and the real tool list.  Above 12,288 the 16K preset would warn again.
+_FIRST_REQUEST_TOKENS = 11776
 _REPLY_ROOM_TOKENS = 4096           # a reply on top of it (--no-context-shift: both must fit)
 _VRAM_MARGIN_MIB = 1024
 _DESKTOP_VRAM_MIB = 1024            # the desktop and Blender, when only the card's total is known
@@ -2161,8 +2161,12 @@ def estimate_server_vram_mib(model_bytes: float, projector_bytes: float, profile
     return int(-(-total // _MIB))
 
 
+# What a recommendation starts at; min_agent_ctx() (16K) is only the floor of the "too small" warning.
+_RECOMMEND_CTX_FLOOR = 32768
+
+
 def min_agent_ctx() -> int:
-    """The smallest standard context that holds the first request plus a reply."""
+    """The smallest standard context that holds the first request plus a reply (the warning's floor)."""
     need = _FIRST_REQUEST_TOKENS + _REPLY_ROOM_TOKENS
     return next((s for s in ctx_preset_sizes if s >= need), ctx_preset_sizes[-1])
 
@@ -2203,13 +2207,17 @@ def plan_server_memory(model_bytes: float, projector_bytes: float, profile: dict
     floor = min(min_agent_ctx(), cap)
     top = min(_AUTO_CTX_MAX, cap)
     sizes = [s for s in ctx_preset_sizes if floor <= s <= top] or [floor]
+    # The recommendation starts at 32K (#635): 16K holds the first request but is a size for a small
+    # card; it is recommended only when 32K does not fit in either KV type.
+    wanted = [s for s in sizes if s >= _RECOMMEND_CTX_FLOOR] or sizes
     if avail is None:
-        return ServerMemoryPlan(sizes[0], bool(kv_q8_forced), need(sizes[0], bool(kv_q8_forced)), None, None)
-    for q8 in ((True,) if kv_q8_forced else (False, True)):
-        fitting = [s for s in sizes if need(s, q8) <= avail]
-        if fitting:
-            return ServerMemoryPlan(fitting[-1], q8, need(fitting[-1], q8), free_mib, True)
-    return ServerMemoryPlan(sizes[0], True, need(sizes[0], True), free_mib, False)
+        return ServerMemoryPlan(wanted[0], bool(kv_q8_forced), need(wanted[0], bool(kv_q8_forced)), None, None)
+    for pool in ((wanted, sizes) if wanted != sizes else (sizes,)):
+        for q8 in ((True,) if kv_q8_forced else (False, True)):
+            fitting = [s for s in pool if need(s, q8) <= avail]
+            if fitting:
+                return ServerMemoryPlan(fitting[-1], q8, need(fitting[-1], q8), free_mib, True)
+    return ServerMemoryPlan(wanted[0], True, need(wanted[0], True), free_mib, False)
 
 
 # ---------------------------------------------------------------------------

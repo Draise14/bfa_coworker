@@ -32,5 +32,7 @@ def register(mcp: FastMCP) -> None:
             if body is not None:
                 return body
         skills = skill_index.list_skills()
+        if not skills:
+            return "No skills are installed with this server."
         head = "Unknown skill {!r}. ".format(name) if name else ""
         return head + "Skills: " + "; ".join("{:s} ({:s})".format(n, line) for n, line in skills)

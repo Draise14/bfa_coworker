@@ -425,7 +425,7 @@ class TestMCPServer(unittest.TestCase):
         followed by nothing but the skill index (#311: names + one line, for ``load_skill``).
         """
         base = str(self._prompts["initial_instructions"])
-        self.assertTrue(self._instructions.startswith(base.rstrip()))
+        self.assertEqual(self._instructions, _import_blmcp_module().instructions_with_skill_index(base))
         rest = self._instructions[len(base.rstrip()):].strip()
         self.assertTrue(rest.startswith("## Skills on demand"), rest[:80])
         self.assertIn("load_skill(name)", rest)

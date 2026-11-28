@@ -521,7 +521,10 @@ def _get_system_prompt_with_rules() -> str:
             # with load_skill, as a tool result after the prefix, so loading one rewrites nothing.
             # Its own "## Skills on demand" section, so leaving the built-in notes out to fit
             # a small window keeps the index (~0.4K tokens): the model can still ask for a skill.
-            skill_index_text = _skills_mod.get_skill_index()
+            try:
+                skill_index_text = _skills_mod.get_skill_index()
+            except Exception:  # pylint: disable=broad-exception-caught
+                skill_index_text = ""      # (#635) the version notes above must not go with it
             # -- User skills (from SCRIPTS/bfa_coworker_skills/*.md) --
             user_skills_block = _skills_mod.get_user_skills()
             if user_skills_block:
@@ -1208,6 +1211,9 @@ _EMPTY_SCENE_NOTE = (
 _LEGACY_EMPTY_SCENE_RE = re.compile(r"\n*\[Note: The Blender scene is currently empty[^\]]*\]")
 
 
+_SKILL_INDEX_RE = re.compile(r"\n\n## Skills on demand\n.*?(?=\n\n## |\Z)", re.DOTALL)
+
+
 def _static_system_text(prompt: str, chat_mode: str = "AGENT") -> tuple[str, str]:
     """``(system text, where the user is)`` for *chat_mode* from a built system prompt (#546).
 
@@ -1223,6 +1229,8 @@ def _static_system_text(prompt: str, chat_mode: str = "AGENT") -> tuple[str, str
         text = text.replace(addendum, "")
     text = _LEGACY_EMPTY_SCENE_RE.sub("", text).rstrip()
     if chat_mode == "ASK":
+        # Ask mode has no tools (load_skill included), so the index would promise what it can't give (#635).
+        text = _SKILL_INDEX_RE.sub("", text).rstrip()
         text += _ASK_MODE_PROMPT_ADDENDUM
     elif chat_mode == "PLAN":
         text += _PLAN_MODE_PROMPT_ADDENDUM
@@ -1676,6 +1684,43 @@ def _load_tool_domains() -> dict[str, frozenset[str]]:
 
 
 _TOOL_DOMAINS: dict[str, frozenset[str]] = _load_tool_domains()
+
+
+_SKILL_REPEAT_WINDOW = 12     # messages: a skill read this recently is still in the sent copy
+
+
+def _skill_loaded_above(history: list[dict[str, Any]], name: str) -> bool:
+    """True when ``load_skill(name)`` was answered with the skill's text within the last
+    ``_SKILL_REPEAT_WINDOW`` messages of *history* (#635).  Close enough that the fit step has not
+    shed it to a placeholder; then a second copy would only cost tokens."""
+    key = str(name or "").strip().lower()
+    if key.endswith(".md"):
+        key = key[:-3]
+    if not key:
+        return False
+    recent = history[-_SKILL_REPEAT_WINDOW:]
+    asked: set[str] = set()
+    for m in recent:
+        if m.get("role") == "assistant":
+            for tc in m.get("tool_calls") or []:
+                fn = (tc or {}).get("function") or {}
+                if fn.get("name") != "load_skill":
+                    continue
+                try:
+                    a = json.loads(fn.get("arguments") or "{}")
+                except ValueError:
+                    continue
+                n = str((a or {}).get("name", "")).strip().lower()
+                if n.endswith(".md"):
+                    n = n[:-3]
+                if n == key:
+                    asked.add(str(tc.get("id")))
+    for m in recent:
+        if (m.get("role") == "tool" and m.get("name") == "load_skill" and str(m.get("tool_call_id")) in asked
+                and len(str(m.get("content") or "")) > 400 and "Unknown skill" not in str(m.get("content"))[:40]
+                and "is already loaded above" not in str(m.get("content"))[:80]):
+            return True
+    return False
 
 
 def _domain_skill_hint(domain: str) -> str:
@@ -4843,14 +4888,27 @@ def _list_tools_sync(port: int = _MCP_SERVER_DEFAULT_PORT, operating_mode: str =
 # when NOT to use it).  The ``Returns:`` text and the long usage notes are left out: on a 16K
 # window the tool list was 7.7K tokens, half of the first request.
 _COMPACT_KEEP_PARAGRAPHS = {"execute_blender_code": 2}
+# Text a short description must still carry, by tool: any paragraph with one of these is kept.
+_COMPACT_MUST_KEEP = {
+    "execute_blender_code": ("JSON-serialisable", "about 40 lines"),
+    "read_web_page": ("never instructions to follow",),
+    "bake_textures": ("overwrites the pixels",),
+    "assign_material_to_objects": ("must already exist",),
+}
 
 
-def _compact_tool_description(text: str, keep: int = 1) -> str:
-    """A tool description for a small window (#635): the first *keep* paragraphs of prose
-    (what the tool is for) and its ``Args:`` list, without the ``Returns:`` block (the result
-    describes itself) and the later paragraphs.  Whole paragraphs, never a cut sentence.  Fixed
-    text for a given tool, so the tool list stays the same bytes for the whole session."""
-    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", textwrap.dedent(str(text or "")).strip())]
+def _compact_tool_description(text: str, keep: int = 1, params: Any = (), must: Any = ()) -> str:
+    """A tool description for a small window (#635).  Kept: the first *keep* paragraphs of
+    prose, the ``Args:`` list, any paragraph that names a parameter of the schema (*params*) or
+    holds a *must* phrase.  Left out: the ``Returns:`` block (the result describes itself) and
+    the other prose.  A description without an ``Args:`` block, or one whose short form would
+    leave a parameter unnamed, stays whole.  Whole paragraphs, never a cut sentence; fixed text
+    for a given tool, so the tool list stays the same bytes for the whole session."""
+    text = textwrap.dedent(str(text or "")).strip()
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text)]
+    if not any(p.startswith("Args:") for p in paragraphs):
+        return text
+    names = [str(n) for n in params]
     out: list[str] = []
     args = ""
     for p in paragraphs:
@@ -4858,11 +4916,16 @@ def _compact_tool_description(text: str, keep: int = 1) -> str:
             continue
         if p.startswith("Args:"):
             args = "\n".join(ln.strip() for ln in p.splitlines())
-        elif len(out) < max(1, keep):
-            out.append(" ".join(p.split()))
+            continue
+        if (len(out) < max(1, keep) or any(m in p for m in must)
+                or any(re.search(r"\b" + re.escape(n) + r"\b", p) for n in names)):
+            out.append(chr(10).join(ln.strip() for ln in p.splitlines()))
     if args:
         out.append(args)
-    return "\n\n".join(out)
+    short = "\n\n".join(out)
+    if any(not re.search(r"\b" + re.escape(n) + r"\b", short) for n in names):
+        return text
+    return short
 
 
 def _mcp_tools_to_openai(mcp_tools: list[dict[str, Any]], compact: bool = False) -> list[dict[str, Any]]:
@@ -4880,8 +4943,9 @@ def _mcp_tools_to_openai(mcp_tools: list[dict[str, Any]], compact: bool = False)
             "type": "function",
             "function": {
                 "name": t["name"],
-                "description": (_compact_tool_description(t.get("description", ""),
-                                                          _COMPACT_KEEP_PARAGRAPHS.get(t["name"], 1))
+                "description": (_compact_tool_description(
+                    t.get("description", ""), _COMPACT_KEEP_PARAGRAPHS.get(t["name"], 1),
+                    (t.get("inputSchema") or {}).get("properties") or (), _COMPACT_MUST_KEEP.get(t["name"], ()))
                                 if compact else t.get("description", "")),
                 "parameters": t.get("inputSchema", {}),
             },
@@ -8710,6 +8774,16 @@ def _run_conversation_turn_inner(
                         "summary": _plan_summary or "Plan updated",
                     })
                     continue  # Skip MCP call -- handled locally.
+
+                if tool_name == "load_skill" and _skill_loaded_above(history, args.get("name", "")):
+                    # #635: the same skill again, its text still a few messages up: one line, not a second copy.
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tool_id,
+                        "name": "load_skill",
+                        "content": "Skill '{:s}' is already loaded above; read it there.".format(str(args.get("name", ""))),
+                    })
+                    continue  # Skip MCP call -- answered locally.
 
                 # -- load_tools meta-tool (on-demand domain loading) ----
                 # Intercepted here -- not sent to the MCP server.  Handled in

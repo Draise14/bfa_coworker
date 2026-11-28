@@ -677,6 +677,8 @@ def reframe_vertical(strips: list[str] | None = None, mode: str = "CROP", in_cop
                      layout: str = "auto") -> dict[str, Any]:
     """Make the Sequencer's edit 9:16: Centre Crop with each strip's own crop and transform, Blur Fill with a Reframe modifier (#333, #632), one undo step.
 
+    Returns the made strips; with ``follow`` also ``following`` (the status of the subject search, whose keys come
+    later as a second undo step) or ``following_error``.
     Raises ``reframe.ReframeError`` with a clear reason when it can't.  Main thread only.
     """
     import bpy  # pylint: disable=import-error

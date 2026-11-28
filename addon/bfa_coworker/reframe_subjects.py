@@ -29,8 +29,10 @@ __all__ = (
     "FOLLOWS",
     "LAYOUTS",
     "apply_split",
+    "cancel",
     "clear_strip_keys",
     "last_result",
+    "progress",
     "start",
     "take_ready",
 )
@@ -50,6 +52,7 @@ from .wand import reframe_layout as rl
 FOLLOWS = ("auto", "face", "screen")
 LAYOUTS = ("auto", "single", "split")
 GRID_W = 96
+MAX_RUN_SAMPLES = 120        # the cap for a whole run: each sample is two renders on the main thread, and one model request
 _KINDS = {"face": ("face", "person"), "screen": ("pip", "screen", "pointer"), "auto": None}
 _RUN: dict[str, Any] = {}
 # Analyses ready for a strip whose Track All split is being built (the build asks for tracking once more).
@@ -97,10 +100,29 @@ def _grid(path: str, width: int = GRID_W) -> list[list[float]]:
     return small.tolist()
 
 
-def _moments(strip: Any, scene: Any, outdir: str) -> _Job:
+def _plan(strip: Any, scene: Any) -> int:
+    fps = scene.render.fps / (scene.render.fps_base or 1.0)
+    return sf.sample_plan(int(strip.right_handle) - int(strip.left_handle), fps)
+
+
+def _budget(plans: list[int], cap: int = MAX_RUN_SAMPLES) -> list[int]:
+    """How many samples each shot gets so the whole run stays within *cap*: a shot gets its plan, or an even share of
+    what is left when that is less (never below the minimum); ``0`` for the shots that no longer fit."""
+    out: list[int] = []
+    left = cap
+    for i, want in enumerate(plans):
+        shots = len(plans) - i
+        n = min(want, max(sf.MIN_SAMPLES, left // shots))
+        if n > left:
+            n = 0
+        out.append(n)
+        left -= n
+    return out
+
+
+def _moments(strip: Any, scene: Any, outdir: str, count: int) -> _Job:
     fps = scene.render.fps / (scene.render.fps_base or 1.0)
     left, right = int(strip.left_handle), int(strip.right_handle)
-    count = sf.sample_plan(right - left, fps)
     frames = rm.sample_frames(left, right, count)
     gap = max(1, int(round(fps / 8.0)))
     later = [f + gap if f + gap < right else max(left, f - gap) for f in frames]
@@ -118,19 +140,48 @@ def _moments(strip: Any, scene: Any, outdir: str) -> _Job:
 def _work(jobs: list[_Job], follow: str, layout: str, ask: Any, state: dict[str, Any]) -> None:
     try:
         out: dict[str, Any] = {}
+        state["total"] = sum(len(j.moments) for j in jobs)
+        state["done"] = 0
         for job in jobs:
             samples = []
             for frame, grid, later, png in job.moments:
+                if state.get("cancel"):
+                    state["cancelled"] = True
+                    return
                 faces: list = []
                 people: list = []
                 if ask is not None:
-                    got_faces, got_people = ask(png, job.name, frame)
-                    faces, people = [sf.Box(*b) for b in got_faces], [sf.Box(*b) for b in got_people]
+                    try:
+                        got_faces, got_people = ask(png, job.name, frame)
+                        faces, people = [sf.Box(*b) for b in got_faces], [sf.Box(*b) for b in got_people]
+                    except Exception as ex:  # pylint: disable=broad-exception-caught  # Unavailable: no answer
+                        # the model is gone for this run: go on with what moves, which needs no model
+                        ask = None
+                        state["faces_lost"] = str(ex) or ex.__class__.__name__
                 samples.append(sf.Sample(frame, grid, later, tuple(faces), tuple(people)))
+                state["done"] += 1
             out[job.name] = sf.analyse(samples, job.fps, layout, _KINDS.get(follow))
         state["results"] = out
     except Exception as ex:  # pylint: disable=broad-exception-caught
         state["error"] = str(ex)
+
+
+def cancel() -> bool:
+    """Stop the running Follow Subject after the sample it is on; ``False`` when none runs."""
+    state = _RUN.get("state")
+    if state is None or _RUN.get("thread") is None or not _RUN["thread"].is_alive():
+        return False
+    state["cancel"] = True
+    return True
+
+
+def progress() -> str:
+    """``"3/40"`` while a run is going, else ``""``."""
+    state = _RUN.get("state")
+    thread = _RUN.get("thread")
+    if state is None or thread is None or not thread.is_alive():
+        return ""
+    return "{:d}/{:d}".format(state.get("done", 0), state.get("total", 0))
 
 
 def start(scene: Any, strips: Iterable[Any], follow: str = "auto", layout: str = "auto",
@@ -161,7 +212,12 @@ def start(scene: Any, strips: Iterable[Any], follow: str = "auto", layout: str =
                 raise
             note = " No faces: {!s}".format(ex).rstrip(".") + ". Looking at what moves only."
     outdir = tempfile.mkdtemp(prefix="bfacw_subjects_", dir=bpy.app.tempdir or None)
-    jobs = [_moments(s, scene, outdir) for s in targets]
+    counts = _budget([_plan(s, scene) for s in targets])
+    over = [s.name for s, n in zip(targets, counts) if n == 0]
+    if over:
+        skipped.append("{:d} shot(s) over the cap of {:d} samples per run, select fewer: {:s}".format(
+            len(over), MAX_RUN_SAMPLES, ", ".join(over[:5]) + (", ..." if len(over) > 5 else "")))
+    jobs = [_moments(s, scene, outdir, n) for s, n in zip(targets, counts) if n]
     state: dict[str, Any] = {"results": None, "error": "", "scene": scene.name, "skipped": skipped,
                              "on_done": on_done, "layout": layout, "note": note, "faces": ask is not None}
     thread = threading.Thread(target=_work, args=(jobs, follow, layout, ask, state), name="bfacw-subjects",
@@ -170,17 +226,22 @@ def start(scene: Any, strips: Iterable[Any], follow: str = "auto", layout: str =
     _RUN.update(thread=thread, state=state)
     thread.start()
     bpy.app.timers.register(_poll, first_interval=0.5)
-    return "Looking for the subject in {:d} shot(s) ({:d} sampled moments){:s}...".format(
-        len(targets), sum(len(j.moments) for j in jobs), note)
+    where = " " + reframe._engine_notice(follow) if ask is not None else ""   # pylint: disable=protected-access
+    return "Looking for the subject in {:d} shot(s) ({:d} sampled moments){:s}...{:s}".format(
+        len(jobs), sum(len(j.moments) for j in jobs), note, where)
 
 
 def _targets(scene: Any, strips: Iterable[Any]) -> tuple[list[Any], list[str]]:
-    """Strips Follow Subject can work on: a Make Vertical centre crop, or a part of a Track All split (the top one)."""
+    """Strips Follow Subject can work on: a Make Vertical centre crop, or a part of a Track All split (the top one).
+    The other splits (half, top or bottom bias) keep their fixed crops and are skipped with the reason."""
     ok, skipped = [], []
     level = list(scene.sequence_editor.strips_all) if scene.sequence_editor else []
     for s in strips:
         tag = ra.tag_of(s)
-        if tag is not None and rl.layout(tag["layout"]).parts[1:]:
+        if tag is not None and tag["layout"] != "track_all" and rl.layout(tag["layout"]).parts[1:]:
+            skipped.append("{:s} (a {:s} split has fixed crops: use Track All)".format(s.name, rl.layout(tag["layout"]).short))
+            continue
+        if tag is not None and tag["layout"] == "track_all":
             base = s if tag["part"] == 0 else ra.find_partner(level, s)
             if base is not None and base.name not in {o.name for o in ok}:
                 ok.append(base)
@@ -267,7 +328,11 @@ def apply_results(scene: Any, results: dict[str, Any], layout: str) -> list[str]
         if strip is None:
             continue
         tagged = ra.tag_of(strip)
-        in_split = tagged is not None and bool(rl.layout(tagged["layout"]).parts[1:])
+        if tagged is not None and tagged["layout"] != "track_all" and rl.layout(tagged["layout"]).parts[1:]:
+            lines.append("{:s}: a {:s} split has fixed crops, left alone (use Track All)".format(
+                name, rl.layout(tagged["layout"]).short))
+            continue
+        in_split = tagged is not None and tagged["layout"] == "track_all"
         if not analysis.primary:
             lines.append("{:s}: no subject found, it keeps the centre crop".format(name))
             continue
@@ -316,15 +381,25 @@ def _poll() -> float | None:
     scene = bpy.data.scenes.get(state["scene"])
     msg = state["error"]
     lines: list[str] = []
-    if not msg and scene is not None and state["results"] is not None:
+    if state.get("cancelled"):
+        msg = "Follow subject: stopped, nothing keyed."
+    elif not msg and scene is None:
+        msg = "Follow subject: the scene {!r} was not found (removed or undone), nothing keyed.".format(state["scene"])
+    elif not msg and state["results"] is not None:
         try:
             lines = apply_results(scene, state["results"], state["layout"])
-            bpy.ops.ed.undo_push(message="Follow Subject")
             msg = "Follow subject: " + ("; ".join(lines) or "nothing to key") + "."
         except Exception as ex:  # pylint: disable=broad-exception-caught
-            msg = "Follow subject failed: {!s}".format(ex)
+            msg = "Follow subject failed part-way, what was keyed stays (Ctrl+Z takes it back): {!s}".format(ex)
+        try:
+            bpy.ops.ed.undo_push(message="Follow Subject")      # also after a failure: one step to take back
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
     elif msg:
         msg = "Follow subject failed: " + msg
+    if state.get("faces_lost"):
+        msg += " The model gave no answer ({:s}): faces were dropped from that point, only what moves was used.".format(
+            state["faces_lost"])
     if state["note"]:
         msg += state["note"]
     if state["skipped"]:

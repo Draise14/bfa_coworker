@@ -1068,6 +1068,16 @@ class BFACW_OT_reframe_follow_subject(Operator):
     def poll(cls, context: Any) -> bool:
         return _seq_poll(context, cls)
 
+    def invoke(self, context: Any, _event: Any) -> set[str]:
+        return context.window_manager.invoke_props_dialog(self, width=340)
+
+    def draw(self, _context: Any) -> None:
+        layout = self.layout
+        layout.use_property_split = True
+        layout.prop(self, "follow_kind")
+        layout.prop(self, "subject_layout")
+        layout.label(text=_engine_notice(self.follow_kind), icon='INFO')
+
     def execute(self, context: Any) -> set[str]:
         scene = sequencer_scene(context)
         strips = [s for s in scene.sequence_editor.strips_all if s.select and s.type in STRIP_TYPES]
@@ -1076,6 +1086,24 @@ class BFACW_OT_reframe_follow_subject(Operator):
         except (ReframeError, reframe_follow.Unavailable) as ex:
             self.report({'WARNING'}, str(ex))
             return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class BFACW_OT_reframe_follow_stop(Operator):
+    """Stop the running Follow Subject after the sample it is on; nothing is keyed"""
+    bl_idname = "bfacw.reframe_follow_stop"
+    bl_label = "Stop Follow Subject"
+    bl_description = agent_line(__doc__)
+    bl_options = {'REGISTER'}
+
+    @classmethod
+    def poll(cls, _context: Any) -> bool:
+        from . import reframe_subjects
+        return bool(reframe_subjects.progress())
+
+    def execute(self, _context: Any) -> set[str]:
+        from . import reframe_subjects
+        reframe_subjects.cancel()
         return {'FINISHED'}
 
 
@@ -1094,12 +1122,18 @@ class BFACW_MT_reframe(Menu):
         layout.operator("bfacw.reframe", text="Blur Fill", icon=icon('MATFLUID')).action = "BLUR_FILL"
         layout.separator()
         layout.operator("bfacw.reframe_follow_subject", icon=icon('TRACKER'))
+        from . import reframe_subjects
+        running = reframe_subjects.progress()
+        if running:
+            layout.operator("bfacw.reframe_follow_stop", text="Stop Follow Subject ({:s})".format(running),
+                            icon=icon('CANCEL'))
         layout.separator()
         # the one that throws framing away goes last (wand rules, #610)
         layout.operator("bfacw.reframe", text="Reset Framing", icon=icon('LOOP_BACK')).action = "RESET_FRAMING"
 
 
-_CLASSES = (BFACW_OT_make_vertical, BFACW_OT_reframe, BFACW_OT_reframe_follow_subject, BFACW_MT_reframe)
+_CLASSES = (BFACW_OT_make_vertical, BFACW_OT_reframe, BFACW_OT_reframe_follow_subject,
+            BFACW_OT_reframe_follow_stop, BFACW_MT_reframe)
 # Make Vertical and the Reframe menu are drawn by wand.sequencer's Coworker section of the
 # Strip menu and its Video panel (one place for every Coworker video tool, each once).
 _MENUS: tuple = ()

@@ -81,17 +81,15 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
 - `reframe_vertical(strips, mode, follow, layout)` — Make the edit vertical (9:16): each movie / image / scene strip is
   framed: `CROP` (centre crop) with the strip's own crop and transform (no compositor, playback stays fast), or
   `BLUR_FILL` (the whole shot over a blurred copy) with an editable "Reframe" modifier.
-  Works in a copy of the scene by default (`in_copy`); one undo step. `follow="auto"|"face"|"screen"` (CROP only) also finds the subject: faces
-  (needs a vision model; the frames go to the engine Coworker uses) and what moves on screen / the pointer (no model); `layout="auto"|"single"|"split"`:
-  two subjects apart become two crops, top and bottom (face on top). It looks at a few frames per shot and keys the crop a moment after
-  the call returns (see `following` in the answer); no subject found keeps the centre crop. Change a shot's framing afterwards
+  Works in a copy of the scene by default (`in_copy`); one undo step. `follow="auto"|"face"|"screen"` (CROP only) also finds the subject (faces need a vision model; what moves and the pointer do not);
+  `layout="auto"|"single"|"split"`: two subjects apart become two crops, top and bottom. The keys come a moment after the call returns, as a second undo step (see `following`). Change a shot's framing afterwards
   with Strip > Reframe, or select the strip and run `bpy.ops.bfacw.reframe(action=...)` (`LEFT` `RIGHT` `UP` `DOWN`
   `ZOOM_IN` `ZOOM_OUT` `RESET_FRAMING`; `step` 0.1 by default): it works on either form. `reframe_strips` only changes layouts.
 - `reframe_strips(layout, strips=None, swap=False)` — Change the vertical layout of the named (or selected) movie /
   image / scene strips, after `reframe_vertical` or on any strips; one undo step. `layout`: `full` (centre fills
   the frame), `full_blur` (whole shot over a blurred copy), `full_tracked` (follows the subject: the tracking needs
   a vision model, the layout does not), `split_half` (two crops, 50 / 50), `split_top` (2/3 on top, 1/3 below),
-  `split_bottom` (1/3 on top, 2/3 below); `track_all` (a split whose parts each follow their own subject, like `follow` above; Swap does not apply to it). A split is two ordinary strips of the
+  `split_bottom` (1/3 on top, 2/3 below); `track_all` (each part follows its own subject; no Swap). A split is two ordinary strips of the
   same source (the strip, and its duplicate below on the next free channel) with crop and transform each; it
   replaces the earlier layout, so any order of layouts ends the same as the last one alone. `swap=true` exchanges
   top and bottom (alone with `layout=""`). With neither a layout nor `swap` it only reads: `layouts` gives each

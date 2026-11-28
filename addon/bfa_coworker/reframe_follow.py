@@ -8,8 +8,8 @@ Follow subject for Reframe (#333): ask the vision model where the subject is.
 
 Each sampled frame (a small PNG of the whole shot) goes to the model the way chat
 attachments do -- an OpenAI-style ``image_url`` block with a base64 ``data:`` URI
-(``chat_attachments._encode_file``), sent with ``llm_transport.openai_chat_completions``
-to the engine Coworker is set to (Local LLM: llama-server; Remote API: its URL, key
+(``chat_attachments._encode_file``), sent through ``ask_json`` (#612: the answer is checked against a
+schema, one retry) to the engine Coworker is set to (Local LLM: llama-server; Remote API: its URL, key
 and model).  The answer is one number: the subject's horizontal centre, 0 = the
 image's left edge, 1 = its right edge.
 
@@ -26,6 +26,7 @@ __all__ = (
     "PROMPT",
     "STUB",
     "Unavailable",
+    "X_SCHEMA",
     "build_messages",
     "parse_x",
     "resolve_asker",
@@ -38,8 +39,9 @@ import json
 import re
 import threading
 import types
-import urllib.request
 from typing import Any, Callable, Iterable
+
+from . import ask_json
 
 PROMPT = (
     "This is one frame of a video shot. Find the main subject (the person, or else the thing the shot is "
@@ -47,13 +49,17 @@ PROMPT = (
     "(its right edge). Answer with JSON only, like {\"x\": 0.42}. If there is no clear subject, answer "
     "{\"x\": null}."
 )
+# The answer's shape; ``ask_json`` checks it and asks once more when it is wrong.
+X_SCHEMA = {"type": "object", "properties": {"x": {"type": ["number", "null"], "minimum": 0, "maximum": 1}},
+            "required": ["x"],
+            "additionalProperties": False}
 _LIMIT_BYTES = 2_000_000
 # Replace the model: ``STUB(png_path, strip_name, frame) -> x | None``.
 STUB: Callable[[str, str, int], float | None] | None = None
 
 
-class Unavailable(Exception):
-    """No vision-capable engine to ask (the message says what to do)."""
+# No vision-capable engine to ask (the message says what to do).
+Unavailable = ask_json.Unavailable
 
 
 def parse_x(text: Any) -> float | None:
@@ -101,50 +107,11 @@ def build_messages(data_uri: str) -> list[dict[str, Any]]:
     ]}]
 
 
-def _chat_url(url: str) -> str:
-    base = url.rstrip("/")
-    if base.endswith("/chat/completions"):
-        return base
-    return base + ("/chat/completions" if base.endswith("/v1") else "/v1/chat/completions")
-
-
-def _local_has_vision(port: int, fetch: Callable[[str], dict[str, Any]] | None = None) -> bool | None:
-    """llama-server's ``/props`` says whether a vision projector is loaded (None: can't tell)."""
-    def _get(url: str) -> dict[str, Any]:
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            return json.loads(resp.read().decode("utf-8", errors="replace"))
-    try:
-        props = (fetch or _get)("http://127.0.0.1:{:d}/props".format(port))
-    except Exception:  # pylint: disable=broad-exception-caught
-        return None
-    modalities = props.get("modalities") if isinstance(props, dict) else None
-    if isinstance(modalities, dict) and "vision" in modalities:
-        return bool(modalities["vision"])
-    return None
-
-
 def vision_target(operating_mode: str, cfg: Any, running: bool,
                   fetch: Callable[[str], dict[str, Any]] | None = None) -> tuple[str, str, str]:
     """``(url, api_key, model)`` to ask, or :class:`Unavailable` with what to do."""
-    if operating_mode in ("EXTERNAL_AGENT", "EXTERNAL_HARNESS"):
-        raise Unavailable("Follow subject asks the model directly; an External Agent or Harness runs its own. "
-                          "Switch Coworker to Local LLM (with a vision model) or Remote API to use it.")
-    if operating_mode == "REMOTE_API" or getattr(cfg, "mode", "") == "remote":
-        url = str(getattr(cfg, "remote_api_url", "") or "")
-        if not url:
-            raise Unavailable("Follow subject needs a vision model: set the Remote API URL, key and model "
-                              "in Coworker's Preferences.")
-        return (_chat_url(url), str(getattr(cfg, "remote_api_key", "") or ""),
-                str(getattr(cfg, "remote_model", "") or ""))
-    if not running:
-        raise Unavailable("Follow subject needs a vision model: start Coworker with a vision-capable local "
-                          "model (e.g. Gemma 4 or Qwen3.8) first.")
-    port = int(getattr(cfg, "local_port", 0) or 0)
-    if _local_has_vision(port, fetch) is False:
-        raise Unavailable("The local model can't see images (no vision projector loaded). Pick a vision model "
-                          "in Coworker's Preferences for Follow subject.")
-    return "http://127.0.0.1:{:d}/v1/chat/completions".format(port), "", ""
+    return ask_json.engine_target(operating_mode, cfg, running, purpose="Follow subject", vision=True,
+                                  fetch=fetch)
 
 
 def _data_uri(path: str) -> str:
@@ -158,20 +125,14 @@ def _data_uri(path: str) -> str:
 
 
 def make_asker(target: tuple[str, str, str], transport: Callable[..., Any]) -> Callable[[str, str, int], float | None]:
-    """An asker that sends one frame and parses the answer."""
-    url, key, model = target
+    """An asker that sends one frame and parses the answer (through :func:`ask_json.ask_json`)."""
+    ask_checked = ask_json.make_asker(target, transport)
 
     def ask(path: str, _strip: str, _frame: int) -> float | None:
-        # thinking_budget_tokens None: no thinking field at all (a 0 means "off" since #544).
-        response = transport(url, build_messages(_data_uri(path)), None, key or None, model or None,
-                             max_tokens=256, thinking_budget_tokens=None, chat_mode="ASK")
-        if not response:
-            raise Unavailable("The model didn't answer (is the engine running, and can its model see images?).")
         try:
-            text = response["choices"][0]["message"].get("content")
-        except (KeyError, IndexError, TypeError, AttributeError):
-            text = None
-        return parse_x(text)
+            return ask_checked(build_messages(_data_uri(path)), X_SCHEMA, name="subject_x", max_tokens=256).value["x"]
+        except ask_json.AskFailed as ex:
+            return parse_x(ex.text)        # a frame the model can't answer cleanly counts as "no subject"
     return ask
 
 
@@ -179,21 +140,21 @@ def resolve_asker() -> Callable[[str, str, int], float | None]:
     """The asker for Coworker's current engine (or :data:`STUB`); raises :class:`Unavailable`."""
     if STUB is not None:
         return STUB
-    from . import llm_manager, llm_transport
     import bpy  # pylint: disable=import-error
+    from . import llm_manager, llm_transport
     try:
         prefs = bpy.context.preferences.addons[__package__].preferences
         mode = str(prefs.operating_mode)
     except (KeyError, AttributeError):
         mode = ""
-    cfg = llm_manager.get_config()
-    target = vision_target(mode, cfg, bool(llm_manager.get_state().is_running))
+    target = vision_target(mode, llm_manager.get_config(), bool(llm_manager.get_state().is_running))
     # Errors go to a throwaway state, so a failed frame never shows as the chat's error.
     scratch = types.SimpleNamespace(error="", error_full="", error_kind="", is_thinking=False)
 
     def transport(*args: Any, **kwargs: Any) -> Any:
         with llm_transport.using(scratch, threading.Event()):
             return llm_transport.openai_chat_completions(*args, **kwargs)
+    transport.error_kind = lambda: str(getattr(scratch, "error_kind", "") or "")    # type: ignore[attr-defined]
     return make_asker(target, transport)
 
 

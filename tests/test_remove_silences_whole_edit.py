@@ -605,14 +605,14 @@ class TestTool(unittest.TestCase):
     def test_passes_the_settings_and_answers(self):
         calls = []
 
-        def tool(strips, threshold_db, min_silence, padding, min_keep, close_gaps, update_scene_end):
-            calls.append((strips, threshold_db, min_silence, padding, min_keep, close_gaps, update_scene_end))
+        def tool(strips, threshold_db, min_silence, padding, min_keep, close_gaps, update_scene_end, mode, speed):
+            calls.append((strips, threshold_db, min_silence, padding, min_keep, close_gaps, update_scene_end, mode, speed))
             return {"status": "ok", "message": "Removed 4 silences", "cuts": 4, "seconds_removed": 14.7,
                     "new_names": {"Cam": ["Cam", "Cam.001"]}, "end_frame": 310, "refused": [], "extra": 1}
         ns = self._toolcode(types.SimpleNamespace(tool_remove_silences=tool))
         p = ns["Params"](strips=("Cam",), threshold_db=-35.0, close_gaps=False)
         out = ns["main"](p)
-        self.assertEqual(calls, [(["Cam"], -35.0, 0.4, 0.15, 0.1, False, True)])
+        self.assertEqual(calls, [(["Cam"], -35.0, 0.4, 0.15, 0.1, False, True, "cut", 4.0)])
         self.assertEqual(out.status, "ok")
         self.assertEqual(out.new_names, {"Cam": ["Cam", "Cam.001"]})
         self.assertEqual(out.end_frame, 310)

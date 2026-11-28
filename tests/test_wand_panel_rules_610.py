@@ -41,12 +41,16 @@ _BUTTON_SCOPES = (
     ("wand/sequencer.py", ("CoworkerEntry", "_draw_strip_menu")),
     ("wand/icons.py", ("operator", "menu")),
     ("highlight_picks_ops.py", ("_draw_panel", "_draw_pick", "_draw_dialog")),       # #614
+    ("chapters_ops.py", ("_draw_dialog", "_draw_progress")),                          # #542 Make Chapters
+    ("reframe_zoom.py", ("BFACW_MT_reframe_zoom_to",)),                               # #542 Zoom To
 )
 # Panels whose labels that are plain text (not a formatted message) are section headers.
 _HEADER_SCOPES = (
     ("transcript_edit_ops.py", ("_wands_header",)),
     ("reframe_layouts.py", ("_draw_buttons",)),
     ("highlight_picks_ops.py", ("_draw_dialog",)),                                  # #614
+    ("chapters_ops.py", ("_draw_dialog", "_draw_progress")),                        # #542
+    ("reframe_zoom.py", ("BFACW_OT_reframe_zoom_to",)),                             # #542 the dialog's boxes
 )
 
 
@@ -150,19 +154,28 @@ class Order(unittest.TestCase):
         calls = [n for n in ast.walk(panel) if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "_wand"]
         calls.sort(key=lambda n: n.lineno)
         names = [ast.unparse(n.args[1]) for n in calls]
-        self.assertEqual(len(names), 3, names)
+        self.assertEqual(len(names), 4, names)
         self.assertIn("make_captions", names[0])
-        self.assertTrue(all("remove" in n for n in names[1:]), names)
+        self.assertIn("make_chapters", names[1])        # #542: what makes comes before what removes
+        self.assertTrue(all("remove" in n for n in names[2:]), names)
 
     def test_a_trailing_dots_label_means_a_dialog_always_opens(self) -> None:
         tree = _tree("transcript_edit_ops.py")
         classes = {c.name: c for c in tree.body if isinstance(c, ast.ClassDef)}
+        by_idname = {}
+        for path in sorted(_ADDON.glob("*.py")):         # an operator of another module: found by its idname
+            for node in ast.parse(path.read_text(encoding="utf-8")).body:
+                if isinstance(node, ast.ClassDef):
+                    for stmt in node.body:
+                        if isinstance(stmt, ast.Assign) and getattr(stmt.targets[0], "id", "") == "bl_idname"                                 and isinstance(stmt.value, ast.Constant):
+                            by_idname[stmt.value.value] = node
         panel = classes["BFACW_PT_transcript"]
         checked = 0
         for call in ast.walk(panel):
             if not (isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_wand"):
                 continue
-            cls = classes[call.args[1].value.id]       # BFACW_OT_x.bl_idname
+            arg = call.args[1]
+            cls = classes[arg.value.id] if isinstance(arg, ast.Attribute) else by_idname[arg.value]   # BFACW_OT_x.bl_idname
             label = call.args[2].value
             invoke = next(f for f in cls.body if getattr(f, "name", "") == "invoke")
             src = ast.unparse(invoke)
@@ -170,7 +183,7 @@ class Order(unittest.TestCase):
             always = ("invoke_props_dialog" in src or "INVOKE_DEFAULT" in src) and "self.execute" not in src
             self.assertEqual(label.endswith("..."), always, "{:s}: '...' only for an always-dialog".format(label))
             checked += 1
-        self.assertEqual(checked, 3)
+        self.assertEqual(checked, 4)
 
 
 if __name__ == "__main__":

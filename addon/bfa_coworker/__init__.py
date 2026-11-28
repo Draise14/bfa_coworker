@@ -271,6 +271,9 @@ def _register() -> None:
     # Highlights (#614): the picks on the scene and the panel in the Sequencer's Coworker tab.
     from . import highlight_picks_ops
     highlight_picks_ops.register()
+    # Make Chapters (#542): the wand, its dialog, the markers and the text list.
+    from . import chapters_ops
+    chapters_ops.register()
     # Edit by Transcript (#498): Edit Transcript in the Video panel / Strip menu, the Text Editor's panel.
     from . import transcript_edit_ops
     transcript_edit_ops.register()
@@ -517,6 +520,8 @@ def unregister() -> None:
     # Unregister chat UI (the Coworker editor first: it builds on ui_chat's panels).
     from . import transcript_edit_ops
     transcript_edit_ops.unregister()
+    from . import chapters_ops
+    chapters_ops.unregister()
     from . import highlight_picks_ops
     highlight_picks_ops.unregister()
     from . import reframe

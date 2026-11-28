@@ -31,6 +31,9 @@ def register(mcp: FastMCP) -> None:
         layout: str = "",
         strips: list[str] | None = None,
         swap: bool = False,
+        zoom_to: str = "",
+        zoom: float = 2.0,
+        punch_in: bool = False,
     ) -> dict[str, object]:
         """
         Change the vertical layout of movie, image or scene strips (Reframe), one undo step.
@@ -57,12 +60,20 @@ def register(mcp: FastMCP) -> None:
             strips: Strip names (a split's either part stands for both). Empty: the selected strips.
             swap: Exchange which framing of the picture is shown top and bottom in the splits named
                 (after building ``layout`` when one is given).
+            zoom_to: Zoom each strip into a region of its picture (Zoom To), after the layout: ``centre``,
+                ``top_left``, ``top_right``, ``bottom_left`` or ``bottom_right``. The shot stays covered
+                (no black edges). Empty: no zoom. Reset Framing undoes it. A split's parts and strips that
+                follow a subject are skipped (``skipped`` says why).
+            zoom: With ``zoom_to``: 1.5 or 2 (times as close as the frame just covering the shot).
+            punch_in: With ``zoom_to``: key the zoom over each strip's range instead of setting it: it eases in,
+                holds and eases out to the framing the strip had (for tutorials).
 
         Returns:
             ``status`` (ok / nothing / error), ``message``, ``layout``, ``changed`` (strips given
             the layout), ``created`` / ``removed`` (strip names), ``unchanged`` (already in that
-            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``tracking``, ``layouts`` (read mode: strip ->
+            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``zoomed`` (strips zoomed), ``tracking``, ``layouts`` (read mode: strip ->
             {layout, part, partner}; layout is "" when it has none) and ``scene``.
         """
-        p = Params(layout=layout, strips=tuple(strips or ()), swap=bool(swap))
+        p = Params(layout=layout, strips=tuple(strips or ()), swap=bool(swap), zoom_to=zoom_to, zoom=zoom,
+                   punch_in=bool(punch_in))
         return send_code(toolcode_format_call(_TOOL_CALL, p), strict_json=True)

@@ -2451,11 +2451,18 @@ EXPECTED_TOOLS = [
 "            strips: Strip names (a split's either part stands for both). Empty: the selected strips.\n"
 "            swap: Exchange which framing of the picture is shown top and bottom in the splits named\n"
 "                (after building ``layout`` when one is given).\n"
+"            zoom_to: Zoom each strip into a region of its picture (Zoom To), after the layout: ``centre``,\n"
+"                ``top_left``, ``top_right``, ``bottom_left`` or ``bottom_right``. The shot stays covered\n"
+"                (no black edges). Empty: no zoom. Reset Framing undoes it. A split's parts and strips that\n"
+"                follow a subject are skipped (``skipped`` says why).\n"
+"            zoom: With ``zoom_to``: 1.5 or 2 (times as close as the frame just covering the shot).\n"
+"            punch_in: With ``zoom_to``: key the zoom over each strip's range instead of setting it: it eases in,\n"
+"                holds and eases out to the framing the strip had (for tutorials).\n"
 "\n"
 "        Returns:\n"
 "            ``status`` (ok / nothing / error), ``message``, ``layout``, ``changed`` (strips given\n"
 "            the layout), ``created`` / ``removed`` (strip names), ``unchanged`` (already in that\n"
-"            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``tracking``, ``layouts`` (read mode: strip ->\n"
+"            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``zoomed`` (strips zoomed), ``tracking``, ``layouts`` (read mode: strip ->\n"
 "            {layout, part, partner}; layout is \"\" when it has none) and ``scene``.\n"
 "        ",
         "inputSchema": {
@@ -2483,6 +2490,21 @@ EXPECTED_TOOLS = [
                 "swap": {
                     "default": False,
                     "title": "Swap",
+                    "type": "boolean"
+                },
+                "zoom_to": {
+                    "default": "",
+                    "title": "Zoom To",
+                    "type": "string"
+                },
+                "zoom": {
+                    "default": 2.0,
+                    "title": "Zoom",
+                    "type": "number"
+                },
+                "punch_in": {
+                    "default": False,
+                    "title": "Punch In",
                     "type": "boolean"
                 }
             },
@@ -2572,7 +2594,7 @@ EXPECTED_TOOLS = [
     {
         "name": "remove_silences",
         "description": "\n"
-"        Cut the quiet parts out of the Sequencer's edit (Remove Silences), one undo step.\n"
+"        Cut the quiet parts out of the Sequencer's edit (Remove Silences), or play them faster, one undo step.\n"
 "\n"
 "        Listens to the named sound strips (a movie strip brings its own sound). With\n"
 "        sounds from several files, only the time where all of them are quiet goes. The\n"
@@ -2584,6 +2606,13 @@ EXPECTED_TOOLS = [
 "        ``new_names`` lists every piece. A second call with the same settings finds\n"
 "        nothing more to cut.\n"
 "\n"
+"        ``mode=\"speed_up\"`` keeps the quiet parts and plays them ``speed`` times as fast instead:\n"
+"        picture and sound are split at the silence edges and the quiet pieces retimed together (the\n"
+"        sound keeps its pitch), everything after moves left by the time saved, captions are trimmed in\n"
+"        proportion. Retimed pieces are not listened to again, so a second call does nothing more. The\n"
+"        spoken parts are not retimed, so their transcript word times stay right; the sped pieces\n"
+"        carry no words (they were quiet) and the scene reader skips retimed strips.\n"
+"\n"
 "        Args:\n"
 "            strips: Sound or movie strips to listen to (empty: the selected ones; nothing\n"
 "                selected: every sound strip).\n"
@@ -2594,13 +2623,16 @@ EXPECTED_TOOLS = [
 "            close_gaps: Move everything after each cut left (ripple); off leaves gaps.\n"
 "            update_scene_end: When the scene ended at the end of the edit, it ends at the new end\n"
 "                (and the preview range).\n"
+"            mode: ``\"cut\"`` (default: the quiet parts go) or ``\"speed_up\"`` (they play faster; the gaps always close).\n"
+"            speed: With ``speed_up``: 2, 4 or 8 times as fast.\n"
 "\n"
 "        Returns:\n"
 "            ``status`` (ok / refused / error), ``message``, ``cuts``, ``seconds_removed``,\n"
 "            ``cut_ranges`` (frames before the cut), ``new_names`` (original strip -> its pieces;\n"
 "            [] when all of it went), ``end_frame`` (the scene's end now), ``content_end``,\n"
 "            ``refused`` ([{strip, reason}]), ``problems``, ``captions_trimmed``,\n"
-"            ``captions_dropped``.\n"
+"            ``captions_dropped``. With ``speed_up``: ``seconds_removed`` is the time saved, ``sped_seconds``\n"
+"            the quiet time before, ``speed``.\n"
 "        ",
         "inputSchema": {
             "properties": {
@@ -2648,6 +2680,16 @@ EXPECTED_TOOLS = [
                     "default": True,
                     "title": "Update Scene End",
                     "type": "boolean"
+                },
+                "mode": {
+                    "default": "cut",
+                    "title": "Mode",
+                    "type": "string"
+                },
+                "speed": {
+                    "default": 4.0,
+                    "title": "Speed",
+                    "type": "number"
                 }
             },
             "title": "remove_silencesArguments",

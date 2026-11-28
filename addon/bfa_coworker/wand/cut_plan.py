@@ -20,6 +20,9 @@ strips into plain dicts, asks here, and then changes the scene.
    numbered from it, so a name an agent holds still points at the strip.
 4. :func:`follow_end`: the scene end (or the preview end) follows the edit when it
    was at the end of the content before.
+5. Speed Up (#542): :func:`sped_length` and :class:`SpeedMap`: the same ranges, played
+   *factor* times faster instead of cut; where a frame lands once they are, which
+   follows the edit for the strips that are not cut in pieces (captions).
 """
 
 from __future__ import annotations
@@ -27,18 +30,22 @@ from __future__ import annotations
 __all__ = (
     "Cuts",
     "READABLE_S",
+    "SPEED_FACTORS",
+    "SpeedMap",
     "common_cuts",
     "follow_end",
     "map_frame",
     "overlapping",
     "piece_names",
     "plan",
+    "sped_length",
     "stretch_edges",
     "subtract",
     "within",
 )
 
 import bisect
+import math
 from typing import Any, Iterable, Sequence
 
 READABLE_S = 0.3        # a caption shorter than this can't be read: it goes
@@ -152,8 +159,12 @@ def overlapping(left: float, right: float, cuts: Iterable[tuple]) -> list[tuple]
     return Cuts(cuts).touching(left, right)
 
 
+def _round(value: float) -> int:
+    return int(math.floor(value + 0.5))
+
+
 def plan(strips: Sequence[dict], cuts: Iterable[tuple], ripple: bool = True, fps: float = 24.0,
-         readable_s: float = READABLE_S) -> dict[str, Any]:
+         readable_s: float = READABLE_S, mapper: Any = None) -> dict[str, Any]:
     """What happens to each strip at the level when *cuts* go.
 
     *strips*: dicts with ``name``, ``left``, ``right``, ``kind`` (``"media"``: cut in
@@ -165,15 +176,19 @@ def plan(strips: Sequence[dict], cuts: Iterable[tuple], ripple: bool = True, fps
     ``cut`` (``{name: [ranges]}`` to remove from media strips and, with *ripple*
     off, from text strips), ``trim`` (``{name: (left, right)}``: a text strip's new
     handles once closed up), ``drop`` (text strips that go) and ``cuts`` (merged).
+
+    *mapper* (Speed Up, #542): an object with ``map(frame)`` that says where a frame lands instead
+    of the cuts closing up (a :class:`SpeedMap`); the ranges then are played faster, not removed.
     """
     c = Cuts(cuts)
+    where = mapper if mapper is not None else c
     readable = readable_s * fps
     refused, cut, trim, drop = [], {}, {}, []
     lines_dropped = set()
     for s in strips:
         left, right = s["left"], s["right"]
         touched = c.touching(left, right)
-        moves = bool(ripple) and c.map(left) != left
+        moves = bool(ripple) and where.map(left) != left
         if s.get("locked") and (touched or moves):
             refused.append((s["name"], "is locked" if touched else "is locked and would have to move with the edit"))
             continue
@@ -186,7 +201,7 @@ def plan(strips: Sequence[dict], cuts: Iterable[tuple], ripple: bool = True, fps
             length = right - left
             short = min(readable, length / 2.0)
             if ripple:
-                new = (c.map(left), c.map(right))
+                new = (_round(where.map(left)), _round(where.map(right)))
                 kept = new[1] - new[0]
                 if kept <= 0 or kept < short:
                     drop.append(s["name"])
@@ -238,3 +253,53 @@ def follow_end(frame_end: int, end_before: int, end_after: int, frame_start: int
     if end_after <= end_before and frame_end >= end_before - 1:
         return max(int(frame_start), int(end_after) - 1)
     return None
+
+
+# -- Speed Up (#542) -----------------------------------------------------------------------
+
+SPEED_FACTORS = (2, 4, 8)
+
+
+def sped_length(length: int, factor: float) -> int:
+    """How many frames a piece of *length* frames takes once played *factor* times faster:
+    rounded to the nearest frame (halves up, like Blender's retiming), never less than one, and
+    never more than before."""
+    length = int(length)
+    if length <= 1 or factor <= 1.0:
+        return max(0, length)
+    return max(1, min(length, int((length / float(factor)) + 0.5)))
+
+
+class SpeedMap:
+    """Where the frames of the edit land once each of *ranges* (``(start, end)``, end exclusive) plays
+    in *lengths* frames (``lengths[i]`` for ``ranges[i]``) and the rest closes up behind it.
+
+    Inside a range a frame lands in proportion; at its start it stays; after it, it moves left by what
+    the ranges before it saved.  Same shape as :meth:`Cuts.map`, so ``wand.sequencer._ripple``
+    takes either."""
+
+    def __init__(self, ranges: Iterable[tuple], lengths: Iterable[int]):
+        rows = sorted((int(a), int(b), int(n)) for (a, b), n in zip(ranges, lengths) if b > a)
+        self.ranges = [(a, b) for a, b, _n in rows]
+        self.lengths = [n for _a, _b, n in rows]
+        self.starts = [a for a, _b in self.ranges]
+        self.ends = [b for _a, b in self.ranges]
+        self.before = [0]           # frames saved before range i
+        for (a, b), n in zip(self.ranges, self.lengths):
+            self.before.append(self.before[-1] + (b - a - n))
+
+    @property
+    def saved(self) -> int:
+        """Frames saved in all."""
+        return self.before[-1]
+
+    def map(self, frame: float) -> float:
+        i = bisect.bisect_right(self.starts, frame)         # ranges starting at or before frame
+        if i and frame < self.ends[i - 1]:                  # inside range i-1: in proportion
+            a, b = self.ranges[i - 1]
+            return a - self.before[i - 1] + (frame - a) * self.lengths[i - 1] / float(b - a)
+        return frame - self.before[i]
+
+    def touching(self, left: float, right: float) -> list[tuple]:
+        """The ranges overlapping ``left..right``, clipped to it."""
+        return Cuts(self.ranges).touching(left, right)

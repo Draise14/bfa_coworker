@@ -73,6 +73,11 @@ WAND_OPERATORS = (
     "bfacw.highlights_make_short",
     "bfacw.highlights_dismiss",
     "bfacw.highlights_markers",
+    "bfacw.make_chapters",
+    "bfacw.make_chapters_stop",
+    "bfacw.make_chapters_watch",
+    "bfacw.chapters_remove",
+    "bfacw.reframe_zoom_to",
 )
 
 

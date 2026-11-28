@@ -516,13 +516,27 @@ def layout_id(text: Any) -> str:
     return ""
 
 
-def tool_reframe_strips(layout: Any = "", strips: Any = None, swap: bool = False) -> dict[str, Any]:
+def tool_reframe_strips(layout: Any = "", strips: Any = None, swap: bool = False, zoom_to: Any = "",
+                        zoom: Any = 2.0, punch_in: bool = False) -> dict[str, Any]:
     """``reframe_strips`` (MCP): the operators' work without a UI, one undo step.  *layout* ``""`` with
-    *swap* only swaps; both builds the layout, then swaps; neither answers each strip's current layout."""
+    *swap* only swaps; both builds the layout, then swaps; neither answers each strip's current layout.
+    *zoom_to* (#542) a region: after those, zoom each strip into it by *zoom* (1.5 or 2), keyed over the
+    strip when *punch_in*."""
     wanted = layout_id(layout) if str(layout or "").strip() else ""
     if str(layout or "").strip() and not wanted:
         return {"status": "error", "message": "Unknown layout '{!s}'. Use one of: {:s}.".format(
             layout, ", ".join(rl.buildable()))}
+    from . import reframe_zoom
+    region = reframe_zoom.region_id(zoom_to)
+    if str(zoom_to or "").strip() and not region:
+        return {"status": "error", "message": "Unknown zoom_to '{!s}'. Use one of: centre, top_left, top_right, "
+                                              "bottom_left, bottom_right.".format(zoom_to)}
+    try:
+        zoom = float(zoom)
+    except (TypeError, ValueError):
+        zoom = 0.0
+    if region and zoom not in (1.5, 2.0):
+        return {"status": "error", "message": "zoom is 1.5 or 2 (times as close as the frame just covering the shot)."}
     scene = _wand._tool_scene()  # pylint: disable=protected-access
     if scene is None or scene.sequence_editor is None:
         return {"status": "error", "message": "The Sequencer's scene has no strips"}
@@ -532,7 +546,7 @@ def tool_reframe_strips(layout: Any = "", strips: Any = None, swap: bool = False
     if not names:
         return {"status": "nothing", "message": "No strips named and none selected: name the movie, image or scene "
                                                  "strips (strips=[...])", "scene": scene.name}
-    if not wanted and not swap:            # read mode: what layout the strips are in
+    if not wanted and not swap and not region:            # read mode: what layout the strips are in
         found = ra.layouts_of(scene, _level_strips(scene), names, BlenderBackend(scene))
         text = ", ".join("{:s}: {:s}".format(n, row["layout"] or "none") for n, row in found.items())
         return {"status": "ok", "message": text or "No movie, image or scene strip among them",
@@ -551,6 +565,17 @@ def tool_reframe_strips(layout: Any = "", strips: Any = None, swap: bool = False
             out["status"] = swapped["status"]
     elif swap:
         out["swapped"] = []
+    if region and out["status"] == "ok":
+        by_name = {s.name: s for s in _level_strips(scene)}
+        zoomed = reframe_zoom.zoom_strips(scene, [by_name[n] for n in names if n in by_name], region, zoom, bool(punch_in))
+        out["zoomed"] = zoomed["done"]
+        if zoomed["skipped"]:
+            out["skipped"] = list(out.get("skipped") or []) + zoomed["skipped"]
+        out["message"] = (out["message"] + ". " if out.get("message") else "") + zoomed["message"]
+        if zoomed["done"]:
+            out["changed"] = sorted(set(out.get("changed") or []) | set(zoomed["done"]))
+        elif not wanted and not swap:
+            out["status"] = "nothing"
     if out["status"] == "ok" and (out.get("changed") or out.get("swapped")):
         _wand._push_undo("Reframe")  # pylint: disable=protected-access
     out["scene"] = scene.name

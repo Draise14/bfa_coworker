@@ -34,6 +34,14 @@ from __future__ import annotations
 
 __all__ = (
     "GROUP_NAME",
+    "STRIP_TYPES",
+    "clear_framing_keys",
+    "ease_framing_keys",
+    "source_size",
+    "frame_size",
+    "reframe_strip",
+    "build_plain",
+    "to_plain",
     "plain_framing_of",
     "plain_keyed",
     "plain_marker",
@@ -425,19 +433,42 @@ def plain_keyed(scene: Any, strip: Any) -> bool:
 
 
 def _clear_plain_keys(scene: Any, strip: Any) -> int:
-    path = _offset_path(strip)
+    """The strip's framing keys: its pan (Follow Subject) and the four Zoom To keys (#542)."""
+    paths = {strip.transform.path_from_id(p) for p in ("offset_x", "offset_y", "scale_x", "scale_y")}
     gone = 0
     for bag in _channelbags(scene):
         for fc in list(bag.fcurves):
-            if fc.data_path == path:
+            if fc.data_path in paths:
                 bag.fcurves.remove(fc)
                 gone += 1
     return gone
 
 
+def clear_framing_keys(scene: Any, strip: Any) -> int:
+    """Take the keys of the strip's framing (pan, zoom) and Zoom To's tag off it; the numbers stay as they are."""
+    gone = _clear_plain_keys(scene, strip)
+    try:
+        del strip[rp.PUNCH]
+    except (KeyError, TypeError, AttributeError):
+        pass
+    return gone
+
+
+def ease_framing_keys(scene: Any, strip: Any) -> None:
+    """Smooth the framing keys (ease in, hold, ease out): Bezier with auto-clamped handles."""
+    paths = {strip.transform.path_from_id(p) for p in ("offset_x", "offset_y", "scale_x", "scale_y")}
+    for bag in _channelbags(scene):
+        for fc in bag.fcurves:
+            if fc.data_path in paths:
+                for kp in fc.keyframe_points:
+                    kp.interpolation = 'BEZIER'
+                    kp.handle_left_type = kp.handle_right_type = 'AUTO_CLAMPED'
+                fc.update()
+
+
 def clear_plain(scene: Any, strip: Any) -> None:
     """Take the plain crop off *strip*: keys, marker, crop and transform back to neutral."""
-    _clear_plain_keys(scene, strip)
+    clear_framing_keys(scene, strip)
     try:
         del strip[rp.MARKER]
     except (KeyError, TypeError, AttributeError):
@@ -678,6 +709,8 @@ def _set_animated(scene: Any, mod: Any, name: str, value: Any) -> None:
 def _nudge_plain(scene: Any, strip: Any, action: str, step: float) -> str:
     """Pan / zoom a plain-crop strip: the same steps as the modifier's inputs.  A keyed pan gets a key on the
     current frame (like auto-keying)."""
+    if strip.get(rp.PUNCH) is not None:             # Zoom To keyed it (#542): its keys would override a nudge
+        raise ReframeError("'{:s}' has a Zoom To punch-in keyed: use Reset Framing, or Zoom To again.".format(strip.name))
     f = plain_framing_of(scene, strip)
     if action in {"LEFT", "RIGHT", "UP", "DOWN"}:
         name, d = {"LEFT": ("Offset X", -step), "RIGHT": ("Offset X", step), "UP": ("Offset Y", step),
@@ -1128,6 +1161,7 @@ class BFACW_MT_reframe(Menu):
         layout.separator()
         layout.operator("bfacw.reframe", text="Centre Crop", icon=icon('FULLSCREEN_ENTER')).action = "CROP"
         layout.operator("bfacw.reframe", text="Blur Fill", icon=icon('MATFLUID')).action = "BLUR_FILL"
+        layout.menu("BFACW_MT_reframe_zoom_to", icon=icon('ZOOM_IN'))       # Zoom To a region (#542)
         layout.separator()
         layout.operator("bfacw.reframe_follow_subject", icon=icon('TRACKER'))
         from . import reframe_subjects
@@ -1183,10 +1217,13 @@ def register() -> None:
             _HOOKED.append((menu, draw))
     from . import reframe_layouts           # #606: Reframe layouts
     reframe_layouts.register()
+    from . import reframe_zoom              # #542: Zoom To a region
+    reframe_zoom.register()
 
 
 def unregister() -> None:
-    from . import reframe_layouts
+    from . import reframe_layouts, reframe_zoom
+    reframe_zoom.unregister()
     reframe_layouts.unregister()
     for menu, draw in _HOOKED:
         try:

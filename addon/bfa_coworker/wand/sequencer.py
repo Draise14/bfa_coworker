@@ -26,6 +26,11 @@ stays in sync -- and closes the gaps.  No engine is needed.
 * **Apply**: data-level ``Strip.split`` + ``strips.remove`` (no operator context
   needed), then the ripple moves what follows left; the first piece of a strip
   keeps its name; the scene end follows when it was at the end; one undo step.
+* **Speed Up** (#542): the same ranges, played 2, 4 or 8 times as fast instead of cut.  Pieces are
+  split at the silence edges (``_split_member``), a movie or a sound piece is retimed with the
+  Sequencer's own retiming (``Strip.retiming_keys`` and ``sequencer.retiming_segment_speed_set``,
+  which keeps a sound's pitch), a still or colour piece is shortened, captions are trimmed in
+  proportion, and everything after moves left by the time saved (``cut_plan.SpeedMap``).
 * **Tool**: :func:`tool_remove_silences` is the agents' ``remove_silences``.
 
 Places (``SPEC.places``): the end of the Sequencer's *Strip* menu, the
@@ -48,28 +53,34 @@ __all__ = (
     "COWORKER_PT_sequencer_toolshelf",
     "CoworkerEntry",
     "NO_DIALOG",
+    "MODES",
     "OTHERS",
     "PANEL",
     "RATE",
     "SPEC",
+    "SPEEDS",
     "SUBMENUS",
     "VIEWS",
     "WINDOW_S",
     "apply_cuts",
     "blocked_in",
     "move_frames",
+    "normal_mode",
     "register",
     "remove_silences",
+    "speed_up",
     "tool_remove_silences",
     "unregister",
 )
 
+import contextlib
+import math
 import os
 import tempfile
 from typing import Any, Callable
 
 import bpy  # pylint: disable=import-error
-from bpy.props import BoolProperty, FloatProperty  # pylint: disable=import-error
+from bpy.props import BoolProperty, EnumProperty, FloatProperty  # pylint: disable=import-error
 from bpy.types import Operator, Panel  # pylint: disable=import-error
 
 from . import cut_plan, icons, silences
@@ -86,7 +97,8 @@ SPEC = OperatorSpec(
     id="sequencer.remove_silences",
     label="Remove Silences",
     description=("Cut the quiet parts of the selected sound strips out of the whole edit (picture, other "
-                 "sounds, titles, captions), so it all stays in sync, and close the gaps"),
+                 "sounds, titles, captions), so it all stays in sync, and close the gaps; or keep them and "
+                 "play them faster (Speed Up)"),
     icon="remove_silences",
     fallback_icon="SPEAKER",
     places=(Place.menu("SEQUENCER_MT_strip", after="sequencer.split"),
@@ -324,6 +336,7 @@ def _analyse(scene: Any, sounds: list, context: Any = None,
     fps = _fps(scene)
     wm = getattr(context, "window_manager", None) if report_progress else None
     infos, problems, blocked = [], [], []
+    retimed: list[str] = []
     plans = []
     for sound in sounds:
         if sound.sound is None:
@@ -341,7 +354,7 @@ def _analyse(scene: Any, sounds: list, context: Any = None,
             blocked.append((_left(sound), _right(sound)))
             continue
         if _retimed(sound, factory, fps):
-            problems.append("“{:s}” is retimed (its speed changed): not cut".format(sound.name))
+            retimed.append(sound.name)
             blocked.append((_left(sound), _right(sound)))
             continue
         t0, t1 = silences.sound_window(_left(sound), _right(sound), _content_start(sound),
@@ -379,7 +392,15 @@ def _analyse(scene: Any, sounds: list, context: Any = None,
         if wm is not None and plans:
             wm.progress_end()
             _status(context, None)
+    problems.extend(_retimed_notes(retimed))
     return infos, problems, blocked
+
+
+def _retimed_notes(names: list[str]) -> list[str]:
+    """One line per retimed sound, or one line for many (Speed Up leaves a retimed piece at every silence)."""
+    if len(names) <= 2:
+        return ["“{:s}” is retimed (its speed changed): not cut".format(n) for n in names]
+    return ["{:d} sound strips are retimed (sped up, or their speed changed): not listened to, not cut".format(len(names))]
 
 
 def _status(context: Any, text: str | None) -> None:
@@ -448,8 +469,14 @@ def _overhang(infos: list[dict], every: list) -> None:
 _TAG = "bfacw_caption"      # captions.TAG: a caption strip's tag (its role, the line of a word strip)
 
 
-def _describe(every: list, channels: Any, fps: float) -> list[dict]:
-    """Every strip at the level as :func:`cut_plan.plan` reads it."""
+# Strip types a piece of which can be played faster (retimed, or just shortened when it has no
+# time inside): the rest refuses Speed Up where a silence touches it (#542).
+SPEEDABLE = frozenset({"MOVIE", "SOUND", "IMAGE", "COLOR", "ADJUSTMENT", "TEXT"})
+
+
+def _describe(every: list, channels: Any, fps: float, speed: bool = False) -> list[dict]:
+    """Every strip at the level as :func:`cut_plan.plan` reads it.  *speed*: for Speed Up (#542),
+    which can't follow a piece that plays faster."""
     transitions = {}
     for strip in every:
         if getattr(strip, "input_2", None) is not None:
@@ -470,6 +497,10 @@ def _describe(every: list, channels: Any, fps: float) -> list[dict]:
             refuse = "has a transition (“{:s}”) on it: remove it first".format(transitions[strip.name])
         elif _speed_changed(strip, fps):
             refuse = "is retimed (its speed changed): reset its retiming first"
+        elif speed and follows:
+            refuse = "is an effect strip on a silence: remove it first, or use Cut"
+        elif speed and strip.type not in SPEEDABLE:
+            refuse = "can't be played faster ({:s} strip): use Cut".format(strip.type.lower())
         row = {"name": strip.name, "left": _left(strip), "right": _right(strip),
                "kind": "follow" if follows else ("text" if strip.type == "TEXT" else "media"),
                "locked": _locked(strip, channels), "refuse": refuse}
@@ -608,6 +639,11 @@ def _text_pieces(every: list, pieces: dict, new_names: dict, fresh: set) -> None
                 _resign(strip)
 
 
+def _at(cuts: Any, frame: float) -> int:
+    """Where *frame* lands (whole frames: Speed Up's map is fractional inside a piece that plays faster)."""
+    return int(math.floor(cuts.map(frame) + 0.5))
+
+
 def _ripple(strips: Any, cuts: Any, trims: dict) -> None:
     """Close the cuts up: everything moves left by the time cut before it, and a text strip
     over a cut is trimmed to what it keeps (in time order, so nothing lands on another strip)."""
@@ -617,7 +653,7 @@ def _ripple(strips: Any, cuts: Any, trims: dict) -> None:
         left = _left(strip)
         new = trims.get(strip.name)
         if new is None:
-            shift = left - int(cuts.map(left))
+            shift = left - _at(cuts, left)
             if shift:
                 _move(strip, -shift)
             continue
@@ -631,7 +667,7 @@ def _ripple(strips: Any, cuts: Any, trims: dict) -> None:
         offsets = tag.get("word_frames") if tag is not None and hasattr(tag, "get") else None
         if offsets:                         # #497: Make Vertical lays the words out again from these
             try:
-                tag["word_frames"] = [int(cuts.map(left + int(o))) - new_left for o in offsets]
+                tag["word_frames"] = [_at(cuts, left + int(o)) - new_left for o in offsets]
             except (TypeError, ValueError, KeyError):
                 pass
         if fresh:                           # trimmed by the cut, not by hand (#552)
@@ -662,10 +698,43 @@ def _content_end(strips: Any) -> int:
     return max((_right(s) for s in strips), default=0)
 
 
+def _sped(scene: Any, cuts: list[tuple], speed: Any, update_end: bool) -> dict[str, Any]:
+    """Speed Up's answer for ``remove_silences``: :func:`speed_up` and the report line."""
+    out = speed_up(scene, cuts, float(speed), update_end, "Remove Silences")
+    if out["status"] != "ok":
+        return out
+    message = "Sped up {:d} silence{:s} {:g}x ({:s} now plays in {:s}, {:s} saved)".format(
+        out["cuts"], "" if out["cuts"] == 1 else "s", out["speed"], silences.format_duration(out["sped_seconds"]),
+        silences.format_duration(max(0.0, out["sped_seconds"] - out["seconds_removed"])),
+        silences.format_duration(out["seconds_removed"]))
+    dropped = out["captions_dropped"]
+    if dropped:
+        message += "; {:d} caption{:s} too short to read went".format(len(dropped), "" if len(dropped) == 1 else "s")
+    if out["scene_end_changed"]:
+        message += "; the scene now ends at frame {:d}".format(scene.frame_end)
+    return dict(out, message=message, mode="SPEED")
+
+
+MODES = (("CUT", "Cut", "Cut the quiet parts out of the edit and close the gaps", "X"),
+         ("SPEED", "Speed Up", "Keep the quiet parts but play them faster: picture and sound together, the "
+                               "sound keeps its pitch", "FF"))
+SPEEDS = tuple((str(f), "{:d}x".format(f), "Play the quiet parts {:d} times as fast".format(f), "FF", i)
+               for i, f in enumerate(cut_plan.SPEED_FACTORS))
+DEFAULT_SPEED = 4
+
+
+def normal_mode(mode: Any) -> str:
+    """``"CUT"`` or ``"SPEED"`` from a mode as an agent or a dialog writes it (``cut``, ``speed_up``, ``Speed Up``...)."""
+    text = str(mode or "CUT").strip().upper().replace(" ", "_").replace("-", "_")
+    return "SPEED" if text in ("SPEED", "SPEED_UP", "SPEEDUP", "FAST") else "CUT"
+
+
 def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None, ripple: bool = True,
                     update_end: bool = True, context: Any = None, report_progress: bool = True,
-                    frame_range: tuple[int, int] | None = None) -> dict[str, Any]:
-    """Remove the silences of *names* (or of the selected strips) from the whole edit (#539).
+                    frame_range: tuple[int, int] | None = None, mode: str = "CUT",
+                    speed: float = DEFAULT_SPEED) -> dict[str, Any]:
+    """Remove the silences of *names* (or of the selected strips) from the whole edit (#539), or with
+    *mode* ``"SPEED"`` play them *speed* times faster instead (#542: 2, 4 or 8; the gaps always close).
 
     *settings*: (threshold dB, minimum silence, padding, minimum clip).  The answer has
     ``status`` (``ok``, ``nothing``, ``refused`` or ``error``), a ``message``, and with
@@ -700,11 +769,14 @@ def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None,
         cuts = cut_plan.within(cuts, int(frame_range[0]), int(frame_range[1]))
     notes = ["“{:s}” is quiet all the way through: not listened to".format(n) for n in quiet]
     base = {"problems": problems, "notes": notes, "listened": [s.name for s in sounds]}
+    fast = normal_mode(mode) == "SPEED"
     if not cuts:
         return dict(base, status="nothing", message=(
-            "Nothing is quiet enough to remove (below {:.0f} dB for {:.2f} s or more{:s}): try a higher threshold "
-            "or a shorter minimum silence".format(settings[0], settings[1],
+            "Nothing is quiet enough to {:s} (below {:.0f} dB for {:.2f} s or more{:s}): try a higher threshold "
+            "or a shorter minimum silence".format("speed up" if fast else "remove", settings[0], settings[1],
                                                   ", in every sound at once" if len(sounds) > 1 else "")))
+    if fast:
+        return dict(base, **_sped(scene, cuts, speed, update_end))
     out = apply_cuts(scene, cuts, ripple, update_end, "Remove Silences")
     if out["status"] != "ok":
         return dict(base, **out)
@@ -779,6 +851,204 @@ def apply_cuts(scene: Any, cuts: list[tuple], ripple: bool = True, update_end: b
     changed = sorted(n for n, ps in new_names.items() if ps != [n])
     return dict(status="ok", message="", cuts=len(the_plan["cuts"]), frames_removed=frames,
                 seconds_removed=round(seconds, 2), cut_ranges=[list(r) for r in the_plan["cuts"]],
+                new_names=new_names, renamed=changed, captions_trimmed=sorted(the_plan["trim"]),
+                captions_dropped=dropped, end_frame=scene.frame_end, content_end=end1 - 1,
+                scene_end_changed=end_changed, refused=[])
+
+
+# -- Speed Up (#542) -----------------------------------------------------------------
+
+def _split_member(strips: Any, strip: Any, frames: list[tuple]) -> list[tuple]:
+    """Split *strip* at the edges of *frames* (nothing is removed): ``[(piece, fast)]`` in time order,
+    *fast* for the pieces inside the frames."""
+    from .prefetch import stop_prefetch
+    stop_prefetch(strip)
+    piece, out = strip, []
+    for first, end in frames:
+        if piece is None:
+            break
+        left, right = _left(piece), _right(piece)
+        if end <= left:
+            continue
+        if first >= right:
+            break
+        first, end = max(first, left), min(end, right)
+        if first > left:
+            middle = _split(piece, first)
+            out.append((piece, False))
+        else:
+            middle = piece
+        rest = _split(middle, end) if end < right else None
+        out.append((middle, True))
+        piece = rest
+    if piece is not None:
+        out.append((piece, False))
+    return out
+
+
+def _retime_problem() -> str:
+    """Why no strip can be retimed here ("" when one can): the retiming operators need a Sequencer area."""
+    try:
+        windows = list(bpy.context.window_manager.windows)
+    except (AttributeError, RuntimeError):
+        windows = []
+    if not windows:
+        return "Speed Up needs a Blender window with a Sequencer (the retiming tools run there)"
+    return ""
+
+
+def _sequencer_area() -> tuple[Any, Any, Any, Any]:
+    """``(window, area, region, previous type)`` of a Sequencer area, switching an area of the first window to
+    one when none is open (``previous type`` is then what to put back, else ``None``)."""
+    windows = list(bpy.context.window_manager.windows)
+    for win in windows:
+        for area in win.screen.areas:
+            if area.type == "SEQUENCE_EDITOR":
+                region = next((r for r in area.regions if r.type == "WINDOW"), None)
+                if region is not None:
+                    return win, area, region, None
+    win = windows[0]
+    area = max(win.screen.areas, key=lambda a: a.width * a.height)
+    before = area.type
+    area.type = "SEQUENCE_EDITOR"
+    region = next((r for r in area.regions if r.type == "WINDOW"), None)
+    if region is None:
+        area.type = before
+        raise _Problem("No Sequencer area to retime in")
+    return win, area, region, before
+
+
+@contextlib.contextmanager
+def _retiming_context(scene: Any):
+    """The context the retiming operators poll for: a Sequencer area (the one open, else an area switched to
+    one for the time of the call and put back) showing *scene*."""
+    win, area, region, before = _sequencer_area()
+    workspace = win.workspace
+    shown = workspace.sequencer_scene
+    if shown is not scene:
+        workspace.sequencer_scene = scene
+    try:
+        with bpy.context.temp_override(window=win, area=area, region=region, scene=scene):
+            yield
+    finally:
+        if shown is not scene:
+            workspace.sequencer_scene = shown
+        if before is not None:
+            area.type = before
+
+
+def _retime_pieces(scene: Any, jobs: list[tuple], factor: float) -> None:
+    """Play each ``(strip, frames)`` of *jobs* *factor* times faster with the Sequencer's retiming (Blender 5.2:
+    ``Strip.retiming_keys`` and ``sequencer.retiming_segment_speed_set``, which keeps a sound's pitch), then
+    set its length to *frames* so every track agrees on where the piece ends.  The selection and the active
+    strip are put back."""
+    if not jobs:
+        return
+    editor = scene.sequence_editor
+    strips = list(editor.strips_all)
+    chosen = {s.as_pointer(): bool(s.select) for s in strips}
+    active = editor.active_strip
+    with _retiming_context(scene):
+        for strip in strips:
+            strip.select = False
+        for strip, frames in jobs:
+            left = _left(strip)
+            if frames >= _right(strip) - left:
+                continue
+            strip.select = True
+            editor.active_strip = strip
+            strip.retiming_keys.add(timeline_frame=left)
+            result = bpy.ops.sequencer.retiming_segment_speed_set(speed=100.0 * factor)
+            strip.select = False
+            if "FINISHED" not in result:
+                raise RuntimeError("the retiming of {!r} did not run".format(strip.name))
+            if _right(strip) != left + frames:
+                strip.right_handle = left + frames
+    for strip in strips:
+        strip.select = chosen.get(strip.as_pointer(), False)
+    if active is not None:
+        editor.active_strip = active
+
+
+def speed_up(scene: Any, ranges: list[tuple], factor: float = 4.0, update_end: bool = True,
+             what: str = "Remove Silences") -> dict[str, Any]:
+    """Play the timeline frames *ranges* (``[(first, end)]``) *factor* times faster in every strip at the
+    level the artist is looking at, and close up behind them (#542).  Same plan as :func:`apply_cuts`
+    (picture and sound together, every other track in step, locked / retimed / scene / meta / effect strips
+    over a range refusing the whole edit before anything changes, the first piece keeping its name, the scene
+    end following); the pieces inside the ranges are *retimed* (a movie or a sound) or shortened (a still, a
+    colour, an adjustment strip) instead of removed.  Captions are not cut in pieces: each is trimmed to its
+    new length (one left too short to read goes).  No undo step of its own.
+
+    ``status``: ``ok``, ``nothing``, ``refused`` or ``error`` (``changed``: press Ctrl+Z)."""
+    editor = scene.sequence_editor
+    if editor is None or not ranges:
+        return {"status": "nothing", "message": "Nothing to speed up", "refused": []}
+    strips, channels = _level(editor)
+    every = list(strips)
+    fps = _fps(scene)
+    ranges = sorted((int(a), int(b)) for a, b in ranges if b > a)
+    smap = cut_plan.SpeedMap(ranges, [cut_plan.sped_length(b - a, factor) for a, b in ranges])
+    the_plan = cut_plan.plan(_describe(every, channels, fps, speed=True), ranges, True, fps, mapper=smap)
+    if the_plan["refused"]:
+        refused = [{"strip": n, "reason": r} for n, r in the_plan["refused"]]
+        listed = "; ".join("“{:s}” {:s}".format(n, r) for n, r in the_plan["refused"][:4])
+        more = len(the_plan["refused"]) - 4
+        return {"status": "refused", "refused": refused, "message": (
+            "Nothing was sped up, so the edit stays in sync: {:s}{:s}".format(
+                listed, " (and {:d} more)".format(more) if more > 0 else ""))}
+    problem = _retime_problem() if the_plan["cut"] else ""
+    if problem:
+        return {"status": "error", "refused": [], "message": problem}
+    end0 = _content_end(editor.strips)
+    by_name = {s.name: s for s in every}
+    texts = {n for n in the_plan["trim"] if by_name[n].type == "TEXT"}
+    fresh = {n for n in texts if _unedited(by_name[n])}
+    trimmed = [n for n in the_plan["trim"] if n in by_name and by_name[n].type == "TEXT" and _unedited(by_name[n])]
+    chosen = {s.as_pointer(): bool(s.select) for s in every}
+    try:
+        members = {name: _split_member(strips, by_name[name], touched) for name, touched in the_plan["cut"].items()}
+        dropped = _drop(scene, strips, [by_name[n] for n in the_plan["drop"]])
+        retime, short = [], []
+        for pieces in members.values():
+            for piece, fast in pieces:
+                if not fast:
+                    continue
+                left, right = _left(piece), _right(piece)
+                frames = max(1, _at(smap, right) - _at(smap, left))
+                (retime if piece.type in ("MOVIE", "SOUND") else short).append((piece, min(frames, right - left)))
+        _retime_pieces(scene, retime, factor)
+        for piece, frames in short:                     # a still, a colour, an adjustment strip: no time inside
+            piece.right_handle = _left(piece) + frames
+        _ripple(strips, smap, the_plan["trim"])
+        pieces_by_name = {n: [p for p, _fast in ps] for n, ps in members.items()}
+        new_names = _rename(editor, pieces_by_name)
+        _refit(scene, [p for n in sorted(fresh) for p in new_names.get(n, [n])] + trimmed)
+        for strip in strips:                            # the retiming borrowed the selection: back as it was
+            if strip.as_pointer() in chosen:
+                strip.select = chosen[strip.as_pointer()]
+        for name, ps in pieces_by_name.items():
+            parent = by_name[name]
+            for piece in ps:
+                piece.select = bool(chosen.get(parent.as_pointer(), piece.select))
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        return {"status": "error", "changed": True, "refused": [], "message": (
+            "{:s} stopped part-way ({!s}): press Ctrl+Z to get the edit back".format(what, ex))}
+    end1 = _content_end(editor.strips)
+    end_changed = False
+    if update_end and end1 < end0:
+        new_end = cut_plan.follow_end(scene.frame_end, end0, end1, scene.frame_start)
+        if new_end is not None and new_end != scene.frame_end:
+            scene.frame_end = new_end
+            end_changed = True
+        if scene.use_preview_range:
+            new_preview = cut_plan.follow_end(scene.frame_preview_end, end0, end1, scene.frame_preview_start)
+            if new_preview is not None:
+                scene.frame_preview_end = new_preview
+    changed = sorted(n for n, ps in new_names.items() if ps != [n])
+    return dict(status="ok", message="", cuts=len(ranges), frames_removed=int(smap.saved),
+                seconds_removed=round(smap.saved / fps, 2), cut_ranges=[list(r) for r in ranges],
+                speed=float(factor), sped_seconds=round(silences.removed_frames(ranges) / fps, 2),
                 new_names=new_names, renamed=changed, captions_trimmed=sorted(the_plan["trim"]),
                 captions_dropped=dropped, end_frame=scene.frame_end, content_end=end1 - 1,
                 scene_end_changed=end_changed, refused=[])
@@ -884,13 +1154,19 @@ def _prop(name: str, kind: Any, **extra: Any) -> Any:
 
 
 class COWORKER_OT_sequencer_remove_silences(Operator):  # type: ignore[misc]
-    """Cut the quiet parts of the selected sound strips out of the whole edit, so it all stays in sync, and close the gaps"""
+    """Cut the quiet parts of the selected sound strips out of the whole edit, or play them faster instead, so it all stays in sync"""
 
     bl_idname = SPEC.bl_idname
     bl_label = SPEC.label
     bl_description = agent_line(SPEC.description)
     bl_options = {"REGISTER", "UNDO"}
 
+    mode: EnumProperty(  # type: ignore[valid-type]
+        name="What to Do", description="Cut the quiet parts out, or keep them and play them faster",
+        items=[(i, label, tip, icon, n) for n, (i, label, tip, icon) in enumerate(MODES)], default="CUT")
+    speed: EnumProperty(  # type: ignore[valid-type]
+        name="Speed", description="How much faster the quiet parts play (picture and sound together; the "
+                                  "sound keeps its pitch)", items=list(SPEEDS), default=str(DEFAULT_SPEED))
     threshold_db: _prop("threshold_db", FloatProperty, min=-120.0, max=0.0, precision=1)  # type: ignore[valid-type]
     min_silence: _prop("min_silence", FloatProperty, min=0.01, max=60.0, precision=2)  # type: ignore[valid-type]
     padding: _prop("padding", FloatProperty, min=0.0, max=10.0, precision=2)  # type: ignore[valid-type]
@@ -935,8 +1211,14 @@ class COWORKER_OT_sequencer_remove_silences(Operator):  # type: ignore[misc]
         layout.use_property_split = True
         layout.use_property_decorate = False
         col = layout.column()
-        for name in ("threshold_db", "min_silence", "padding", "min_keep", "ripple", "update_scene_end"):
+        col.prop(self, "mode", expand=True)
+        if self.mode == "SPEED":
+            col.prop(self, "speed", expand=True)
+        for name in ("threshold_db", "min_silence", "padding", "min_keep"):
             col.prop(self, name)
+        if self.mode == "CUT":
+            col.prop(self, "ripple")
+        col.prop(self, "update_scene_end")
         layout.separator()
         infos = _PREVIEW.get("groups") or []
         cuts, quiet = _common(infos, _PREVIEW.get("blocked") or [], self._settings())
@@ -944,7 +1226,14 @@ class COWORKER_OT_sequencer_remove_silences(Operator):  # type: ignore[misc]
         box = layout.box()
         heard = len(infos) - len(quiet)
         strips = "in {:d} sound{:s}".format(heard, "" if heard == 1 else "s") if heard > 1 else ""
-        if cuts:
+        if cuts and self.mode == "SPEED":
+            factor = int(self.speed)
+            lengths = [cut_plan.sped_length(b - a, factor) for a, b in cuts]
+            box.label(text="{:d} silence{:s}, {:s} plays in {:s} at {:d}x {:s}".format(
+                len(cuts), "" if len(cuts) == 1 else "s", silences.format_duration(silences.removed_frames(cuts) / fps),
+                silences.format_duration(sum(lengths) / fps), factor, strips).strip(), icon="INFO")
+            box.label(text="Picture and sound together; the sound keeps its pitch", icon="SPEAKER")
+        elif cuts:
             box.label(text="{:s} {:s}".format(silences.summary(len(cuts), silences.removed_frames(cuts), fps),
                                               strips).strip(), icon="INFO")
         else:
@@ -955,7 +1244,7 @@ class COWORKER_OT_sequencer_remove_silences(Operator):  # type: ignore[misc]
 
     def execute(self, context):
         out = remove_silences(_scene(context), self._settings(), None, self.ripple, self.update_scene_end,
-                              context=context)
+                              context=context, mode=self.mode, speed=float(self.speed))
         for text in out.get("problems", []) + out.get("notes", []):
             self.report({"WARNING"}, text)
         status = out["status"]
@@ -1002,7 +1291,7 @@ def _push_undo(name: str) -> None:
 
 def tool_remove_silences(strips: Any = None, threshold_db: float = -40.0, min_silence: float = 0.4,
                          padding: float = 0.15, min_keep: float = 0.1, close_gaps: bool = True,
-                         update_scene_end: bool = True) -> dict[str, Any]:
+                         update_scene_end: bool = True, mode: str = "cut", speed: float = 4.0) -> dict[str, Any]:
     """``remove_silences`` (MCP): the operator's work without a UI, one undo step."""
     try:
         values = (float(threshold_db), float(min_silence), float(padding), float(min_keep))
@@ -1011,6 +1300,15 @@ def tool_remove_silences(strips: Any = None, threshold_db: float = -40.0, min_si
     if not -120.0 <= values[0] <= 0.0 or values[1] <= 0.0 or values[2] < 0.0 or values[3] < 0.0:
         return {"status": "error", "message": "threshold_db is -120..0 (dB); min_silence above 0; "
                                               "padding and min_keep 0 or more (seconds)"}
+    if str(mode or "cut").strip().lower().replace(" ", "_").replace("-", "_") not in (
+            "cut", "speed", "speed_up", "speedup"):
+        return {"status": "error", "message": "mode is \"cut\" or \"speed_up\""}
+    try:
+        speed = float(speed)
+    except (TypeError, ValueError):
+        speed = 0.0
+    if normal_mode(mode) == "SPEED" and speed not in tuple(float(f) for f in cut_plan.SPEED_FACTORS):
+        return {"status": "error", "message": "speed is 2, 4 or 8 (times as fast)"}
     if isinstance(strips, str):
         strips = [strips] if strips else []
     names = [str(n) for n in strips or ()]
@@ -1025,11 +1323,11 @@ def tool_remove_silences(strips: Any = None, threshold_db: float = -40.0, min_si
             names = [s.name for s in level if s.type == "SOUND"]
             note = "No strip named or selected: listened to every sound strip"
     out = remove_silences(scene, values, names or None, bool(close_gaps), bool(update_scene_end),
-                          context=bpy.context, report_progress=False)
+                          context=bpy.context, report_progress=False, mode=mode, speed=speed)
     if note:
         out["notes"] = [note] + list(out.get("notes", []))
     if out["status"] == "ok" or out.get("changed"):
-        _push_undo("Remove Silences")
+        _push_undo("Speed Up Silences" if normal_mode(mode) == "SPEED" else "Remove Silences")
     if out["status"] == "nothing":
         out["status"] = "ok"
         out.setdefault("cuts", 0)
@@ -1061,6 +1359,7 @@ class CoworkerEntry:
 # (operator, its class name in bpy.types, text, wand icon, Blender fallback icon).
 OTHERS = (
     ("bfacw.auto_captions", "BFACW_OT_auto_captions", "Auto Captions", "captions", "FONT_DATA"),
+    ("bfacw.make_chapters", "BFACW_OT_make_chapters", "Make Chapters", "chapters", "MARKER_HLT"),
     ("bfacw.make_vertical", "BFACW_OT_make_vertical", "Make Vertical", "vertical", "SEQ_PREVIEW"),
     ("bfacw.open_transcript", "BFACW_OT_open_transcript", "Edit Transcript", "transcribe", "TEXT"),
 )

@@ -25,6 +25,8 @@ class Params(NamedTuple):
     min_keep: float = 0.1
     close_gaps: bool = True
     update_scene_end: bool = True
+    mode: str = "cut"
+    speed: float = 4.0
 
 
 class Result(NamedTuple):
@@ -44,6 +46,9 @@ class Result(NamedTuple):
     listened: list[str] | None = None
     captions_trimmed: list[str] | None = None
     captions_dropped: list[str] | None = None
+    mode: str | None = None
+    speed: float | None = None
+    sped_seconds: float | None = None
     scene: str | None = None
 
 
@@ -63,5 +68,6 @@ def main(params: Params) -> Result:
     if isinstance(strips, str):
         strips = [strips] if strips else []
     out = wand.tool_remove_silences(list(strips or ()), params.threshold_db, params.min_silence, params.padding,
-                                    params.min_keep, bool(params.close_gaps), bool(params.update_scene_end))
+                                    params.min_keep, bool(params.close_gaps), bool(params.update_scene_end),
+                                    params.mode, params.speed)
     return Result(**{k: v for k, v in out.items() if k in Result._fields})

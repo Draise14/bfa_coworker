@@ -125,7 +125,7 @@ class _Speed(T._Pipeline):
         self.seq._retime_pieces = retime
 
     def run_speed(self, scene, names, factor=4, update_end=True):
-        return self.seq.remove_silences(scene, SETTINGS, names, True, update_end, None, False, "SPEED", factor)
+        return self.seq.remove_silences(scene, SETTINGS, names, True, update_end, None, False, mode="SPEED", speed=factor)
 
     def two(self):
         ed = FakeEditor()
@@ -320,7 +320,7 @@ class TestSpeedUpTheEdit(_Speed):
         loud = [(i * 6.0, i * 6.0 + 3.0) for i in range(600)]
         self.speech = {"Voice": (loud, 3600.0)}
         started = time.monotonic()
-        out = self.seq.remove_silences(T._scene(ed, 108000), SETTINGS, ["Voice"], True, True, None, False, "SPEED", 4)
+        out = self.seq.remove_silences(T._scene(ed, 108000), SETTINGS, ["Voice"], True, True, None, False, mode="SPEED", speed=4)
         self.assertEqual(out["status"], "ok", out)
         self.assertLess(time.monotonic() - started, 20.0)
         self.assertEqual(out["cuts"], 600)

@@ -221,6 +221,12 @@ class TestStyles(unittest.TestCase):
         big = cap.resolve_style("CLEAN", 3840, 2160)["props"]["font_size"]
         self.assertAlmostEqual(big / small, 3.0, delta=0.1)
 
+    def test_541_clean_has_a_firm_opaque_outline(self):
+        props = cap.resolve_style("CLEAN", 1920, 1080)["props"]
+        self.assertTrue(props["use_outline"])
+        self.assertEqual(props["outline_color"][3], 1.0)
+        self.assertGreaterEqual(props["outline_width"], 0.07)
+
     def test_what_each_style_is(self):
         self.assertTrue(cap.resolve_style("BOXED", 1920, 1080)["props"]["use_box"])
         self.assertIn("box_color", cap.resolve_style("BOXED", 1920, 1080)["props"])
@@ -558,6 +564,22 @@ class _OpsCase(unittest.TestCase):
 
     def words(self):
         return [s for s in self.scene.sequence_editor.strips if (s.get("bfacw_caption") or {}).get("role") == "word"]
+
+
+class TestMetaStrip541(_OpsCase):
+
+    def test_a_meta_strip_gets_a_message_that_says_how_to_go_on(self):
+        meta = _Strip("Meta", "META", 1, 1, 100, select=True)
+        self.scene.sequence_editor.strips.append(meta)
+        with self.assertRaises(self.ops.CaptionsError) as ctx:
+            self.ops.add_captions(self.scene, [meta], "CLEAN", None, self.transcript)
+        self.assertEqual(str(ctx.exception), self.ops.META_MESSAGE)
+        self.assertIn("meta strip", str(ctx.exception))
+
+    def test_nothing_selected_keeps_the_plain_message(self):
+        with self.assertRaises(self.ops.CaptionsError) as ctx:
+            self.ops.add_captions(self.scene, [], "CLEAN", None, self.transcript)
+        self.assertIn("Select a sound or movie strip", str(ctx.exception))
 
 
 class TestCaptionStrips(_OpsCase):

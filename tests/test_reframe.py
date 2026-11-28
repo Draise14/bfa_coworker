@@ -297,6 +297,22 @@ class TestReframeVerticalTool(unittest.TestCase):
         self.assertIn("Reframe", out["message"])
         json.dumps(out)
 
+    def test_541_the_answer_says_the_whole_edit_and_where_the_pan_is(self):
+        def reframe_vertical(strips, mode, in_copy, resolution, reset, follow="", layout="auto"):
+            return {"scene": "Edit Vertical", "source_scene": "Edit", "copied": True, "mode": mode,
+                    "resolution": [1080, 1920], "added": ["a"], "kept": [], "reset": []}
+        ns = self._load(types.SimpleNamespace(reframe_vertical=reframe_vertical))
+        crop = ns["main"](ns["Params"](strips=[], mode="CROP", in_copy=True, resolution="1080x1920",
+                                       reset=False)).message
+        self.assertIn("Every visible shot was framed", crop)
+        self.assertIn("Strip > Reframe > Pan", crop)
+        named = ns["main"](ns["Params"](strips=["a"], mode="CROP", in_copy=True, resolution="1080x1920",
+                                        reset=False)).message
+        self.assertNotIn("Every visible shot was framed", named)
+        blur = ns["main"](ns["Params"](strips=[], mode="BLUR_FILL", in_copy=True, resolution="1080x1920",
+                                       reset=False)).message
+        self.assertNotIn("Centre Crop keeps the middle", blur)
+
     def test_follow_and_layout_go_through_and_the_answer_says_what_started(self):
         calls = []
 

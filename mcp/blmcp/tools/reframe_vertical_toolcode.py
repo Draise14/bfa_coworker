@@ -79,6 +79,11 @@ def main(params: Params) -> Any:
               where, done["resolution"][0], done["resolution"][1],
               "Centre Crop" if mode == "CROP" else "Blur Fill", len(changed),
               ", {:d} kept their framing".format(len(kept)) if kept else "")
+    if not strips:
+        msg += " Every visible shot was framed (the selection is not used); name strips to frame only those."
+    if mode == "CROP" and not done.get("following") and not done.get("following_error"):
+        msg += (" Centre Crop keeps the middle of each shot: if a subject is off-centre (a facecam in a corner), pan "
+                "that strip with reframe_strips or Strip > Reframe > Pan, or pass follow to find the subject.")
     if done.get("left_alone"):
         msg += " Left alone (parts of a split, use reframe_strips): {:s}.".format(", ".join(done["left_alone"][:20]))
     captions = done.get("captions") or {}

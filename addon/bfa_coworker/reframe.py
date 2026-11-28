@@ -611,6 +611,13 @@ def _copy_scene(scene: Any) -> Any:
     return copy_scene(scene, scene.name + " Vertical", {VERTICAL_TAG: scene.name})
 
 
+# Make Vertical frames the whole edit (every visible shot), not the selection: said in the dialog and the result (#541).
+SCOPE_NOTE = "Make Vertical frames every visible shot in the edit, not only the selected ones."
+# Centre Crop keeps the middle of the picture: a subject in a corner (a facecam) needs the pan (#541).
+CROP_HINT = ("Centre Crop keeps the middle of each shot. If the subject is off-centre (a facecam in a corner), "
+             "pan it with Strip > Reframe > Pan, or use Follow Subject.")
+
+
 def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resolution: str = "1080x1920",
                   reset: bool = False, names: Iterable[str] | None = None, window: Any = None) -> dict[str, Any]:
     """Make *scene*'s edit 9:16; returns what was done (see the MCP tool's Result)."""
@@ -662,7 +669,8 @@ def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resoluti
             window.scene = target
     return {"scene": target.name, "source_scene": scene.name, "copied": copied, "mode": mode,
             "resolution": [w, h], "added": done["added"], "kept": done["kept"], "reset": done["reset"],
-            "converted": done["converted"], "captions": captions, "left_alone": left_alone}
+            "converted": done["converted"], "captions": captions, "left_alone": left_alone,
+            "scope": SCOPE_NOTE, "hint": CROP_HINT if mode == "CROP" else ""}
 
 
 # -- Nudge / mode / reset ------------------------------------------------------------------
@@ -961,7 +969,11 @@ class BFACW_OT_make_vertical(Operator):
     def draw(self, _context: Any) -> None:
         layout = self.layout
         layout.use_property_split = True
+        layout.label(text="Frames every visible shot, not only the selection.", icon='INFO')
         layout.prop(self, "mode", expand=True)
+        if self.mode == "CROP":
+            layout.label(text="Centre Crop keeps the middle: pan off-centre subjects", icon='INFO')
+            layout.label(text="(Strip > Reframe > Pan) or tick Follow Subject.")
         layout.prop(self, "resolution")
         layout.prop(self, "in_copy")
         layout.prop(self, "reset")
@@ -991,6 +1003,8 @@ class BFACW_OT_make_vertical(Operator):
         if done.get("captions", {}).get("message"):
             parts.append(done["captions"]["message"])
         self.report({'INFO'}, "Make Vertical: " + ", ".join(parts))
+        if done.get("hint") and not self.follow:
+            self.report({'INFO'}, done["hint"])
         if self.follow and self.mode == "CROP":
             try:
                 self.report({'INFO'}, follow_made(done, self.follow_kind, self.subject_layout))

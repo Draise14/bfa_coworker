@@ -127,6 +127,12 @@ def tag_of(strip: Any) -> dict | None:
         return dict(value) if isinstance(value, dict) else None
 
 
+# #541: captions are not made inside a meta strip (the safe choice: their timing and the channel they would take
+# inside the meta are not worked out).  Said plainly, with the way round.
+META_MESSAGE = ("Auto Captions does not work on a meta strip. Open it (Tab) and select the sound or movie strip "
+                "inside, or ungroup it (Strip > Ungroup), then caption those.")
+
+
 def _media_strips(strips: Any) -> list:
     return [s for s in strips if s.type in {'SOUND', 'MOVIE'}]
 
@@ -1512,6 +1518,8 @@ def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str 
         items = [dict(it, left=max(it["left"], lo), right=min(it["right"], hi))
                  for it in items if it["right"] > lo and it["left"] < hi]
     if not items:
+        if any(getattr(s, "type", "") == 'META' for s in sources):
+            raise CaptionsError(META_MESSAGE)
         raise CaptionsError("Select a sound or movie strip to caption.")
     notes = []
     only_key = None
@@ -2703,7 +2711,9 @@ class BFACW_OT_auto_captions(Operator):  # type: ignore[misc]
             return False
         ed = getattr(seq_scene(context), "sequence_editor", None)
         if ed is None or not any(s.select for s in _media_strips(_top(ed))):
-            cls.poll_message_set("Select a sound or movie strip first")
+            meta = ed is not None and any(s.select and s.type == 'META' for s in _top(ed))
+            cls.poll_message_set("Not inside a meta strip: open it (Tab) and select the sound or movie strip in it"
+                                 if meta else "Select a sound or movie strip first")
             return False
         return True
 

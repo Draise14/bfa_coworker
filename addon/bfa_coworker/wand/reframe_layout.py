@@ -95,7 +95,7 @@ class Layout:
 LAYOUTS: tuple[Layout, ...] = (
     Layout("full", "Full Frame",
            "One picture filling the whole frame: the centre of the shot, cropped to fit, nothing stretched. "
-           "Pan and zoom it afterwards in the Reframe modifier.",
+           "Pan and zoom it afterwards from Strip > Reframe.",
            ((1, 1),), "CROP", False, "reframe_full", "FULLSCREEN_ENTER"),
     Layout("full_blur", "Full Frame, Blur Fill",
            "The whole shot fitted inside the frame, over a blurred, dimmed copy of itself.",

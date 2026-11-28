@@ -674,7 +674,7 @@ def reframe_strips(layout: str = "", strips: list[str] | None = None, swap: bool
 
 def reframe_vertical(strips: list[str] | None = None, mode: str = "CROP", in_copy: bool = True,
                      resolution: str = "1080x1920", reset: bool = False) -> dict[str, Any]:
-    """Make the Sequencer's edit 9:16 with a Reframe modifier per shot (#333), one undo step.
+    """Make the Sequencer's edit 9:16: Centre Crop with each strip's own crop and transform, Blur Fill with a Reframe modifier (#333, #632), one undo step.
 
     Raises ``reframe.ReframeError`` with a clear reason when it can't.  Main thread only.
     """

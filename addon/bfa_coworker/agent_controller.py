@@ -1228,9 +1228,9 @@ def _static_system_text(prompt: str, chat_mode: str = "AGENT") -> tuple[str, str
     for addendum in (_ASK_MODE_PROMPT_ADDENDUM, _PLAN_MODE_PROMPT_ADDENDUM):
         text = text.replace(addendum, "")
     text = _LEGACY_EMPTY_SCENE_RE.sub("", text).rstrip()
+    # Ask mode has no tools (load_skill included), so the index would promise what it can't give (#635).
+    text = _SKILL_INDEX_RE.sub("", text).rstrip() if chat_mode == "ASK" else text
     if chat_mode == "ASK":
-        # Ask mode has no tools (load_skill included), so the index would promise what it can't give (#635).
-        text = _SKILL_INDEX_RE.sub("", text).rstrip()
         text += _ASK_MODE_PROMPT_ADDENDUM
     elif chat_mode == "PLAN":
         text += _PLAN_MODE_PROMPT_ADDENDUM

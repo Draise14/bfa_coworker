@@ -143,7 +143,7 @@ def _poll(cls: Any, context: Any) -> bool:
 # -- Find (a worker thread, a timer on the main thread) -------------------------------------------------
 
 _JOB: dict[str, Any] = {"running": False, "progress": "", "stop": None, "thread": None, "scene": "", "box": None,
-                        "message": "", "level": "INFO"}
+                        "message": "", "level": "ok"}
 
 
 def _finder() -> Any:
@@ -183,7 +183,7 @@ def _job_tick() -> float | None:
     if scene is None:
         return None
     if box.get("error"):
-        _JOB.update(message=box["error"], level="ERROR")
+        _JOB.update(message=box["error"], level="error")
     else:
         out = box["result"]
         sentences = box["sentences"]
@@ -198,7 +198,7 @@ def _job_tick() -> float | None:
         _wand._push_undo("Find Highlights")      # pylint: disable=protected-access
         notes = " ".join(out["report"].get("messages") or [])
         _JOB.update(message=(hp.summary(store, _wand._fps(scene), scene.frame_start).splitlines()[0] + " " + notes).strip(),   # pylint: disable=protected-access
-                    level="INFO" if found else "WARNING", summary=hp.summary(store, _wand._fps(scene), scene.frame_start))   # pylint: disable=protected-access
+                    level="ok" if found else "warn", summary=hp.summary(store, _wand._fps(scene), scene.frame_start))   # pylint: disable=protected-access
     _redraw()
     return None
 
@@ -271,7 +271,7 @@ class BFACW_OT_highlights_find(Operator):
                 "count": int(self.count), "context": scene_reader_ops.context_tokens()}
         thread = threading.Thread(target=_work, args=(finder, box, asker, opts), name="bfacw-highlights", daemon=True)
         _JOB.update(running=True, progress="Reading the transcript...", stop=threading.Event(), thread=thread,
-                    scene=scene.name, box=box, message="", level="INFO", summary="")
+                    scene=scene.name, box=box, message="", level="ok", summary="")
         thread.start()
         bpy.app.timers.register(_job_tick, first_interval=TICK)
         self.report({'INFO'}, "Searching {:d} sentences. The Highlights panel shows the progress.".format(
@@ -566,7 +566,7 @@ def _draw_panel(layout: Any, context: Any) -> None:
         row.label(text=_JOB["progress"] or "Searching...", icon=safe_icon("SORTTIME"))
         row.operator("bfacw.highlights_stop", text="Stop", icon=safe_icon("CANCEL"))
     elif _JOB["message"]:
-        _wrapped(layout, _JOB["message"], width, "ERROR" if _JOB["level"] != "INFO" else "CHECKMARK")
+        _wrapped(layout, _JOB["message"], width, "ERROR" if _JOB["level"] != "ok" else "CHECKMARK")
     picks = store["picks"]
     if picks:
         stale = store["found"].get("edit", "") != edit_signature(scene)

@@ -40,11 +40,13 @@ _BUTTON_SCOPES = (
     ("wand/reframe_entries.py", ("LayoutEntry", "ActionEntry")),
     ("wand/sequencer.py", ("CoworkerEntry", "_draw_strip_menu")),
     ("wand/icons.py", ("operator", "menu")),
+    ("highlight_picks_ops.py", ("_draw_panel", "_draw_pick", "_draw_dialog")),       # #614
 )
 # Panels whose labels that are plain text (not a formatted message) are section headers.
 _HEADER_SCOPES = (
     ("transcript_edit_ops.py", ("_wands_header",)),
     ("reframe_layouts.py", ("_draw_buttons",)),
+    ("highlight_picks_ops.py", ("_draw_dialog",)),                                  # #614
 )
 
 

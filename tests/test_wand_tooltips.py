@@ -43,7 +43,9 @@ _DRAWN_IN = (("captions_ops.py", ("BFACW_MT_captions", "_draw_context_menu")),
               # the toolshelf entries (#622): ``LayoutEntry.draw`` names its operator; Swap and Reset are table rows
               # (``_SWAP`` / ``_RESET``: the id is the first string of the tuple), drawn by ``ActionEntry.draw``
               ),
-             ("wand/reframe_entries.py", ("LayoutEntry", "ActionEntry", "_SWAP", "_RESET")))
+             ("wand/reframe_entries.py", ("LayoutEntry", "ActionEntry", "_SWAP", "_RESET")),
+             # the Highlights panel (#614)
+             ("highlight_picks_ops.py", ("_draw_panel", "_draw_pick")))
 
 
 def _load_spec():

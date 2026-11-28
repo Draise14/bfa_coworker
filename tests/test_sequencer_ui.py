@@ -229,6 +229,14 @@ class TestCaptionsPolls(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(messages, ["Select a sound or movie strip first"])
 
+    def test_541_a_selected_meta_strip_is_named_in_the_poll_message(self):
+        cls = self.ops.BFACW_OT_auto_captions
+        scene = C._Scene()
+        scene.sequence_editor.strips.append(C._Strip("Meta", "META", 1, 1, 100, select=True))
+        ok, messages = self._poll(cls, _ctx(scene, workspace=None))
+        self.assertFalse(ok)
+        self.assertIn("meta strip", messages[0])
+
     def test_export_srt(self):
         cls = self.ops.BFACW_OT_captions_export_srt
         for name, ctx, message in _states():

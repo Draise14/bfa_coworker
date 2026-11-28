@@ -1129,6 +1129,13 @@ def _execute_code(
                     "Create an object first with `bpy.ops.mesh.primitive_cube_add()` or "
                     "check `bpy.context.view_layer.objects.active` before calling mode-dependent operators."
                 )
+            if "Context missing sequencer scene" in tb_str or "Context missing sequencer_scene" in tb_str:
+                tb_str += (
+                    "\n\nHINT: Blender 5.4 sequencer operators (Add > Movie, Sound, Image) need a scene picked as "
+                    "the Sequencer's scene. Set it first: `window.workspace.sequencer_scene = bpy.context.scene` "
+                    "(window = bpy.context.window), or add strips with the data API on the scene's editor: "
+                    "`scene.sequence_editor_create().strips.new_movie(name, path, channel, frame_start)`."
+                )
             # Scene safety Phase 4: operator-context and indexing hints.
             if "poll() failed" in tb_str:
                 tb_str += (

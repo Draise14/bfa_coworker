@@ -592,6 +592,61 @@ class TestVsePreview(unittest.TestCase):
         self.assertEqual(_settings(self.edit), edit_before)
         self.assertEqual((fake.handlers.render_cancel, fake.handlers.render_stats), ([], []), "the stop handlers go with the job")
 
+    def _animated(self, fake):
+        """The edit scene has animation and a window that shows the other scene; records what the render saw."""
+        from types import SimpleNamespace
+        edit, other = self.edit, self.window_scene
+        edit.animation_data = SimpleNamespace(action=object())
+        calls = []
+        edit.frame_set = lambda f: (calls.append(f), setattr(edit, "frame_current", f))
+        win = SimpleNamespace(scene=other)
+        fake.context.window = win
+        seen = []
+        real = fake._render
+
+        def render(*args, **kwargs):
+            seen.append((win.scene.name, edit.frame_current))
+            return real(*args, **kwargs)
+        fake.ops.render.render = render
+        return win, calls, seen
+
+    def test_541_an_animated_scene_is_shown_at_the_frame_for_the_render_and_put_back_after(self):
+        fake = self._bpy()
+        win, calls, seen = self._animated(fake)
+        check = self.tool.main(self.tool.Params(frame=25, scene_name="Edit"))
+        self.assertEqual(seen, [("Edit", 25)], "animated values are read from the scene the window shows")
+        self.assertEqual(win.scene.name, "Edit", "kept until the job is over")
+        fake.finish_job()
+        self.assertEqual(check()["frame"], 25)
+        self.assertEqual((win.scene.name, self.edit.frame_current), ("Scene", 7))
+        self.assertEqual(calls, [25, 7])
+
+    def test_541_a_scene_without_animation_leaves_the_window_alone(self):
+        fake = self._bpy()
+        win, calls, seen = self._animated(fake)
+        self.edit.animation_data = None
+        check = self.tool.main(self.tool.Params(frame=25, scene_name="Edit"))
+        self.assertEqual((seen, calls, win.scene.name), ([("Scene", 25)], [], "Scene"))
+        fake.finish_job()
+        check()
+
+    def test_541_the_window_comes_back_when_the_render_cant_start(self):
+        fake = self._bpy()
+        win, calls, _seen = self._animated(fake)
+        fake.ops.render.render = lambda *a, **k: {"CANCELLED"}
+        result = self.tool.main(self.tool.Params(frame=25, scene_name="Edit"))
+        self.assertEqual(result.status, "error")
+        self.assertEqual((win.scene.name, self.edit.frame_current), ("Scene", 7))
+
+    def test_541_the_changed_mark_of_the_preferences_is_not_put_back(self):
+        fake = self._bpy()
+        check = self.tool.main(self.tool.Params(frame=3, scene_name="Edit"))
+        fake.context.preferences.is_dirty = True        # the user changed a preference meanwhile
+        fake.finish_job()
+        check()
+        self.assertTrue(fake.context.preferences.is_dirty)
+        self.assertEqual(fake.context.preferences.view.render_display_type, "WINDOW")
+
     def test_a_job_handed_off_restores_on_its_end(self):
         shot_before = _settings(self.shot)
         fake = self._bpy()

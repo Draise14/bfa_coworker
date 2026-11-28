@@ -137,15 +137,30 @@ def main(params: Params) -> Result | Callable[[], dict[str, object] | None]:
         keep(owner, attr)
     if use_deferred:
         keep(prefs.view, "render_display_type")
-        keep(prefs, "is_dirty")
+        # #541: the "changed" mark is not put back to what it was: a preference the user changes while the
+        # render runs would lose its mark and not be saved on quit.  The mark may stay set; the one
+        # setting touched here is restored, so what is saved is the same.
     # #527: the scenes scene strips pull in render under the preview caps too (own undo list).
     strip_saved, strip_scenes = _preview_profile_apply_strip_scenes(scene)
     done = [False]
+    shown: list[Any] = []       # [window, the scene it showed, the target's own frame] while the window shows the target
 
     def restore() -> None:
         if done[0]:
             return
         done[0] = True
+        if shown:
+            # #541: the scene shows its own frame again (the animated values follow), then the window its scene.
+            win, was, own = shown
+            try:
+                win.scene = scene
+                scene.frame_set(own)
+            except (AttributeError, ReferenceError, TypeError, ValueError, RuntimeError):
+                pass
+            try:
+                win.scene = was
+            except (AttributeError, ReferenceError, TypeError, ValueError, RuntimeError):
+                pass
         for owner, attr, value in saved:
             try:
                 setattr(owner, attr, value)
@@ -213,6 +228,20 @@ def main(params: Params) -> Result | Callable[[], dict[str, object] | None]:
     # window's frame, whatever ``frame`` said; a ``temp_override(scene=...)`` doesn't change
     # it).  So the context scene shows *frame* while the operator starts the job, and gets its
     # own frame back as soon as it returned (the job has read the frame by then).
+    # #541: a keyframed strip value (colour, opacity, transform) is read from the scene shown in a window at
+    # the frame set there.  So for an animated scene the window shows it at *frame* while the render starts
+    # (and, for a render in the background, until it is done); restore() puts the window and the frame back.
+    animated = getattr(getattr(scene, "animation_data", None), "action", None) is not None
+    win = getattr(bpy.context, "window", None)
+    if animated and win is not None and getattr(win, "scene", None) is not None:
+        own_frame = next((int(v) for o, a, v in saved if o is scene and a == "frame_current"), int(scene.frame_current))
+        was_scene = win.scene
+        try:
+            win.scene = scene
+            shown.extend([win, was_scene, own_frame])
+            scene.frame_set(frame)
+        except (AttributeError, ReferenceError, TypeError, ValueError, RuntimeError):
+            pass                    # falls back to the frame set above; restore() puts the window back
     ctx_scene = getattr(bpy.context, "scene", None)
     ctx_frame = None
     if ctx_scene is not None and ctx_scene != scene and int(getattr(ctx_scene, "frame_current", frame)) != frame:

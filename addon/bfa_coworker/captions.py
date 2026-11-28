@@ -887,9 +887,9 @@ def strips_report(captioned: Sequence[str], skipped: Sequence[dict], kept_edited
 # Blender's bundled Inter (datafiles/fonts), the same in Blender and Bforartists.
 STYLES: dict[str, dict[str, Any]] = {
     "CLEAN": {
-        "label": "Clean", "description": "White text with a soft outline and shadow, up to two lines",
+        "label": "Clean", "description": "White text with a firm dark outline and a shadow, up to two lines",
         "size": 0.050, "size_vertical": 0.031, "color": (1.0, 1.0, 1.0, 1.0), "use_bold": False,
-        "use_outline": True, "outline_color": (0.0, 0.0, 0.0, 0.85), "outline_width": 0.04,
+        "use_outline": True, "outline_color": (0.0, 0.0, 0.0, 1.0), "outline_width": 0.07,
         "use_shadow": True, "shadow_color": (0.0, 0.0, 0.0, 0.6), "shadow_offset": 0.03, "shadow_blur": 0.15,
         "use_box": False, "uppercase": False, "max_lines": 2, "pop": False, "highlight": None,
     },

@@ -152,6 +152,24 @@ class Order(unittest.TestCase):
         self.assertIn("make_captions", names[0])
         self.assertTrue(all("remove" in n for n in names[1:]), names)
 
+    def test_a_trailing_dots_label_means_a_dialog_always_opens(self) -> None:
+        tree = _tree("transcript_edit_ops.py")
+        classes = {c.name: c for c in tree.body if isinstance(c, ast.ClassDef)}
+        panel = classes["BFACW_PT_transcript"]
+        checked = 0
+        for call in ast.walk(panel):
+            if not (isinstance(call, ast.Call) and getattr(call.func, "id", "") == "_wand"):
+                continue
+            cls = classes[call.args[1].value.id]       # BFACW_OT_x.bl_idname
+            label = call.args[2].value
+            invoke = next(f for f in cls.body if getattr(f, "name", "") == "invoke")
+            src = ast.unparse(invoke)
+            # a dialog opens every time: no early path that runs without one
+            always = ("invoke_props_dialog" in src or "INVOKE_DEFAULT" in src) and "self.execute" not in src
+            self.assertEqual(label.endswith("..."), always, "{:s}: '...' only for an always-dialog".format(label))
+            checked += 1
+        self.assertEqual(checked, 3)
+
 
 if __name__ == "__main__":
     unittest.main()

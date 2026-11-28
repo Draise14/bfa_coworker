@@ -1407,8 +1407,8 @@ class BFACW_PT_transcript(Panel):  # type: ignore[misc]
         _wands_header(layout)
         col = layout.column(align=True)
         # what makes something first, what cuts words or sound away last (wand rules, #610)
-        _wand(col, BFACW_OT_transcript_make_captions.bl_idname, "Make Captions", "captions", "FONT_DATA")
-        _wand(col, BFACW_OT_transcript_remove_silences.bl_idname, "Remove Silences...", "remove_silences", "SPEAKER")
+        _wand(col, BFACW_OT_transcript_make_captions.bl_idname, "Make Captions...", "captions", "FONT_DATA")
+        _wand(col, BFACW_OT_transcript_remove_silences.bl_idname, "Remove Silences", "remove_silences", "SPEAKER")
         _wand(col, BFACW_OT_transcript_remove_fillers.bl_idname, "Remove Filler Words...", "remove_silences",
               "X")
 

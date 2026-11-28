@@ -14,7 +14,7 @@ Bforartists both have, and does not need the chat.
 
 Find reads the edit's sentences on the main thread, then asks the engine on a worker thread
 (``highlights.find_highlights``, H3 #613) with a progress line and a working Stop; the main thread's timer takes
-the result.  Make Short is H5 (#615): the button is here, and says so until that module exists.
+the result.  Make Short is H5 (#615), ``highlight_short.py``: the button asks which polish steps to run, then builds the scene.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ import threading
 from typing import Any
 
 import bpy  # pylint: disable=import-error
-from bpy.props import EnumProperty, IntProperty, StringProperty  # pylint: disable=import-error
+from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty  # pylint: disable=import-error
 from bpy.types import Operator, Panel  # pylint: disable=import-error
 
 from . import highlight_picks as hp
@@ -61,7 +61,6 @@ KINDS = (("auto", "Auto", "Decide from the first minutes of the video", "AUTO", 
          ("talk", "Talk or Lecture", "A claim and its proof", "SPEAKER", 3))
 TICK = 0.25
 STILL_TICKS = 12          # 3 s without the frame moving while something plays: Preview stops watching
-NO_SHORT = "Make Short is built in Highlights H5 (#615) and is not in this build yet."
 NO_FINDER = "The search (Highlights H3, #613) is not in this build yet."
 
 
@@ -493,15 +492,42 @@ class BFACW_OT_highlights_make_short(_PickOperator):
                                 "The long edit is never changed.", also="Needs a transcript of the edit.")
     bl_options = {'REGISTER', 'UNDO'}
 
+    silences: BoolProperty(name="Remove Silences", default=True, description=(      # type: ignore[valid-type]
+        "Cut the pauses inside the short (tighter than for a long edit); the rest of the edit is not touched"))
+    vertical: BoolProperty(name="Make Vertical", default=True, description=(        # type: ignore[valid-type]
+        "Make the short 9:16, inside the short (not a second copy)"))
+    captions: BoolProperty(name="Auto Captions", default=True, description=(        # type: ignore[valid-type]
+        "Caption the speech of the short in the style Auto Captions was last used with"))
+    hook: BoolProperty(name="Hook Title", default=True, description=(               # type: ignore[valid-type]
+        "Put the pick's hook line over the first three seconds"))
+
+    def invoke(self, context: Any, _event: Any) -> set[str]:
+        return context.window_manager.invoke_props_dialog(self, width=360)
+
+    def draw(self, _context: Any) -> None:
+        box = self.layout.box()
+        box.label(text="Polish the short: each step is optional", icon=safe_icon("SEQUENCE"))
+        for prop, wand_icon, fallback in (("silences", "remove_silences", "SPEAKER"), ("vertical", "vertical", "SEQ_PREVIEW"),
+                                          ("captions", "captions", "FONT_DATA"), ("hook", "", "SEQ_TEXT")):
+            value = 0
+            if wand_icon:
+                try:
+                    from .wand import icons as _icons      # the wand panels' own full-colour icons
+                    value = _icons.icon_id(wand_icon)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    value = 0
+            if value:
+                box.prop(self, prop, icon_value=value)
+            else:
+                box.prop(self, prop, icon=safe_icon(fallback))
+        _wrapped(box, "The short is a copy of the scene with its range set to the pick. The long edit is not changed; "
+                      "one undo removes the short. Rendering is your click.", 56, "INFO")
+
     def execute(self, context: Any) -> set[str]:
         scene, found = self._placed(context)
         if found is None:
             return {'CANCELLED'}
-        try:
-            short = importlib.import_module(__package__ + ".highlight_short")
-        except ImportError:
-            self.report({'WARNING'}, NO_SHORT)
-            return {'CANCELLED'}
+        short = importlib.import_module(__package__ + ".highlight_short")
         return short.make_short(self, scene, found)
 
 

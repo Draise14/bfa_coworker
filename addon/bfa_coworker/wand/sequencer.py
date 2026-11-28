@@ -663,13 +663,18 @@ def _content_end(strips: Any) -> int:
 
 
 def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None, ripple: bool = True,
-                    update_end: bool = True, context: Any = None, report_progress: bool = True) -> dict[str, Any]:
+                    update_end: bool = True, context: Any = None, report_progress: bool = True,
+                    frame_range: tuple[int, int] | None = None) -> dict[str, Any]:
     """Remove the silences of *names* (or of the selected strips) from the whole edit (#539).
 
     *settings*: (threshold dB, minimum silence, padding, minimum clip).  The answer has
     ``status`` (``ok``, ``nothing``, ``refused`` or ``error``), a ``message``, and with
     ``ok`` the cuts, the time removed, the new names per strip and the new end frame.
     Nothing changes unless the status is ``ok`` (or ``error`` with ``changed``).
+
+    *frame_range* (#615): ``(first, end)``, end exclusive.  Only the silences inside these frames go
+    (Make Short polishes a pick without touching the rest of the edit); a strip that can't follow a cut
+    outside the range is not asked.
     """
     editor = scene.sequence_editor
     if editor is None:
@@ -691,6 +696,8 @@ def remove_silences(scene: Any, settings: tuple, names: list[str] | None = None,
     infos, problems, blocked = _analyse(scene, sounds, context, report_progress)
     _overhang(infos, every)
     cuts, quiet = _common(infos, blocked, settings)
+    if frame_range is not None:
+        cuts = cut_plan.within(cuts, int(frame_range[0]), int(frame_range[1]))
     notes = ["“{:s}” is quiet all the way through: not listened to".format(n) for n in quiet]
     base = {"problems": problems, "notes": notes, "listened": [s.name for s in sounds]}
     if not cuts:

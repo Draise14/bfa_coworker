@@ -1454,8 +1454,12 @@ def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str 
                  margin: float = 0.0, speakers: bool = False, speaker_settings: Any = (),
                  speaker_labels: bool = False, choices: dict[str, Any] | None = None, animate: Any = None,
                  line_animation: Any = None, word_animation: Any = None, line_easing: Any = None,
-                 word_easing: Any = None, speed: Any = None) -> dict[str, Any]:
+                 word_easing: Any = None, speed: Any = None,
+                 frame_range: tuple[int, int] | None = None) -> dict[str, Any]:
     """Caption *sources* (sound / movie strips) in *style*; the result for the artist / the tool.
+
+    *frame_range* (#615): ``(first, end)`` timeline frames, end exclusive.  Only the speech inside them is
+    captioned (Make Short captions one pick of a long edit); strips outside are left out.
 
     Every selected strip gets the captions of the part of its media it shows (#538); the
     transcript is read once per media file.  A movie is heard through a selected sound strip of
@@ -1503,6 +1507,10 @@ def add_captions(scene: Any, sources: list, style: str = "CLEAN", language: str 
         path = media_path(s)
         if path:
             items.append(_strip_item(ed, s, path))
+    if frame_range is not None:
+        lo, hi = int(frame_range[0]), int(frame_range[1])
+        items = [dict(it, left=max(it["left"], lo), right=min(it["right"], hi))
+                 for it in items if it["right"] > lo and it["left"] < hi]
     if not items:
         raise CaptionsError("Select a sound or movie strip to caption.")
     notes = []

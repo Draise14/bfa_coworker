@@ -318,7 +318,7 @@ class _Scene(dict):
 
 def _fake_bpy():
     bpy = W._fake_bpy(False)
-    bpy.props.EnumProperty = bpy.props.IntProperty = bpy.props.StringProperty = lambda **kw: ("prop", kw)
+    bpy.props.EnumProperty = bpy.props.IntProperty = bpy.props.StringProperty = bpy.props.BoolProperty = lambda **kw: ("prop", kw)
     timers = {}
     bpy.app = types.SimpleNamespace(timers=types.SimpleNamespace(
         register=lambda fn, first_interval=0.0, persistent=False: timers.__setitem__(fn, (first_interval, persistent)),
@@ -482,13 +482,17 @@ class TestOperators(unittest.TestCase):
         self.assertEqual((self.scene.use_preview_range, self.scene.frame_preview_start, self.scene.frame_preview_end),
                          (False, 1, 250))
 
-    def test_make_short_says_it_is_not_built_yet_instead_of_doing_nothing(self):
+    def test_make_short_hands_the_placed_pick_to_the_builder(self):
+        seen = []
+        stub = types.ModuleType(W._PKG + ".highlight_short")
+        stub.make_short = lambda op, scene, pick: seen.append((scene, pick["id"])) or {'FINISHED'}
+        sys.modules[stub.__name__] = stub
+        self.addCleanup(sys.modules.pop, stub.__name__, None)
         op = self.ops.BFACW_OT_highlights_make_short()
         op.pick = self.ids[0]
-        op.reports = []
-        op.report = lambda level, text: op.reports.append((sorted(level)[0], text))
-        self.assertEqual(op.execute(self.ctx), {'CANCELLED'})
-        self.assertEqual(op.reports, [("WARNING", self.ops.NO_SHORT)])
+        op.report = lambda *a: None
+        self.assertEqual(op.execute(self.ctx), {'FINISHED'})
+        self.assertEqual(seen, [(self.scene, self.ids[0])])
 
     def test_find_without_the_search_or_without_speech_or_with_one_running_says_why(self):
         op = self.ops.BFACW_OT_highlights_find()

@@ -22,6 +22,7 @@ Run with::
 
 __all__ = ()
 
+import contextlib
 import importlib
 import json
 import sys
@@ -265,6 +266,122 @@ class DragGate(unittest.TestCase):
         self.assertIsNone(res.check_fn())              # ran, its own answer not there yet
         self.assertIsNone(res.check_fn())
         self.assertEqual(res.check_fn()["result"], "late")
+
+
+class _Clock:
+    """One fake ``time.monotonic`` for every module (ui_activity, coworker_api, the bridge), so no
+    test depends on how long the machine has been up."""
+
+    def __init__(self, start=100000.0):
+        self.t = start
+
+    def __call__(self):
+        return self.t
+
+
+class DragGateKeepsWatching669(unittest.TestCase):
+    """#669: a deferred or refused step, or a read, must not mark its own change: ``ui_activity.own``
+    would hide the drag's updates and the gate would read "quiet" in the middle of the drag."""
+
+    def setUp(self):
+        ua.reset()
+        self.addCleanup(ua.reset)
+        self.cw = _load("coworker_api")
+        self.cw._own_until[0] = 0.0
+        self.addCleanup(self.cw._own_until.__setitem__, 0, 0.0)
+        self.wm = _wm()
+        self.objects_new = mock.Mock()
+        prefs = types.SimpleNamespace(approval_mode="AUTO", operating_mode="REMOTE_API")
+        self.bpy = types.SimpleNamespace(
+            context=types.SimpleNamespace(
+                window_manager=self.wm,
+                preferences=types.SimpleNamespace(addons={_PKG: types.SimpleNamespace(preferences=prefs)})),
+            data=types.SimpleNamespace(objects=types.SimpleNamespace(new=self.objects_new)))
+        self.clock = _Clock()
+        for patcher in (mock.patch.dict(sys.modules, {"bpy": self.bpy}),
+                        mock.patch("time.monotonic", self.clock)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.ran = []
+
+    def _run(self):
+        self.ran.append(1)
+        return br._ExecResult({"status": "ok"})
+
+    def _defer_a_write_by_a_drag(self):
+        ua.note_update()
+        res = br._busy_gate("", "execute_blender_code", WRITE, False, self._run)
+        self.assertIsNotNone(res.check_fn)
+        br._note_step("", "execute_blender_code", WRITE, False, res)
+        return res
+
+    def test_a_deferred_step_does_not_hide_the_users_updates(self):
+        res = self._defer_a_write_by_a_drag()
+        self.assertEqual(self.ua_own(), 0.0)
+        self.clock.t += 0.5                            # past QUIET: the drag is a moment silent
+        ua.note_update()                               # ... and goes on
+        self.clock.t += 0.1
+        self.assertEqual(sb.status("execute_blender_code", WRITE, False, self.wm)[0], "drag")
+        self.assertIsNone(res.check_fn())
+        self.assertEqual(self.ran, [])
+
+    def ua_own(self):
+        return max(ua._own_until[0] - self.clock.t, 0.0)
+
+    def test_updates_keep_the_step_deferred_then_it_is_refused_at_the_limit(self):
+        res = self._defer_a_write_by_a_drag()
+        t0 = self.clock.t
+        for i in range(1, int(ua.WAIT_LIMIT * 10) - 2):     # an update every 0.1 s while the button is down
+            self.clock.t = t0 + i * 0.1
+            ua.note_update()
+            self.assertIsNone(res.check_fn(), "step ran or was refused early at +%.1f s" % (i * 0.1))
+            br._note_step("", "execute_blender_code", WRITE, False, res)
+        self.assertEqual(self.ran, [])
+        self.clock.t = t0 + ua.WAIT_LIMIT + 0.1
+        ua.note_update()
+        answer = res.check_fn()
+        self.assertEqual(self.ran, [])
+        self.assertEqual(answer["status"], "error")
+        self.assertIn("Nothing was changed", answer["message"])
+
+    def _send(self, tool, code):
+        request = {"type": "execute", "code": code, "strict_json": False, "tool": tool}
+        si = _load("session_identity")
+        si.set_token_required(False)
+        self.addCleanup(si.set_token_required, True)
+        sandbox = _load("weak_sandbox")
+        with mock.patch.object(sandbox, "WeakSandboxForLLM", contextlib.nullcontext):
+            exec_result, _strict = br._execute_code_from_request(json.dumps(request).encode("utf-8"))
+        return exec_result
+
+    def test_a_read_that_runs_meanwhile_does_not_hide_the_drag(self):
+        res = self._defer_a_write_by_a_drag()
+        self.clock.t += 0.1
+        read = self._send("get_scene_info", "result = {'objects': 0}")     # another client's read runs now
+        self.assertEqual(read.response.get("status"), "ok", read.response)
+        self.assertEqual(self.ua_own(), 0.0)
+        self.assertEqual(self.cw._own_until[0], 0.0)
+        for _ in range(8):                             # the drag goes on, an update every 0.1 s
+            self.clock.t += 0.1
+            ua.note_update()
+            self.assertIsNone(res.check_fn())
+        self.assertEqual(self.ran, [])
+
+    def test_a_step_that_runs_marks_its_changes_as_own_until_after_it_ends(self):
+        # A long step's updates are evaluated after it returns: Revert must not read them as the user's.
+        def slow(code, **_kw):
+            self.clock.t += 5.0
+            return br._ExecResult({"status": "ok"})
+        with mock.patch.object(br, "_execute_code", slow):
+            out = self._send("execute_blender_code", WRITE)
+        self.assertEqual(out.response.get("status"), "ok", out.response)
+        self.assertGreaterEqual(self.cw._own_until[0], self.clock.t + 0.99)
+
+    def test_the_known_limit_is_written_where_the_gate_lives(self):
+        # A guard comment only (source text): not part of the behaviour tests above.
+        src = (_ADDON / "mcp_to_blender_server.py").read_text(encoding="utf-8")
+        gate = src[src.index("def _busy_gate("):src.index("def _claim_gate(")]
+        self.assertIn("KNOWN LIMIT (#669)", gate)
 
 
 class PasteGuards(unittest.TestCase):

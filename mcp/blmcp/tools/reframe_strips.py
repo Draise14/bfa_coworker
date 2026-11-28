@@ -51,7 +51,7 @@ def register(mcp: FastMCP) -> None:
                 without a model, the tracking needs a vision-capable one), ``split_half`` (two
                 crops, 50 / 50), ``split_top`` (two thirds on top, one third below),
                 ``split_bottom`` (one third on top, two thirds below). ``track_all`` (each part of
-                a split follows its own subject) needs subject finding and is not available yet.
+                a split follows its own subject: looks at a few frames of each shot first).
                 Empty with ``swap=true``: only swap. Empty without it: read, answer each strip's
                 current layout in ``layouts`` and change nothing.
             strips: Strip names (a split's either part stands for both). Empty: the selected strips.

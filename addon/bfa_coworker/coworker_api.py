@@ -673,7 +673,8 @@ def reframe_strips(layout: str = "", strips: list[str] | None = None, swap: bool
 
 
 def reframe_vertical(strips: list[str] | None = None, mode: str = "CROP", in_copy: bool = True,
-                     resolution: str = "1080x1920", reset: bool = False) -> dict[str, Any]:
+                     resolution: str = "1080x1920", reset: bool = False, follow: str = "",
+                     layout: str = "auto") -> dict[str, Any]:
     """Make the Sequencer's edit 9:16: Centre Crop with each strip's own crop and transform, Blur Fill with a Reframe modifier (#333, #632), one undo step.
 
     Raises ``reframe.ReframeError`` with a clear reason when it can't.  Main thread only.
@@ -688,4 +689,15 @@ def reframe_vertical(strips: list[str] | None = None, mode: str = "CROP", in_cop
     done = reframe.make_vertical(scene, mode, in_copy, resolution, reset, names=strips or None, window=window)
     if not turn_owns_undo():        # from a chat turn its own step covers it (#501)
         _undo(push_message="Make Vertical")
+    follow = str(follow or "").strip().lower()
+    if not follow and str(layout or "auto").strip().lower() in ("single", "split"):
+        follow = "auto"             # a layout asked for means: find the subject
+    if follow and mode == "CROP":
+        # Looks at a few frames per shot, then keys the crop (and builds the split) on a timer: not part of this undo step.
+        try:
+            done["following"] = reframe.follow_made(done, follow, str(layout or "auto"))
+        except Exception as ex:  # pylint: disable=broad-exception-caught  # ReframeError, Unavailable
+            done["following_error"] = str(ex)
+    elif follow:
+        done["following_error"] = "Follow Subject needs mode CROP (Blur Fill shows the whole shot)."
     return done

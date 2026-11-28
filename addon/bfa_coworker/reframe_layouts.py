@@ -40,7 +40,7 @@ import bpy  # pylint: disable=import-error
 from bpy.props import EnumProperty  # pylint: disable=import-error
 from bpy.types import Menu, Operator, Panel  # pylint: disable=import-error
 
-from . import reframe
+from . import reframe, reframe_subjects
 from .shared import icon as safe_icon
 from .wand import icons as wand_icons
 from .wand import reframe_apply as ra
@@ -261,9 +261,16 @@ class BlenderBackend(ra.Backend):
     def reset_full(self, scene: Any, strip: Any) -> None:
         reframe.apply_reframe(scene, strip, "RESET_FRAMING")
 
+    def clear_keys(self, scene: Any, strip: Any) -> None:
+        reframe_subjects.clear_strip_keys(scene, strip)
+
     def start_tracking(self, scene: Any, strips: list) -> str:
         try:
-            return reframe.start_follow(scene, strips)
+            ready = reframe_subjects.consume_ready(scene, [s.name for s in strips])
+            if ready:
+                return ready
+            split = [s for s in strips if (ra.tag_of(s) or {}).get("layout") == "track_all"]
+            return reframe_subjects.start(scene, strips, "auto", "split" if split else "single")
         except reframe.ReframeError as ex:
             raise ra.LayoutError(str(ex)) from None
         except Exception as ex:  # pylint: disable=broad-exception-caught  # reframe_follow.Unavailable
@@ -425,7 +432,6 @@ def _draw_buttons(layout: Any, context: Any) -> None:
             _layout_button(grid, items[layout_id], current, text=items[layout_id].short, previews=previews)
     row = layout.row(align=True)
     row.scale_y = 1.5
-    row.enabled = False
     _layout_button(row, items["track_all"], current, text="Track All", previews=previews)
     row = layout.row(align=True)
     row.operator("bfacw.reframe_swap", text="Swap", icon=safe_icon(SWAP_ICON))

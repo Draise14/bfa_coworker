@@ -109,6 +109,9 @@ class Backend:
         """Start Follow Subject on *strips*; the status line, or ``LayoutError`` with the reason."""
         raise NotImplementedError
 
+    def clear_keys(self, scene: Any, strip: Any) -> None:
+        """Take the crop and transform keys (a Track All part's) off *strip*; nothing to do where none are made."""
+
 
 # -- tags ----------------------------------------------------------------------------------
 
@@ -352,6 +355,7 @@ def _clean(scene: Any, strips: Any, base_name: str, backend: Backend, removed: l
         removed.extend(names)
     base = _by_name(strips)[base_name]               # looked up again: the removal above freed strips
     backend.clear_modifier(scene, base)
+    backend.clear_keys(scene, base)
     _neutral(base)
     _clear_tag(base)
 
@@ -383,7 +387,7 @@ def _build(scene: Any, strips: Any, base_name: str, layout_id: str, backend: Bac
     base.select = True
     _set_part(base, parts[0])
     _write_tag(base, layout_id, 0, base_name, twin_name)
-    return False
+    return item.tracked
 
 
 def _summary(layout_id: str, done: list[str], created: list[str], skipped: list[dict], note: str) -> str:
@@ -511,6 +515,11 @@ def swap_parts(scene: Any, strips: Any, names: list[str], backend: Backend) -> d
     if not pairs:
         return {"status": "nothing", "changed": [], "skipped": skipped,
                 "message": "Nothing to swap: select the strips of a split (Split, Half and Half and the like)"}
+    tracked = [b for b, _p in pairs if tag_of(_by_name(strips)[b])["layout"] == "track_all"]       # type: ignore[index]
+    if tracked:                          # the parts are keyed to their subjects: a swap would leave stale keys
+        return {"status": "nothing", "changed": [], "skipped": skipped,
+                "message": "Swap is not available for Track All ({:s}): run Track All again, or Reset a part and use a "
+                           "plain split".format(", ".join(tracked[:3]))}
     fw, fh = backend.canvas_size(scene)
     done = []
     for base_name, partner_name in pairs:
@@ -549,6 +558,7 @@ def reset_framing(scene: Any, strips: Any, names: list[str], backend: Backend) -
         tag = tag_of(strip)
         if tag is not None and rl.layout(tag["layout"]).parts[1:]:
             sw, sh = backend.source_size(strip)
+            backend.clear_keys(scene, strip)                    # a Track All part: its keys go, then the default
             _show(strip, tag["layout"], tag["part"], rl.DEFAULT_FRAMING, sw, sh, fw, fh)
             done.append(name)
         elif backend.modifier_state(strip) is not None:

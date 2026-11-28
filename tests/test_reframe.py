@@ -283,19 +283,47 @@ class TestReframeVerticalTool(unittest.TestCase):
     def test_ok_result(self):
         calls = []
 
-        def reframe_vertical(strips, mode, in_copy, resolution, reset):
-            calls.append((strips, mode, in_copy, resolution, reset))
+        def reframe_vertical(strips, mode, in_copy, resolution, reset, follow="", layout="auto"):
+            calls.append((strips, mode, in_copy, resolution, reset, follow, layout))
             return {"scene": "Edit Vertical", "source_scene": "Edit", "copied": True, "mode": mode,
                     "resolution": [1080, 1920], "added": ["a", "b"], "kept": ["c"], "reset": []}
         ns = self._load(types.SimpleNamespace(reframe_vertical=reframe_vertical))
         out = ns["main"](ns["Params"](strips=[], mode="blur fill", in_copy=True, resolution="1080x1920",
                                       reset=False))._asdict()
-        self.assertEqual(calls, [([], "BLUR_FILL", True, "1080x1920", False)])
+        self.assertEqual(calls, [([], "BLUR_FILL", True, "1080x1920", False, "", "auto")])
         self.assertEqual(out["status"], "ok")
         self.assertEqual((out["scene"], out["copied"], out["mode"]), ("Edit Vertical", True, "BLUR_FILL"))
         self.assertEqual((out["strips_changed"], out["strips_kept"]), (["a", "b"], ["c"]))
         self.assertIn("Reframe", out["message"])
         json.dumps(out)
+
+    def test_follow_and_layout_go_through_and_the_answer_says_what_started(self):
+        calls = []
+
+        def reframe_vertical(strips, mode, in_copy, resolution, reset, follow="", layout="auto"):
+            calls.append((follow, layout))
+            return {"scene": "Edit Vertical", "source_scene": "Edit", "copied": True, "mode": mode,
+                    "resolution": [1080, 1920], "added": ["a"], "kept": [], "reset": [],
+                    "following": "Looking for the subject in 1 shot(s) (4 sampled moments)..."}
+        ns = self._load(types.SimpleNamespace(reframe_vertical=reframe_vertical))
+        out = ns["main"](ns["Params"](strips=[], mode="CROP", in_copy=True, resolution="1080x1920", reset=False,
+                                      follow="face", layout="split"))._asdict()
+        self.assertEqual(calls, [("face", "split")])
+        self.assertEqual(out["status"], "ok")
+        self.assertIn("Looking for the subject", out["following"])
+        self.assertIn("Subject: Looking for the subject", out["message"])
+        json.dumps(out)
+
+    def test_a_follow_that_could_not_start_is_said_not_hidden(self):
+        def reframe_vertical(strips, mode, in_copy, resolution, reset, follow="", layout="auto"):
+            return {"scene": "Edit Vertical", "source_scene": "Edit", "copied": True, "mode": mode,
+                    "resolution": [1080, 1920], "added": ["a"], "kept": [], "reset": [],
+                    "following_error": "Follow Subject needs a vision model"}
+        ns = self._load(types.SimpleNamespace(reframe_vertical=reframe_vertical))
+        out = ns["main"](ns["Params"](strips=[], mode="CROP", in_copy=True, resolution="1080x1920", reset=False,
+                                      follow="face"))._asdict()
+        self.assertEqual(out["status"], "ok")
+        self.assertIn("Follow Subject did not start: Follow Subject needs a vision model", out["message"])
 
     def test_errors(self):
         def boom(*_a):

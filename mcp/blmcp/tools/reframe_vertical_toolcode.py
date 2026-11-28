@@ -26,6 +26,8 @@ class Params(NamedTuple):
     in_copy: bool
     resolution: str
     reset: bool
+    follow: str = ""
+    layout: str = "auto"
 
 
 class Result(NamedTuple):
@@ -39,6 +41,7 @@ class Result(NamedTuple):
     strips_changed: Any = None
     strips_kept: Any = None
     captions: Any = None
+    following: str | None = None
 
 
 # @include_begin: _coworker_api_shared.py
@@ -63,7 +66,8 @@ def main(params: Params) -> Any:
     strips = [str(s) for s in (strips or [])]
     try:
         done = _coworker_api().reframe_vertical(strips, mode, bool(params.in_copy),
-                                                str(params.resolution or "1080x1920"), bool(params.reset))
+                                                str(params.resolution or "1080x1920"), bool(params.reset),
+                                                str(params.follow or ""), str(params.layout or "auto"))
     except Exception as ex:  # pylint: disable=broad-exception-caught
         return Result(status="error", message=str(ex), mode=mode)
     changed = list(done["added"]) + list(done["reset"]) + list(done.get("converted", []))
@@ -82,7 +86,12 @@ def main(params: Params) -> Any:
         msg += " Captions: {:s}.".format(captions["message"])
         if captions.get("left_names"):
             msg += " Left as edited (moved or resized by hand): {:s}.".format(", ".join(captions["left_names"][:20]))
-    return Result(status="ok", message=msg, scene=done["scene"], source_scene=done["source_scene"],
+    if done.get("following"):
+        msg += " Subject: {:s} (the crop is keyed a moment later; the result is in the log and the status bar).".format(
+            done["following"])
+    if done.get("following_error"):
+        msg += " Follow Subject did not start: {:s}".format(done["following_error"])
+    return Result(status="ok", message=msg, following=done.get("following") or done.get("following_error"), scene=done["scene"], source_scene=done["source_scene"],
                   copied=bool(done["copied"]), mode=mode, resolution=list(done["resolution"]),
                   strips_changed=changed, strips_kept=kept,
                   captions={k: captions[k] for k in ("laid_out", "split", "left", "left_names") if k in captions}

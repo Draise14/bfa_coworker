@@ -2424,7 +2424,7 @@ EXPECTED_TOOLS = [
 "                without a model, the tracking needs a vision-capable one), ``split_half`` (two\n"
 "                crops, 50 / 50), ``split_top`` (two thirds on top, one third below),\n"
 "                ``split_bottom`` (one third on top, two thirds below). ``track_all`` (each part of\n"
-"                a split follows its own subject) needs subject finding and is not available yet.\n"
+"                a split follows its own subject: looks at a few frames of each shot first).\n"
 "                Empty with ``swap=true``: only swap. Empty without it: read, answer each strip's\n"
 "                current layout in ``layouts`` and change nothing.\n"
 "            strips: Strip names (a split's either part stands for both). Empty: the selected strips.\n"
@@ -2487,6 +2487,10 @@ EXPECTED_TOOLS = [
 "                Sequencer, leaving the 16:9 edit as it is.\n"
 "            resolution: Output size, e.g. 1080x1920, 720x1280, 2160x3840.\n"
 "            reset: Give strips that already have a framing fresh framing too.\n"
+"            follow: \"auto\", \"face\" or \"screen\": find the subject (a face, what moves on screen)\n"
+"                and key the crop to it; CROP only. Empty: off.\n"
+"            layout: With follow: \"auto\" (two crops, top and bottom, when two subjects are apart),\n"
+"                \"single\" or \"split\".\n"
 "\n"
 "        Returns:\n"
 "            ``status``, the ``scene`` used (and ``source_scene``, ``copied``), ``mode``,\n"
@@ -2528,6 +2532,16 @@ EXPECTED_TOOLS = [
                     "default": False,
                     "title": "Reset",
                     "type": "boolean"
+                },
+                "follow": {
+                    "default": "",
+                    "title": "Follow",
+                    "type": "string"
+                },
+                "layout": {
+                    "default": "auto",
+                    "title": "Layout",
+                    "type": "string"
                 }
             },
             "title": "reframe_verticalArguments",

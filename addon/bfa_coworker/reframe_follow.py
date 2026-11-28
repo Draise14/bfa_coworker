@@ -23,13 +23,19 @@ Free of ``bpy``: the asker runs on a worker thread.
 from __future__ import annotations
 
 __all__ = (
+    "BOXES_PROMPT",
+    "BOXES_SCHEMA",
+    "BOX_STUB",
     "PROMPT",
     "STUB",
     "Unavailable",
     "X_SCHEMA",
     "build_messages",
+    "engine_notice",
+    "parse_boxes",
     "parse_x",
     "resolve_asker",
+    "resolve_box_asker",
     "run",
     "vision_target",
 )
@@ -53,7 +59,22 @@ PROMPT = (
 X_SCHEMA = {"type": "object", "properties": {"x": {"type": ["number", "null"], "minimum": 0, "maximum": 1}},
             "required": ["x"],
             "additionalProperties": False}
+BOXES_PROMPT = (
+    "This is one frame of a video. List every face and every whole person that is clearly visible, as boxes. "
+    "A box is [left, top, right, bottom], each a number from 0 to 1 across the picture (0 = the left / top "
+    "edge, 1 = the right / bottom edge). Answer with JSON only, like "
+    "{\"faces\": [[0.71, 0.08, 0.83, 0.30]], \"people\": []}. Use empty lists when there is none. "
+    "Do not list drawings, logos or text."
+)
+_BOX = {"type": "array", "items": {"type": "number", "minimum": 0, "maximum": 1}, "minItems": 4, "maxItems": 4}
+BOXES_SCHEMA = {"type": "object",
+                "properties": {"faces": {"type": "array", "items": _BOX, "maxItems": 6},
+                               "people": {"type": "array", "items": _BOX, "maxItems": 6}},
+                "required": ["faces", "people"],
+                "additionalProperties": False}
 _LIMIT_BYTES = 2_000_000
+# Replace the model for boxes: ``BOX_STUB(png_path, strip_name, frame) -> (faces, people)``, boxes as 4-tuples.
+BOX_STUB: Callable[[str, str, int], tuple[list, list]] | None = None
 # Replace the model: ``STUB(png_path, strip_name, frame) -> x | None``.
 STUB: Callable[[str, str, int], float | None] | None = None
 
@@ -99,12 +120,58 @@ def parse_x(text: Any) -> float | None:
     return value
 
 
-def build_messages(data_uri: str) -> list[dict[str, Any]]:
+def build_messages(data_uri: str, prompt: str = PROMPT) -> list[dict[str, Any]]:
     """One user message: the frame and the question (like a chat attachment)."""
     return [{"role": "user", "content": [
         {"type": "image_url", "image_url": {"url": data_uri}},
-        {"type": "text", "text": PROMPT},
+        {"type": "text", "text": prompt},
     ]}]
+
+
+def _clean_boxes(raw: Any) -> list[tuple[float, float, float, float]]:
+    """Boxes ``(x0, y0, x1, y1)`` in 0..1 from a model's list; a box that is not four numbers, is empty or
+    covers nearly the whole picture (not a face) is dropped."""
+    out: list[tuple[float, float, float, float]] = []
+    for item in raw if isinstance(raw, (list, tuple)) else []:
+        try:
+            x0, y0, x1, y1 = (float(v) for v in item)
+        except (TypeError, ValueError):
+            continue
+        if max(x0, y0, x1, y1) > 1.0 and max(x0, y0, x1, y1) <= 100.0:
+            x0, y0, x1, y1 = x0 / 100.0, y0 / 100.0, x1 / 100.0, y1 / 100.0     # percent
+        x0, x1, y0, y1 = min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1)
+        if min(x0, y0) < 0.0 or max(x1, y1) > 1.0 or x1 - x0 < 0.01 or y1 - y0 < 0.01:
+            continue
+        if (x1 - x0) * (y1 - y0) > 0.9:
+            continue
+        out.append((x0, y0, x1, y1))
+    return out
+
+
+def parse_boxes(text: Any) -> tuple[list[tuple[float, float, float, float]], list[tuple[float, float, float, float]]]:
+    """``(faces, people)`` from the model's answer (an object or the text holding one); unusable -> ``([], [])``."""
+    obj = text
+    if not isinstance(obj, dict):
+        obj = None
+        s = str(text or "")
+        start = s.find("{")
+        while start != -1 and obj is None:
+            depth = 0
+            for i in range(start, len(s)):
+                depth += s[i] == "{"
+                depth -= s[i] == "}"
+                if depth == 0:
+                    try:
+                        cand = json.loads(s[start:i + 1])
+                    except ValueError:
+                        break
+                    if isinstance(cand, dict) and ("faces" in cand or "people" in cand):
+                        obj = cand
+                    break
+            start = s.find("{", start + 1)
+    if not isinstance(obj, dict):
+        return [], []
+    return _clean_boxes(obj.get("faces")), _clean_boxes(obj.get("people"))
 
 
 def vision_target(operating_mode: str, cfg: Any, running: bool,
@@ -136,10 +203,21 @@ def make_asker(target: tuple[str, str, str], transport: Callable[..., Any]) -> C
     return ask
 
 
-def resolve_asker() -> Callable[[str, str, int], float | None]:
-    """The asker for Coworker's current engine (or :data:`STUB`); raises :class:`Unavailable`."""
-    if STUB is not None:
-        return STUB
+def make_box_asker(target: tuple[str, str, str], transport: Callable[..., Any]) -> Callable[[str, str, int], tuple[list, list]]:
+    """An asker that sends one frame and returns ``(faces, people)`` boxes (through :func:`ask_json.ask_json`)."""
+    ask_checked = ask_json.make_asker(target, transport)
+
+    def ask(path: str, _strip: str, _frame: int) -> tuple[list, list]:
+        try:
+            value = ask_checked(build_messages(_data_uri(path), BOXES_PROMPT), BOXES_SCHEMA, name="subject_boxes",
+                                max_tokens=400).value
+            return _clean_boxes(value.get("faces")), _clean_boxes(value.get("people"))
+        except ask_json.AskFailed as ex:
+            return parse_boxes(ex.text)    # a frame the model can't answer cleanly counts as "nobody"
+    return ask
+
+
+def _engine() -> tuple[tuple[str, str, str], Callable[..., Any]]:
     import bpy  # pylint: disable=import-error
     from . import llm_manager, llm_transport
     try:
@@ -155,7 +233,32 @@ def resolve_asker() -> Callable[[str, str, int], float | None]:
         with llm_transport.using(scratch, threading.Event()):
             return llm_transport.openai_chat_completions(*args, **kwargs)
     transport.error_kind = lambda: str(getattr(scratch, "error_kind", "") or "")    # type: ignore[attr-defined]
+    return target, transport
+
+
+def resolve_asker() -> Callable[[str, str, int], float | None]:
+    """The asker for Coworker's current engine (or :data:`STUB`); raises :class:`Unavailable`."""
+    if STUB is not None:
+        return STUB
+    target, transport = _engine()
     return make_asker(target, transport)
+
+
+def resolve_box_asker() -> Callable[[str, str, int], tuple[list, list]]:
+    """The faces-and-people asker for Coworker's current engine (or :data:`BOX_STUB`); raises :class:`Unavailable`."""
+    if BOX_STUB is not None:
+        return BOX_STUB
+    target, transport = _engine()
+    return make_box_asker(target, transport)
+
+
+def engine_notice(operating_mode: str) -> str:
+    """One line for the dialog: where the sampled frames go (they are small pictures of the shot)."""
+    if operating_mode == "REMOTE_API":
+        return "Remote engine: a few small pictures of each shot are sent to it to find faces."
+    if operating_mode in ("EXTERNAL_AGENT", "EXTERNAL_HARNESS"):
+        return "No face finding here (an agent runs its own model); screen activity only."
+    return "Local engine: the pictures stay on this machine."
 
 
 def run(jobs: Iterable[tuple[str, int, str]],

@@ -48,12 +48,10 @@ __all__ = (
 )
 
 import os
-import tempfile
-import threading
 from typing import Any, Iterable
 
 import bpy  # pylint: disable=import-error
-from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty  # pylint: disable=import-error
+from bpy.props import BoolProperty, EnumProperty, FloatProperty  # pylint: disable=import-error
 from bpy.types import Menu, Operator  # pylint: disable=import-error
 
 from . import reframe_follow
@@ -800,10 +798,6 @@ def _uncap(saved: list[Any]) -> None:
         restore(saved)
 
 
-# A running Follow subject: one at a time.
-_FOLLOW: dict[str, Any] = {}
-
-
 def _follow_targets(scene: Any, strips: Iterable[Any]) -> tuple[list[Any], list[str]]:
     ok, skipped = [], []
     for s in strips:
@@ -819,45 +813,22 @@ def _follow_targets(scene: Any, strips: Iterable[Any]) -> tuple[list[Any], list[
     return ok, skipped
 
 
-def start_follow(scene: Any, strips: Iterable[Any], samples: int = 4, on_done: Any = None) -> str:
-    """Sample frames, ask the vision model in the background, key Offset X when it answers.
+def start_follow(scene: Any, strips: Iterable[Any], follow: str = "auto", layout: str = "single",
+                 on_done: Any = None) -> str:
+    """Find the subject(s) of the shots and key the framing (``reframe_subjects.start``, #592): faces and people
+    from the vision model when one is connected, what moves (screen activity, the pointer) without one.
 
-    Returns a short status line; raises :class:`ReframeError` when it can't start.
-    """
-    if _FOLLOW.get("thread") is not None and _FOLLOW["thread"].is_alive():
-        raise ReframeError("Follow subject is already running.")
-    targets, skipped = _follow_targets(scene, strips)
-    if not targets:
-        raise ReframeError("Nothing to follow: " + ("; ".join(skipped) or "select strips that Make Vertical has framed"))
-    ask = reframe_follow.resolve_asker()          # raises reframe_follow.Unavailable with the reason
-    outdir = tempfile.mkdtemp(prefix="bfacw_follow_", dir=bpy.app.tempdir or None)
-    jobs = []
-    for s in targets:
-        frames = rm.sample_frames(int(s.left_handle), int(s.right_handle), samples)
-        for f, path in render_samples(s, frames, outdir):
-            jobs.append((s.name, f, path))
-    state: dict[str, Any] = {"results": None, "error": "", "scene": scene.name, "skipped": skipped,
-                             "on_done": on_done}
-
-    def work() -> None:
-        try:
-            state["results"] = reframe_follow.run(jobs, ask)
-        except Exception as ex:  # pylint: disable=broad-exception-caught
-            state["error"] = str(ex)
-    thread = threading.Thread(target=work, name="bfacw-follow-subject", daemon=True)
-    _FOLLOW.clear()
-    _FOLLOW.update(thread=thread, state=state)
-    thread.start()
-    bpy.app.timers.register(_follow_poll, first_interval=0.5)
-    return "Following the subject in {:d} shot(s) ({:d} frames)...".format(len(targets), len(jobs))
+    Returns a short status line; raises :class:`ReframeError` when it can't start."""
+    from . import reframe_subjects
+    return reframe_subjects.start(scene, strips, follow, layout, on_done)
 
 
-def _follow_plain(scene: Any, strip: Any, samples: list[tuple[int, Any]], fps: float) -> int:
+def _follow_plain(scene: Any, strip: Any, samples: list[tuple[int, Any]], fps: float, smooth: bool = True) -> int:
     """Key the pan of a plain-crop strip (``transform.offset_x``) from the subject positions."""
     sw, sh = source_size(strip)
     fw, fh = frame_size(scene)
     f = plain_framing_of(scene, strip)
-    keys = rm.smooth_track(samples, fps)
+    keys = rm.smooth_track(samples, fps) if smooth else [(int(fr), float(x)) for fr, x in samples if x is not None]
     if not keys:
         return 0
     _clear_plain_keys(scene, strip)
@@ -869,8 +840,9 @@ def _follow_plain(scene: Any, strip: Any, samples: list[tuple[int, Any]], fps: f
     return len(keys)
 
 
-def apply_follow(scene: Any, results: dict[str, list[tuple[int, Any]]]) -> dict[str, int]:
-    """Key Offset X from sampled subject positions; returns keys per strip."""
+def apply_follow(scene: Any, results: dict[str, list[tuple[int, Any]]], smooth: bool = True) -> dict[str, int]:
+    """Key Offset X from sampled subject positions; returns keys per strip.  *smooth* False: the positions
+    are already keys (smoothed per shot by ``subject_find``, which never smooths across a cut)."""
     fps = scene.render.fps / (scene.render.fps_base or 1.0)
     w, h = canvas_size(scene)
     keyed = {}
@@ -881,11 +853,11 @@ def apply_follow(scene: Any, results: dict[str, list[tuple[int, Any]]]) -> dict[
         mod = find_modifier(strip)
         if mod is None:
             if plain_marker(strip) is not None:
-                keyed[name] = _follow_plain(scene, strip, samples, fps)
+                keyed[name] = _follow_plain(scene, strip, samples, fps, smooth)
             continue
         sw, sh = source_size(strip)
         zoom = float(get_inputs(mod).get("Zoom", 1.0))
-        keys = rm.smooth_track(samples, fps)
+        keys = rm.smooth_track(samples, fps) if smooth else [(int(fr), float(x)) for fr, x in samples if x is not None]
         offsets = rm.track_to_offsets(keys, sw, w, rm.mode_scale("CROP", sw, sh, w, h, zoom))
         clear_keys(scene, mod, ["Offset X"])
         ident = _input_ids(mod.node_group)["Offset X"]
@@ -895,37 +867,6 @@ def apply_follow(scene: Any, results: dict[str, list[tuple[int, Any]]]) -> dict[
             item.keyframe_insert("value", frame=f)
         keyed[name] = len(offsets)
     return keyed
-
-
-def _follow_poll() -> float | None:
-    thread, state = _FOLLOW.get("thread"), _FOLLOW.get("state")
-    if thread is None or state is None:
-        return None
-    if thread.is_alive():
-        return 0.5
-    _FOLLOW.clear()
-    scene = bpy.data.scenes.get(state["scene"])
-    msg = state["error"]
-    keyed: dict[str, int] = {}
-    if not msg and scene is not None and state["results"] is not None:
-        try:
-            keyed = apply_follow(scene, state["results"])
-            bpy.ops.ed.undo_push(message="Follow Subject")
-            msg = "Follow subject: keyed Offset X on {:d} shot(s) ({:s}).".format(
-                len(keyed), ", ".join("{:s} {:d} keys".format(k, v) for k, v in keyed.items()) or "none")
-        except Exception as ex:  # pylint: disable=broad-exception-caught
-            msg = "Follow subject failed: {!s}".format(ex)
-    if state["skipped"]:
-        msg += " Skipped: " + "; ".join(state["skipped"]) + "."
-    print("[Coworker] " + msg)
-    _FOLLOW["last"] = {"message": msg, "keyed": keyed}
-    if state.get("on_done"):
-        try:
-            state["on_done"](msg, keyed)
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
-    _tell(msg)
-    return None
 
 
 def _tell(msg: str) -> None:
@@ -948,6 +889,27 @@ def _seq_poll(context: Any, cls: Any) -> bool:
     return _seq.poll(cls, context)
 
 
+def follow_made(done: dict[str, Any], follow: str = "auto", layout: str = "auto") -> str:
+    """Start Follow Subject on the strips Make Vertical just framed (``done``: its answer); the status line."""
+    target = bpy.data.scenes.get(done["scene"])
+    if target is None or target.sequence_editor is None:
+        raise ReframeError("The vertical scene was not found.")
+    found = target.sequence_editor.strips_all
+    strips = [found[n] for n in done["added"] + done["kept"] + done["reset"] if n in found]
+    return start_follow(target, strips, follow, layout)
+
+
+def _engine_notice(follow: str) -> str:
+    """One line for the dialog: where the sampled pictures go."""
+    if follow == "screen":
+        return "Nothing is sent anywhere: only what moves is looked at."
+    try:
+        mode = str(bpy.context.preferences.addons[__package__].preferences.operating_mode)
+    except (KeyError, AttributeError):
+        mode = ""
+    return reframe_follow.engine_notice(mode)
+
+
 class BFACW_OT_make_vertical(Operator):
     """Make this edit vertical (9:16): every shot is framed and editable, Centre Crop (the strip's own crop, fast) or Blur Fill (a Reframe modifier)"""
     bl_idname = "bfacw.make_vertical"
@@ -967,8 +929,19 @@ class BFACW_OT_make_vertical(Operator):
                     "(otherwise they keep what you set)")
     follow: BoolProperty(  # type: ignore[valid-type]
         name="Follow Subject", default=False,
-        description="Centre Crop only: sample a few frames per shot, ask the vision model where the subject is, "
-                    "and key Offset X to follow it (needs a connected vision-capable engine)")
+        description="Centre Crop only: look at a few frames per shot for the subject (a face, a person, what "
+                    "changes on a screen, the pointer) and key the crop to follow it. Faces need a connected "
+                    "vision-capable engine; what moves needs nothing")
+    follow_kind: EnumProperty(  # type: ignore[valid-type]
+        name="Find", items=[("auto", "Faces and Screen", "Faces and people when a vision model is connected, and what moves"),
+                            ("face", "Faces Only", "Faces and people only (needs a connected vision model)"),
+                            ("screen", "Screen Only", "What moves on screen and the pointer: no model, nothing is sent")],
+        default="auto")
+    subject_layout: EnumProperty(  # type: ignore[valid-type]
+        name="Layout", items=[("auto", "Automatic", "Two crops, top and bottom, when two subjects are apart; else one"),
+                              ("single", "One Crop", "One crop that follows the main subject"),
+                              ("split", "Two Crops", "Top and bottom: each crop follows its own subject")],
+        default="auto")
 
     @classmethod
     def poll(cls, context: Any) -> bool:
@@ -987,6 +960,10 @@ class BFACW_OT_make_vertical(Operator):
         row = layout.row()
         row.active = self.mode == "CROP"
         row.prop(self, "follow")
+        if self.follow and self.mode == "CROP":
+            layout.prop(self, "follow_kind")
+            layout.prop(self, "subject_layout")
+            layout.label(text=_engine_notice(self.follow_kind), icon='INFO')
 
     def execute(self, context: Any) -> set[str]:
         scene = sequencer_scene(context)
@@ -1007,10 +984,8 @@ class BFACW_OT_make_vertical(Operator):
             parts.append(done["captions"]["message"])
         self.report({'INFO'}, "Make Vertical: " + ", ".join(parts))
         if self.follow and self.mode == "CROP":
-            target = bpy.data.scenes.get(done["scene"])
-            strips = [target.sequence_editor.strips_all[n] for n in done["added"] + done["kept"] + done["reset"]]
             try:
-                self.report({'INFO'}, start_follow(target, strips))
+                self.report({'INFO'}, follow_made(done, self.follow_kind, self.subject_layout))
             except (ReframeError, reframe_follow.Unavailable) as ex:
                 self.report({'WARNING'}, "Follow subject: {!s}".format(ex))
         return {'FINISHED'}
@@ -1068,17 +1043,26 @@ class BFACW_OT_reframe(Operator):
 
 
 class BFACW_OT_reframe_follow_subject(Operator):
-    """Key Offset X so the frame follows the subject: samples a few frames per selected shot and asks the
-    connected vision model where the subject is"""
+    """Key the crop so the frame follows the subject: looks at a few frames of each selected shot for a face, a person, what moves on the screen or the pointer"""
     bl_idname = "bfacw.reframe_follow_subject"
     bl_label = "Follow Subject"
     bl_description = model_line(
-        "Key Offset X so the frame follows the subject: samples a few frames per selected shot and asks the "
-        "connected vision model where the subject is",
-        "Needs a vision model: a Remote one, or Coworker started with a Local one that can see.")
+        "Key the crop so the frame follows the subject: looks at a few frames of each selected shot for a face, a "
+        "person, what moves on the screen or the pointer",
+        "Faces need a vision model: a Remote one, or Coworker started with a Local one that can see. What moves "
+        "needs none.")
     bl_options = {'REGISTER'}
 
-    samples: IntProperty(name="Frames per Shot", default=4, min=2, max=24)  # type: ignore[valid-type]
+    follow_kind: EnumProperty(  # type: ignore[valid-type]
+        name="Find", items=[("auto", "Faces and Screen", "Faces and people when a vision model is connected, and what moves"),
+                            ("face", "Faces Only", "Faces and people only (needs a connected vision model)"),
+                            ("screen", "Screen Only", "What moves on screen and the pointer: no model, nothing is sent")],
+        default="auto")
+    subject_layout: EnumProperty(  # type: ignore[valid-type]
+        name="Layout", items=[("single", "One Crop", "One crop that follows the main subject"),
+                              ("auto", "Automatic", "Two crops, top and bottom, when two subjects are apart; else one"),
+                              ("split", "Two Crops", "Top and bottom: each crop follows its own subject")],
+        default="single")
 
     @classmethod
     def poll(cls, context: Any) -> bool:
@@ -1088,7 +1072,7 @@ class BFACW_OT_reframe_follow_subject(Operator):
         scene = sequencer_scene(context)
         strips = [s for s in scene.sequence_editor.strips_all if s.select and s.type in STRIP_TYPES]
         try:
-            self.report({'INFO'}, start_follow(scene, strips, self.samples))
+            self.report({'INFO'}, start_follow(scene, strips, self.follow_kind, self.subject_layout))
         except (ReframeError, reframe_follow.Unavailable) as ex:
             self.report({'WARNING'}, str(ex))
             return {'CANCELLED'}
@@ -1172,8 +1156,8 @@ def unregister() -> None:
         handlers = getattr(bpy.app.handlers, kind)
         while _after_undo in handlers:
             handlers.remove(_after_undo)
-    if bpy.app.timers.is_registered(_follow_poll):
-        bpy.app.timers.unregister(_follow_poll)
+    from . import reframe_subjects
+    reframe_subjects.unregister()
     for cls in reversed(_CLASSES):
         try:
             bpy.utils.unregister_class(cls)

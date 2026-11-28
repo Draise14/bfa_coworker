@@ -178,8 +178,7 @@ class TestTools(unittest.TestCase):
     def test_tools_in_the_vse_domain(self):
         text = (_ROOT / "mcp" / "blmcp" / "tool_domains.py").read_text(encoding="utf-8")
         self.assertIn('"get_transcript_text", "apply_transcript_edit"', text)
-        ctl = (_ROOT / "addon" / "bfa_coworker" / "agent_controller.py").read_text(encoding="utf-8")
-        self.assertIn('"apply_transcript_edit"', ctl)
+        # #651: the loop reads this same file (tests/test_tool_domains_one_source.py).
         docs = (_ROOT / "addon" / "bfa_coworker" / "skills" / "mcp_tools.md").read_text(encoding="utf-8")
         self.assertIn("apply_transcript_edit(", docs)
 

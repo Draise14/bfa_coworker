@@ -1633,91 +1633,29 @@ _SURFACE_TOOLS = frozenset({
     "search_manual_docs",
 })
 
-_TOOL_DOMAINS: dict[str, frozenset[str]] = {
-    "animation": frozenset({
-        "jump_to_view3d_object_by_name",
-        "jump_to_view3d_object_data_by_name",
-        "render_viewport_to_path",
-        "batch_keyframe_insert",
-    }),
-    "material": frozenset({
-        "download_polyhaven_asset",
-        "search_polyhaven_assets",
-        "get_screenshot_of_area_as_image",
-        "render_viewport_to_path",
-        "setup_pbr_material",
-        "assign_material_to_objects",
-        "load_asset_in_context",
-        "bake_textures",
-        "get_node_tree_as_code",       # #480: whole node trees as text
-        "build_node_tree_from_code",
-    }),
-    "modeling": frozenset({
-        "jump_to_view3d_object_by_name",
-        "jump_to_view3d_object_data_by_name",
-        "jump_to_tab_by_name",
-        "jump_to_tab_by_space_type",
-        "get_screenshot_of_area_as_image",
-        "set_collection_color_tag",
-    }),
-    "lighting": frozenset({
-        "download_polyhaven_asset",
-        "search_polyhaven_assets",
-        "render_viewport_to_path",
-        "get_screenshot_of_area_as_image",
-        "three_point_lighting_rig",
-    }),
-    "rendering": frozenset({
-        "render_viewport_to_path",
-        "get_screenshot_of_area_as_image",
-        "three_point_lighting_rig",
-        "bake_textures",
-        "get_node_tree_as_code",       # #480: the compositor's trees
-        "build_node_tree_from_code",
-    }),
-    "vse": frozenset({
-        "jump_to_tab_by_name",
-        "jump_to_tab_by_space_type",
-        "transcribe_strip",
-        "get_vse_strips_summary",     # Tools 1 (#304): the Sequencer's own tools.
-        "get_vse_strip_detail",
-        "get_vse_timeline_overview",
-        "set_strip_frame_range",
-        "render_vse_preview",
-        "add_captions",
-        "reframe_vertical",
-        "reframe_strips",             # #606
-        "remove_silences",            # #539
-        "get_transcript_text",        # #498: Edit by Transcript
-        "apply_transcript_edit",
-    }),
-    "geometry_nodes": frozenset({
-        "jump_to_view3d_object_by_name",
-        "jump_to_view3d_object_data_by_name",
-        "get_screenshot_of_area_as_image",
-        "get_active_node_tree",
-        "get_node_group_interface",
-        "wire_node_group",
-        "get_node_tree_as_code",       # #480: whole node trees as text
-        "build_node_tree_from_code",
-    }),
-    "web": frozenset({"read_web_page"}),     # #637: a page the user links, after they say yes
-    "assets": frozenset({
-        "search_assets",
-        "get_asset_libraries",
-        "get_asset_tags",
-        "list_asset_catalogs",
-        "load_asset_in_context",
-        "download_polyhaven_asset",
-        "search_polyhaven_assets",
-        "assign_material_to_objects",
-        "place_asset_in_scene",
-        "jump_to_asset_browser",
-        "get_active_node_tree",
-        "get_node_group_interface",
-        "wire_node_group",
-    }),
-}
+def _load_tool_domains() -> dict[str, frozenset[str]]:
+    """#651: the tool-to-domain map is hand-edited in ONE file, ``blmcp/tool_domains.py``.
+
+    The server (tools on demand) imports it; the add-on reads the same file by
+    path, from the dev checkout or the zip's ``vendor/blmcp`` (as the prompts).
+    It needs nothing but ``typing``, so no vendor deps are required here.
+    """
+    import importlib.util
+    this_dir = Path(__file__).resolve().parent
+    tried = (this_dir.parent.parent / "mcp" / "blmcp" / "tool_domains.py",
+             this_dir / "vendor" / "blmcp" / "tool_domains.py")
+    for path in tried:
+        if path.is_file():
+            spec = importlib.util.spec_from_file_location("_bfacw_tool_domains", str(path))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return dict(module.DOMAINS)
+    # name= matters: Blender's addon_utils.enable reads ex.name on an ImportError.
+    raise ImportError("blmcp/tool_domains.py not found; tried: " + ", ".join(str(p) for p in tried),
+                      name=__name__)
+
+
+_TOOL_DOMAINS: dict[str, frozenset[str]] = _load_tool_domains()
 
 _DOMAIN_KEYWORDS: dict[str, list[str]] = {
     "animation": [

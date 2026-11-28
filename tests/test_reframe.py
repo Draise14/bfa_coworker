@@ -322,6 +322,3 @@ class TestReframeVerticalTool(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         self.assertIn("reframe_vertical", module.DOMAINS["vse"])
-        text = (_ADDON / "agent_controller.py").read_text(encoding="utf-8")
-        block = re.search(r'"vse": frozenset\(\{(.*?)\}\)', text, re.S).group(1)
-        self.assertIn('"reframe_vertical"', block)

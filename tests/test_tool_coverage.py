@@ -115,7 +115,7 @@ class TestServerDomainsMatchTheLoop(unittest.TestCase):
         # The loop's own (not MCP tools) aren't in the server's set.
         self.assertEqual(server_surface, surface - {"execute_blender_plan", "list_blender_templates"})
         # #651: the loop keeps NO copy of the domains; it reads the server's file.
-        self.assertNotIn('"vse": frozenset', text)
+        self.assertNotRegex(text, r"(?m)^_TOOL_DOMAINS[^=\n]*=\s*\{")
         self.assertIn("_TOOL_DOMAINS: dict[str, frozenset[str]] = _load_tool_domains()", text)
         self.assertEqual(text.count("_TOOL_DOMAINS: dict[str, frozenset[str]]"), 1)
 

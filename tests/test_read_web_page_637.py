@@ -921,8 +921,6 @@ class TestRegistered(unittest.TestCase):
         from blmcp import tool_domains
         self.assertIn("read_web_page", tool_domains.DOMAINS["web"])
         self.assertNotIn("read_web_page", tool_domains.SURFACE)         # not always loaded
-        text = (_ROOT / "addon" / "bfa_coworker" / "agent_controller.py").read_text(encoding="utf-8")
-        self.assertIn('"web": frozenset({"read_web_page"})', text)
         engine = (_ROOT / "addon" / "bfa_coworker" / "engine.py").read_text(encoding="utf-8")
         self.assertIn('"read_web_page"', engine)
 

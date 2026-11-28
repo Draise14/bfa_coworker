@@ -123,9 +123,17 @@ def _loader(file_path: Path) -> Any:
     """``_load_tool_domains`` from agent_controller.py (it needs bpy as a whole), run as if at *file_path*."""
     tree = ast.parse((_ADDON / "agent_controller.py").read_text(encoding="utf-8"))
     node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_load_tool_domains")
-    ns: dict[str, Any] = {"Path": Path, "__file__": str(file_path)}
+    ns: dict[str, Any] = {"Path": Path, "__file__": str(file_path), "__name__": "bfa_coworker.agent_controller"}
     exec(compile(ast.Module([node], []), "agent_controller.py", "exec"), ns)  # noqa: S102
     return ns["_load_tool_domains"]
+
+
+def _server_domains() -> dict:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_td_651_srv", _SERVER_FILE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.DOMAINS
 
 
 def _canon(domains: dict) -> str:
@@ -134,22 +142,22 @@ def _canon(domains: dict) -> str:
 
 class TestOneSource(unittest.TestCase):
 
-    def test_same_domains_as_before(self):
-        """Keys in the same order, every member the same: the tool lists do not move."""
+    def test_nothing_lost_since_before(self):
+        """Every domain and tool of main before #651 is still there (more may be added)."""
         got = _loader(_ADDON / "agent_controller.py")()
-        self.assertEqual(list(got), list(_BEFORE))
+        # "Nothing lost": new tools and domains may be added in tool_domains.py alone.
         for key, members in _BEFORE.items():
+            self.assertIn(key, got)
             self.assertIsInstance(got[key], frozenset, key)
-            self.assertEqual(sorted(got[key]), members, key)
-        self.assertEqual(_canon(got), json.dumps(_BEFORE, ensure_ascii=False))
+            self.assertLessEqual(set(members), got[key], key)
 
     def test_the_loop_keeps_no_copy(self):
         text = (_ADDON / "agent_controller.py").read_text(encoding="utf-8")
         self.assertEqual(text.count("_TOOL_DOMAINS: dict[str, frozenset[str]]"), 1)
         self.assertIn("_TOOL_DOMAINS: dict[str, frozenset[str]] = _load_tool_domains()", text)
-        self.assertNotIn('"vse": frozenset', text)
+        self.assertNotRegex(text, r"(?m)^_TOOL_DOMAINS[^=\n]*=\s*\{")
 
-    def test_the_loop_gets_the_servers_own_object(self):
+    def test_the_loop_map_equals_the_servers_map(self):
         server = ast.parse(_SERVER_FILE.read_text(encoding="utf-8"))
         names = {t.target.id for t in server.body if isinstance(t, ast.AnnAssign)}
         self.assertIn("DOMAINS", names)
@@ -168,15 +176,19 @@ class TestOneSource(unittest.TestCase):
             (pkg / "vendor" / "blmcp").mkdir(parents=True)
             shutil.copy(str(_SERVER_FILE), str(pkg / "vendor" / "blmcp" / "tool_domains.py"))
             got = _loader(pkg / "agent_controller.py")()
-            self.assertEqual(_canon(got), json.dumps(_BEFORE, ensure_ascii=False))
+            self.assertEqual(_canon(got), _canon(_server_domains()))
         finally:
             shutil.rmtree(str(tmp), ignore_errors=True)
 
     def test_a_missing_file_says_so(self):
         tmp = Path(tempfile.mkdtemp())
         try:
-            with self.assertRaises(ImportError):
+            with self.assertRaises(ImportError) as ctx:
                 _loader(tmp / "a" / "b" / "agent_controller.py")()
+            # Blender's addon_utils.enable does ex.name + "." on it: None would raise a TypeError.
+            self.assertIsNotNone(ctx.exception.name)
+            self.assertIn("vendor", str(ctx.exception))
+            self.assertIn("mcp", str(ctx.exception))
         finally:
             shutil.rmtree(str(tmp), ignore_errors=True)
 

@@ -1642,14 +1642,17 @@ def _load_tool_domains() -> dict[str, frozenset[str]]:
     """
     import importlib.util
     this_dir = Path(__file__).resolve().parent
-    for path in (this_dir.parent.parent / "mcp" / "blmcp" / "tool_domains.py",
-                 this_dir / "vendor" / "blmcp" / "tool_domains.py"):
+    tried = (this_dir.parent.parent / "mcp" / "blmcp" / "tool_domains.py",
+             this_dir / "vendor" / "blmcp" / "tool_domains.py")
+    for path in tried:
         if path.is_file():
             spec = importlib.util.spec_from_file_location("_bfacw_tool_domains", str(path))
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             return dict(module.DOMAINS)
-    raise ImportError("blmcp/tool_domains.py not found (dev: mcp/blmcp, zip: vendor/blmcp)")
+    # name= matters: Blender's addon_utils.enable reads ex.name on an ImportError.
+    raise ImportError("blmcp/tool_domains.py not found; tried: " + ", ".join(str(p) for p in tried),
+                      name=__name__)
 
 
 _TOOL_DOMAINS: dict[str, frozenset[str]] = _load_tool_domains()

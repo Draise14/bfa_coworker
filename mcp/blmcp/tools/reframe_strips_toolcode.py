@@ -21,6 +21,10 @@ class Params(NamedTuple):
     layout: str = ""
     strips: tuple[str, ...] = ()
     swap: bool = False
+    pan_x: float | None = None
+    pan_y: float | None = None
+    zoom: float | None = None
+    key: bool = False
 
 
 class Result(NamedTuple):
@@ -33,6 +37,7 @@ class Result(NamedTuple):
     unchanged: list[str] | None = None
     skipped: list[Any] | None = None
     swapped: list[str] | None = None
+    framed: list[str] | None = None
     tracking: str | None = None
     layouts: dict[str, Any] | None = None
     scene: str | None = None
@@ -48,7 +53,8 @@ def main(params: Params) -> Any:
         strips = [strips] if strips else []
     try:
         out = _coworker_api().reframe_strips(str(params.layout or ""), [str(s) for s in (strips or ())],
-                                             bool(params.swap))
+                                             bool(params.swap), params.pan_x, params.pan_y, params.zoom,
+                                             bool(params.key))
     except Exception as ex:  # pylint: disable=broad-exception-caught
         return Result(status="error", message=str(ex))
     return Result(**{k: v for k, v in out.items() if k in Result._fields})

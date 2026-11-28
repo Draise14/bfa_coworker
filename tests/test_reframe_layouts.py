@@ -903,7 +903,8 @@ class TestReadAndCanvas(unittest.TestCase):
         _apply(strips, "split_top", ["clip1"])
         strips[1].mod = "BLUR_FILL"
         out = ra.layouts_of(None, strips, ["clip1", "clip (bottom)", "clip2", "talk", "nope"], Stand())
-        self.assertEqual(out["clip1"], {"layout": "split_top", "part": 0, "partner": "clip1 (bottom)"})
+        self.assertEqual(out["clip1"], {"layout": "split_top", "part": 0, "partner": "clip1 (bottom)",
+                                          "inside": {"x": 0.0, "y": 0.0, "zoom": 1.0, "keyed": False}})
         self.assertEqual(out["clip2"], {"layout": "full_blur"})
         self.assertNotIn("talk", out)
         self.assertNotIn("nope", out)
@@ -1001,13 +1002,13 @@ class TestTool(unittest.TestCase):
     def test_result_and_errors(self):
         calls = []
 
-        def reframe_strips(layout, strips, swap):
-            calls.append((layout, strips, swap))
+        def reframe_strips(layout, strips, swap, pan_x=None, pan_y=None, zoom=None, key=False):
+            calls.append((layout, strips, swap, pan_x, pan_y, zoom, key))
             return {"status": "ok", "message": "Split, Half and Half: 1 strip", "layout": layout, "changed": ["a"],
                     "created": ["a (bottom)"], "removed": [], "skipped": [], "scene": "Edit", "extra": 1}
         ns = self._load(types.SimpleNamespace(reframe_strips=reframe_strips))
-        out = ns["main"](ns["Params"](layout="split_half", strips=("a",), swap=True))._asdict()
-        self.assertEqual(calls, [("split_half", ["a"], True)])
+        out = ns["main"](ns["Params"](layout="split_half", strips=("a",), swap=True, pan_x=0.5, zoom=2.0, key=True))._asdict()
+        self.assertEqual(calls, [("split_half", ["a"], True, 0.5, None, 2.0, True)])
         self.assertEqual((out["status"], out["changed"], out["created"], out["scene"]), ("ok", ["a"], ["a (bottom)"], "Edit"))
         self.assertNotIn("extra", out)
 
@@ -1020,8 +1021,8 @@ class TestTool(unittest.TestCase):
     def test_params_match_the_tool_signature(self):
         tool = (_TOOLS / "reframe_strips.py").read_text(encoding="utf-8")
         sig = re.search(r"def reframe_strips\((.*?)\) ->", tool, re.S).group(1)
-        self.assertEqual(re.findall(r"^\s*(\w+):", sig, re.M), ["layout", "strips", "swap"])
-        self.assertEqual(list(self._load(None)["Params"]._fields), ["layout", "strips", "swap"])
+        self.assertEqual(re.findall(r"^\s*(\w+):", sig, re.M), ["layout", "strips", "swap", "pan_x", "pan_y", "zoom", "key"])
+        self.assertEqual(list(self._load(None)["Params"]._fields), ["layout", "strips", "swap", "pan_x", "pan_y", "zoom", "key"])
 
     def test_registered_in_the_vse_lists_and_the_docs(self):
         spec = importlib.util.spec_from_file_location("tool_domains_606", _REPO / "mcp" / "blmcp" / "tool_domains.py")

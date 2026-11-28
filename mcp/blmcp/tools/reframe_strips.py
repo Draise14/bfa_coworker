@@ -31,6 +31,10 @@ def register(mcp: FastMCP) -> None:
         layout: str = "",
         strips: list[str] | None = None,
         swap: bool = False,
+        pan_x: float | None = None,
+        pan_y: float | None = None,
+        zoom: float | None = None,
+        key: bool = False,
     ) -> dict[str, object]:
         """
         Change the vertical layout of movie, image or scene strips (Reframe), one undo step.
@@ -57,12 +61,19 @@ def register(mcp: FastMCP) -> None:
             strips: Strip names (a split's either part stands for both). Empty: the selected strips.
             swap: Exchange which framing of the picture is shown top and bottom in the splits named
                 (after building ``layout`` when one is given).
+            pan_x: Frame Inside: pan the picture sideways inside each split part named, -1 (far left)
+                to 1 (far right), 0 centred. Name the part's own strip (its partner is not changed).
+            pan_y: Frame Inside: pan up or down, -1 (bottom) to 1 (top).
+            zoom: Frame Inside: 1 (just fills the part) to 4.
+            key: Key the framing at the current frame; keys at other frames then move it smoothly. A
+                part that already has keys is keyed by any pan or zoom you set.
 
         Returns:
             ``status`` (ok / nothing / error), ``message``, ``layout``, ``changed`` (strips given
             the layout), ``created`` / ``removed`` (strip names), ``unchanged`` (already in that
-            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``tracking``, ``layouts`` (read mode: strip ->
-            {layout, part, partner}; layout is "" when it has none) and ``scene``.
+            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``framed``, ``tracking``, ``layouts`` (read mode: strip ->
+            {layout, part, partner, inside: {x, y, zoom, keyed}}; layout is "" when it has none) and ``scene``.
         """
-        p = Params(layout=layout, strips=tuple(strips or ()), swap=bool(swap))
+        p = Params(layout=layout, strips=tuple(strips or ()), swap=bool(swap), pan_x=pan_x, pan_y=pan_y, zoom=zoom,
+                   key=bool(key))
         return send_code(toolcode_format_call(_TOOL_CALL, p), strict_json=True)

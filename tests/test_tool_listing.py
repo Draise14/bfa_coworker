@@ -2156,52 +2156,54 @@ EXPECTED_TOOLS = [
     {
         "name": "load_tools",
         "description": "\n"
-"        Make a group of specialised tools available when the task needs them. If a tool\n"
-"        you need isn't in your list (rendering, baking, materials, nodes, assets,\n"
-"        animation, lighting...), call this first; the tools appear right after.\n"
-"\n"
-"        Domains and the tools they add:\n"
-"        - rendering: render to a file, bake textures, lighting rig, compositor trees\n"
-"          (render_viewport_to_path, bake_textures, three_point_lighting_rig,\n"
-"          get_screenshot_of_area_as_image, get_node_tree_as_code, build_node_tree_from_code)\n"
-"        - material: PBR materials, Polyhaven textures, bake textures, shader trees\n"
-"          (setup_pbr_material, assign_material_to_objects, download_polyhaven_asset,\n"
-"          search_polyhaven_assets, load_asset_in_context, bake_textures, render_viewport_to_path,\n"
-"          get_screenshot_of_area_as_image, get_node_tree_as_code, build_node_tree_from_code)\n"
-"        - lighting: lights, HDRIs (three_point_lighting_rig, download_polyhaven_asset,\n"
-"          search_polyhaven_assets, render_viewport_to_path, get_screenshot_of_area_as_image)\n"
-"        - animation: keyframes (batch_keyframe_insert, jump_to_view3d_object_by_name,\n"
-"          jump_to_view3d_object_data_by_name, render_viewport_to_path)\n"
-"        - modeling: navigate and organise (jump_to_view3d_object_by_name,\n"
-"          jump_to_view3d_object_data_by_name, jump_to_tab_by_name, jump_to_tab_by_space_type,\n"
-"          set_collection_color_tag, get_screenshot_of_area_as_image)\n"
-"        - geometry_nodes: node trees (get_node_tree_as_code, build_node_tree_from_code,\n"
-"          get_active_node_tree, get_node_group_interface, wire_node_group,\n"
-"          jump_to_view3d_object_by_name, jump_to_view3d_object_data_by_name,\n"
-"          get_screenshot_of_area_as_image)\n"
-"        - assets: asset libraries (search_assets, get_asset_libraries, get_asset_tags,\n"
-"          list_asset_catalogs, load_asset_in_context, place_asset_in_scene,\n"
-"          jump_to_asset_browser, download_polyhaven_asset, search_polyhaven_assets,\n"
-"          assign_material_to_objects, get_active_node_tree, get_node_group_interface,\n"
-"          wire_node_group)\n"
-"        - web: read a web page the user gives or asks for; the user is asked first (read_web_page)\n"
-"        - vse: Video Sequencer strips: list, read, move / trim, preview a frame, speech to text,\n"
-"          remove silences, captions, edit by transcript and a vertical 9:16 version with editable\n"
-"          framing (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,\n"
-"          set_strip_frame_range, render_vse_preview, transcribe_strip, remove_silences,\n"
-"          add_captions, get_transcript_text, apply_transcript_edit, reframe_vertical,\n"
-"          reframe_strips, jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
-"\n"
-"        Load only what the request needs; the basic tools (scene, code, docs,\n"
-"        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"
-"        get_job_status) are always there. Called with no domains, it lists them.\n"
-"\n"
-"        Args:\n"
-"            domains: One or more domain names from the list above (none: list them).\n"
-"\n"
-"        Returns:\n"
-"            The domains loaded and the tools they added (name and what it does).\n"
-"        ",
+        "        Make a group of specialised tools available when the task needs them. If a tool\n"
+        "        you need isn't in your list (rendering, baking, materials, nodes, assets,\n"
+        "        animation, lighting...), call this first; the tools appear right after.\n"
+        "\n"
+        "        Domains and the tools they add:\n"
+        "        - rendering: render to a file, bake textures, lighting rig, compositor trees\n"
+        "          (render_viewport_to_path, bake_textures, three_point_lighting_rig,\n"
+        "          get_screenshot_of_area_as_image, get_node_tree_as_code, build_node_tree_from_code)\n"
+        "        - material: PBR materials, Polyhaven textures, bake textures, shader trees\n"
+        "          (setup_pbr_material, assign_material_to_objects, download_polyhaven_asset,\n"
+        "          search_polyhaven_assets, load_asset_in_context, bake_textures, render_viewport_to_path,\n"
+        "          get_screenshot_of_area_as_image, get_node_tree_as_code, build_node_tree_from_code)\n"
+        "        - lighting: lights, HDRIs (three_point_lighting_rig, download_polyhaven_asset,\n"
+        "          search_polyhaven_assets, render_viewport_to_path, get_screenshot_of_area_as_image)\n"
+        "        - animation: keyframes (batch_keyframe_insert, jump_to_view3d_object_by_name,\n"
+        "          jump_to_view3d_object_data_by_name, render_viewport_to_path)\n"
+        "        - modeling: navigate and organise (jump_to_view3d_object_by_name,\n"
+        "          jump_to_view3d_object_data_by_name, jump_to_tab_by_name, jump_to_tab_by_space_type,\n"
+        "          set_collection_color_tag, get_screenshot_of_area_as_image)\n"
+        "        - geometry_nodes: node trees (get_node_tree_as_code, build_node_tree_from_code,\n"
+        "          get_active_node_tree, get_node_group_interface, wire_node_group,\n"
+        "          jump_to_view3d_object_by_name, jump_to_view3d_object_data_by_name,\n"
+        "          get_screenshot_of_area_as_image)\n"
+        "        - assets: asset libraries (search_assets, get_asset_libraries, get_asset_tags,\n"
+        "          list_asset_catalogs, load_asset_in_context, place_asset_in_scene,\n"
+        "          jump_to_asset_browser, download_polyhaven_asset, search_polyhaven_assets,\n"
+        "          assign_material_to_objects, get_active_node_tree, get_node_group_interface,\n"
+        "          wire_node_group)\n"
+        "        - web: read a web page the user gives or asks for; the user is asked first (read_web_page)\n"
+        "        - vse: Video Sequencer strips: list, read, move / trim, preview a frame, speech to text,\n"
+        "          remove silences, captions, edit by transcript, a vertical 9:16 version with editable\n"
+        "          framing, and Highlights: find pieces that stand alone, build each as a short\n"
+        "          (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,\n"
+        "          set_strip_frame_range, render_vse_preview, transcribe_strip, remove_silences,\n"
+        "          add_captions, get_transcript_text, apply_transcript_edit, reframe_vertical,\n"
+        "          reframe_strips, read_edit_sentences, suggest_highlights, propose_highlights,\n"
+        "          make_short, jump_to_tab_by_name, jump_to_tab_by_space_type)\n"
+        "\n"
+        "        Load only what the request needs; the basic tools (scene, code, docs,\n"
+        "        screenshots, plan, questions, bake_textures, render_viewport_to_path,\n"
+        "        get_job_status) are always there. Called with no domains, it lists them.\n"
+        "\n"
+        "        Args:\n"
+        "            domains: One or more domain names from the list above (none: list them).\n"
+        "\n"
+        "        Returns:\n"
+        "            The domains loaded and the tools they added (name and what it does).\n"
+        "        ",
         "inputSchema": {
             "properties": {
                 "domains": {
@@ -2221,6 +2223,63 @@ EXPECTED_TOOLS = [
                 }
             },
             "title": "load_toolsArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "make_short",
+        "description": "\n"
+        "        Build one of the Highlights picks as its own scene (a copy of the edit with its range set\n"
+        "        to the pick, vertical, captioned, ready to render), one undo step. The long edit is never\n"
+        "        changed and the user's view stays on it: tell them the new scene's name. Rendering is\n"
+        "        theirs. The pick is placed again first; one that no longer fits the edit is refused.\n"
+        "        Changes the scene (scenes and strips are added), so it waits while a render or bake runs.\n"
+        "\n"
+        "        Args:\n"
+        "            pick: The pick's ``id`` from suggest_highlights / propose_highlights (or its number in\n"
+        "                the list, 1 is the first, or its title).\n"
+        "            steps: The polish steps to run, any of ``silences`` (cut the pauses), ``vertical``\n"
+        "                (9:16), ``captions`` (Auto Captions, needs the transcript), ``hook`` (the hook line\n"
+        "                as a title over the first seconds). Left out: all four; ``[]``: only the copy\n"
+        "                with its range.\n"
+        "\n"
+        "        Returns:\n"
+        "            ``scene`` (the short's name), ``frame_start`` / ``frame_end``, ``seconds`` and ``steps``\n"
+        "            (one line per step, a step that could not run says why and the rest went on).\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "pick": {
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "integer"
+                        }
+                    ],
+                    "title": "Pick"
+                },
+                "steps": {
+                    "anyOf": [
+                        {
+                            "items": {
+                                "type": "string"
+                            },
+                            "type": "array"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Steps"
+                }
+            },
+            "required": [
+                "pick"
+            ],
+            "title": "make_shortArguments",
             "type": "object"
         }
     },
@@ -2333,6 +2392,103 @@ EXPECTED_TOOLS = [
                 "asset_name"
             ],
             "title": "place_asset_in_sceneArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "propose_highlights",
+        "description": "\n"
+        "        Put pieces you chose yourself, from read_edit_sentences, into the Highlights list: the\n"
+        "        same checks as the search (the numbers exist, whole sentences, 15 s to the longest\n"
+        "        length, a little too long is cut back to a full stop, no two share frames) and the same\n"
+        "        list on the scene. A refused piece is listed in ``refused`` with the reason. Nothing is\n"
+        "        built: make_short builds one.\n"
+        "\n"
+        "        Args:\n"
+        "            picks: ``[{first, last, title, hook, reason, scores}]``. ``first`` / ``last``: sentence\n"
+        "                numbers. ``title`` (60 characters), ``hook`` (the opening line, 110), ``reason``\n"
+        "                (one sentence). ``scores``: whole numbers 0 to 3 for ``hook``, ``alone``,\n"
+        "                ``complete``, ``one_idea``, ``energy``, ``tease``: do the first seconds pull,\n"
+        "                does it make sense alone, is it finished, is it one idea, is there energy, does it\n"
+        "                tease the full video. The value density is counted for you. Up to 20.\n"
+        "            kind: ``auto``, ``podcast``, ``tutorial`` or ``talk``: the weights of the total.\n"
+        "            max_seconds: The longest a short may be, 15 to 60.\n"
+        "            version: The ``version`` of the sentences you read: if the edit changed since, the call\n"
+        "                is refused and you read again.\n"
+        "            replace: Start a new list (default: add to the picks that are still in the edit).\n"
+        "\n"
+        "        Returns:\n"
+        "            ``added``, ``refused`` ([{index, first, last, why, message}]), ``picks`` (the list, with\n"
+        "            ``id``) and ``version``.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "picks": {
+                    "items": {
+                        "additionalProperties": True,
+                        "type": "object"
+                    },
+                    "title": "Picks",
+                    "type": "array"
+                },
+                "kind": {
+                    "default": "auto",
+                    "title": "Kind",
+                    "type": "string"
+                },
+                "max_seconds": {
+                    "default": 60.0,
+                    "title": "Max Seconds",
+                    "type": "number"
+                },
+                "version": {
+                    "default": "",
+                    "title": "Version",
+                    "type": "string"
+                },
+                "replace": {
+                    "default": False,
+                    "title": "Replace",
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "picks"
+            ],
+            "title": "propose_highlightsArguments",
+            "type": "object"
+        }
+    },
+    {
+        "name": "read_edit_sentences",
+        "description": "\n"
+        "        The speech of the whole Sequencer edit as numbered sentences, as it plays now: every sound\n"
+        "        strip, every media file, merged by time. Read it to choose pieces for propose_highlights.\n"
+        "        Needs transcripts (transcribe_strip / Auto Captions). Changes nothing.\n"
+        "\n"
+        "        Args:\n"
+        "            first: The sentence number to start at (default 1).\n"
+        "            count: How many sentences (default 150); ``next_first`` says where the next page starts.\n"
+        "\n"
+        "        Returns:\n"
+        "            ``text`` (one line per sentence: ``S12 [0:41] words``), ``total``, ``first``, ``last``,\n"
+        "            ``next_first`` (None on the last page), ``version`` (send it back to propose_highlights),\n"
+        "            ``windows`` (stretches that fit one request) and ``report`` (what was skipped and why).\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "first": {
+                    "default": 1,
+                    "title": "First",
+                    "type": "integer"
+                },
+                "count": {
+                    "default": 150,
+                    "title": "Count",
+                    "type": "integer"
+                }
+            },
+            "title": "read_edit_sentencesArguments",
             "type": "object"
         }
     },
@@ -3234,6 +3390,48 @@ EXPECTED_TOOLS = [
         }
     },
     {
+        "name": "suggest_highlights",
+        "description": "\n"
+        "        Find pieces of the Sequencer edit that would stand alone as a short (Highlights), as a\n"
+        "        background job: it answers at once with a ``job_id`` and takes minutes. Wait for it with\n"
+        "        get_job_status(job_id, wait_seconds); the finished job's ``result`` lists the picks (id,\n"
+        "        title, hook, reason, length, place, score) and they are kept on the scene (the Highlights\n"
+        "        panel shows them too). Nothing is built or changed in the edit: make_short builds one.\n"
+        "        Uses Coworker's own model (Local or Remote), so the transcript text goes to a Remote\n"
+        "        service (``privacy``). With an External Agent or Harness it answers ``mode``\n"
+        "        \"read_and_propose\": read_edit_sentences and propose_highlights are the way there.\n"
+        "\n"
+        "        Args:\n"
+        "            kind: ``auto`` (decided from the first minutes), ``podcast``, ``tutorial`` or ``talk``.\n"
+        "            max_seconds: The longest a short may be, 15 to 60.\n"
+        "            count: How many picks to look for (1 to 10).\n"
+        "\n"
+        "        Returns:\n"
+        "            ``job_id`` and ``sentences`` (the search started), or an ``error`` message saying what to do.\n"
+        "        ",
+        "inputSchema": {
+            "properties": {
+                "kind": {
+                    "default": "auto",
+                    "title": "Kind",
+                    "type": "string"
+                },
+                "max_seconds": {
+                    "default": 60.0,
+                    "title": "Max Seconds",
+                    "type": "number"
+                },
+                "count": {
+                    "default": 5,
+                    "title": "Count",
+                    "type": "integer"
+                }
+            },
+            "title": "suggest_highlightsArguments",
+            "type": "object"
+        }
+    },
+    {
         "name": "three_point_lighting_rig",
         "description": "\n"
 "        Create a three-point lighting rig (key, fill, rim) targeting an object.\n"
@@ -3542,8 +3740,7 @@ EXPECTED_TOOLS = [
             "title": "wire_node_groupArguments",
             "type": "object"
         }
-    }
-]
+    }]
 # END: EXPECTED_TOOLS
 
 

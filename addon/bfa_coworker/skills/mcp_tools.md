@@ -108,6 +108,12 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   `refused` and `text_now` has the current text; `cut_lines` with `text` is refused). `dry_run` shows the `ops` and
   `seconds` and creates nothing. An edit that cuts more than half of the clip is `refused` (`needs_confirm`)
   unless the user agreed and you pass `confirm_large_cut=true`.
+- Highlights (shorts from a long edit, needs transcripts): `suggest_highlights(kind, max_seconds, count)` starts the
+  search as a job: wait with `get_job_status(job_id, wait_seconds)`; the `result` lists the picks (`id`, title, reason,
+  length), also kept on the scene. With an External Agent it says `read_and_propose`: read `read_edit_sentences(first,
+  count)`, send `propose_highlights(picks=[{first, last, title, hook, reason, scores}], version)` (`refused` says why).
+  `make_short(pick, steps)` builds a pick as its own vertical scene, never changing the long edit; one undo; tell the
+  user its name, they render it. The three change the scene, so they wait while a render or bake runs.
 - Deleting strips: use `remove_silences` for cuts and `add_captions` again to replace captions. In your own
   code, select the strips and run `bpy.ops.sequencer.delete()` in a `temp_override` of a Sequencer area; avoid
   `strips.remove()` / `split()` loops, which can free a strip while the preview is still rendering it.

@@ -306,8 +306,8 @@ def engine_line(kind: str, host: str = "") -> tuple[str, str]:
     if kind == "remote":
         return ("The transcript text is sent to {:s}.".format(host or "the Remote API"), "remote")
     if kind == "external":
-        return ("The search needs Local or Remote: an External Agent or Harness runs its own model. Switch Coworker "
-                "to Local LLM or Remote API to use Find Highlights.", "external")
+        return ("Your agent reads the transcript, so the text goes to its own service. The search is handed to it as a "
+                "message (External Harness: copied to the clipboard).", "external")
     return ("Nothing leaves this computer: the Local model reads the transcript.", "local")
 
 

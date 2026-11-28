@@ -54,11 +54,13 @@ def register(mcp: FastMCP) -> None:
           wire_node_group)
         - web: read a web page the user gives or asks for; the user is asked first (read_web_page)
         - vse: Video Sequencer strips: list, read, move / trim, preview a frame, speech to text,
-          remove silences, captions, edit by transcript and a vertical 9:16 version with editable
-          framing (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,
+          remove silences, captions, edit by transcript, a vertical 9:16 version with editable
+          framing, and Highlights: find pieces that stand alone, build each as a short
+          (get_vse_timeline_overview, get_vse_strips_summary, get_vse_strip_detail,
           set_strip_frame_range, render_vse_preview, transcribe_strip, remove_silences,
           add_captions, get_transcript_text, apply_transcript_edit, reframe_vertical,
-          reframe_strips, jump_to_tab_by_name, jump_to_tab_by_space_type)
+          reframe_strips, read_edit_sentences, suggest_highlights, propose_highlights,
+          make_short, jump_to_tab_by_name, jump_to_tab_by_space_type)
 
         Load only what the request needs; the basic tools (scene, code, docs,
         screenshots, plan, questions, bake_textures, render_viewport_to_path,

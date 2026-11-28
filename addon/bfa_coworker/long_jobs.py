@@ -96,7 +96,8 @@ _KEEP_FINISHED = 20
 STUCK_AFTER = 180.0
 _STUCK_KINDS = frozenset({"RENDER"})
 
-_KIND_VERBS = {"RENDER": "Rendering", "OBJECT_BAKE": "Baking", "TRANSCRIBE": "Transcribing"}
+_KIND_VERBS = {"RENDER": "Rendering", "OBJECT_BAKE": "Baking", "TRANSCRIBE": "Transcribing",
+               "HIGHLIGHTS": "Finding highlights"}
 
 # Patched by the tests to fake a ten-minute job.
 _clock: Callable[[], float] = time.monotonic
@@ -360,7 +361,7 @@ def status(job_id: str) -> dict[str, Any]:
                               for j in list(_jobs.values())[-5:])
             return {"status": "error", "job_id": str(job_id), "state": "unknown", "message": (
                 "There is no job '{:s}'. {:s}Long jobs come from render_viewport_to_path(background=True), "
-                "bake_textures and transcribe_strip, which return the job_id.".format(
+                "bake_textures, transcribe_strip and suggest_highlights, which return the job_id.".format(
                     str(job_id), "Known jobs: {:s}. ".format(known) if known else ""))}
         _read_progress(job)
         out: dict[str, Any] = {

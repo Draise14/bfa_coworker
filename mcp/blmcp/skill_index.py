@@ -68,6 +68,10 @@ DOMAIN_SKILLS: dict[str, tuple[str, ...]] = {
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
+# Files in a skill folder that code reads and the chat never should (an editable chapter of a
+# tool, #613): not in the index, not loadable.  A file's front matter can say it too: ``index: no``.
+_NOT_SKILLS = frozenset({"video_highlights"})
+
 
 def _skill_dirs() -> list[Path]:
     """Folders with skill files: the server's own (``data/skills``) and the add-on's
@@ -128,6 +132,8 @@ def _files() -> dict[str, Path]:
             name = path.stem.lower()
             if name.startswith("blender_") or not _NAME_RE.match(name):
                 continue            # the version-drift files stay in the prompt
+            if name in _NOT_SKILLS or _front_matter(_read(path)).get("index", "").lower() in ("no", "false"):
+                continue
             found.setdefault(name, path)
     return found
 

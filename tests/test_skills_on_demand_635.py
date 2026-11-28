@@ -73,6 +73,21 @@ class TestSkillIndex(unittest.TestCase):
             self.assertLessEqual(len(line), 140, name)
             self.assertNotIn("\n", line)
 
+    def test_a_code_chapter_in_the_skills_folder_is_not_a_skill(self):
+        # skills/video_highlights.md is read by Find Highlights (#613), not by the model.
+        self.assertTrue(Path(_SKILLS._get_skills_dir(), "video_highlights.md").is_file())
+        self.assertNotIn("video_highlights", dict(skill_index.list_skills()))
+        self.assertIsNone(skill_index.load_skill_body("video_highlights"))
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "private.md").write_text(chr(10).join(["---", "index: no", "---", "# Private", ""]), encoding="utf-8")
+            orig = skill_index._skill_dirs
+            skill_index._skill_dirs = lambda: [Path(tmp)]
+            try:
+                self.assertEqual(skill_index.list_skills(), [])
+                self.assertIsNone(skill_index.load_skill_body("private"))
+            finally:
+                skill_index._skill_dirs = orig
+
     def test_the_version_drift_files_are_not_skills_on_demand(self):
         self.assertFalse([n for n, _ in skill_index.list_skills() if n.startswith("blender_")])
         self.assertIsNone(skill_index.load_skill_body("blender_53"))

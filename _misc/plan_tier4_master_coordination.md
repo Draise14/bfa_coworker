@@ -1,8 +1,8 @@
 # BFA Coworker — Tier 4 Master Plan
 
 **Revised**: 2026-10-21 (§0: the four workflows; §0.1–0.5: release goals, strategy, order, cut line; later the same day: **threads per editor** become the orchestration layer; then the **re-tier against feature creep**: the Spell Book and wizards go to Tier 5, generative work to Tier 6, §0.4). Earlier full audit: 2026-10-16 against v1.1.37 @ deb417b
-**Updated**: 2026-11-24 (§0.4 order after 1.1.44, decision log)
-**Status**: 🚧 In progress. Engines, agents, editors, threads per editor (Threads 0–2c) and side by side (Threads 3, built; real-model test left) done; security 1–3 done; the Sequencer core shipped in 1.1.44; next Highlights and Make Vertical that finds the subject (1.1.45)
+**Updated**: 2026-11-27 (§0.4 two releases close Tier 4, §0.5, decision log)
+**Status**: 🚧 In progress. 1.1.44 is released (2026-11-28 UTC): engines, agents, editors, threads per editor (Threads 0–2c) and side by side (Threads 3, built; real-model test left), security 1–3 and the Sequencer core are done. Next 1.1.45 (Highlights, a Make Vertical that finds the subject, Local on small cards), then 1.2.0 = Tier 4 complete
 **Previous version**: `Plans History/plan_tier4_master_coordination_v1.md` (historical
 decisions, detailed streaming/checkpoint designs that have since shipped)
 **Task board**: `plan_tier4_task_board.md`
@@ -49,8 +49,8 @@ Tier 5 automates on top of it (spells, wizards, missions, teams); Tier 6 adds ge
 
 | Tier | Theme | What's in it | Plans |
 |---|---|---|---|
-| **4 — this release** | **One Coworker, every editor, side by side** | Refinement · **threads per editor** (Threads 0–3) + Footer 1 · **video week** (Video 0–6: local captions, vertical, titles, suggest, Sequencer assets; 4v) · domain tools (Tools 1–8) · Coworker operators (Wand 0–3: framework, Sequencer basics, Nodes) · Text Editor IDE (Tools 2, Text Editor 1–4) · Chat 1, 4, 8, 9 · **context folders** (Chat 10, #367) · GPU 6 guided flows · Runtime 1–2 · Skills 4–8 · Security 1–4 · Procedural 1 · *stretch*: Orchestrate 1 | this doc, `plan_tier4_task_board.md`, 4v, 4o, 4m (§3–4.2, §4.4 Procedural 1 only) |
-| **5 — automation** | **Make it repeatable** | **Spell Book** (Spell 1–3, quick prompts #300 as prompt spells, *Save as Spell*, recording) · wizard spells (Edit from Footage, Bake, Asset library) · Procedural 2–3 + the asset-library ecosystem · Orchestrate 2 missions · Teams 1–3 (on threads) · Tools 9 · Security 5 · Rig 1–2 · Runtime 3 + Turbo mode · batch across files · icon migration into Bforartists · **guided tours** ("show me how", #368) | `plan_tier5c_artist_automation.md`, 4m §4.1 wizards + §5, `plan_tier5a_turbo_mode_speculative_decoding.md` |
+| **4 — this release** | **One Coworker, every editor, side by side** | Refinement · **threads per editor** (Threads 0–3) + Footer 1 · **video week** (Video 0–3 and 7, Highlights: local captions, vertical, Make Short; 4v) · domain tools (Tools 1–8) · Coworker operators (Wand 0–3: framework, Sequencer basics, Nodes) · Text Editor IDE (Tools 2, Text Editor 1–4) · Chat 1, 4, 8, 9 · **context folders** (Chat 10, #367) · GPU 6 guided flows · Runtime 1–2 · Skills 4–8 · Security 1–4 · Procedural 1 · *stretch*: Orchestrate 1 | this doc, `plan_tier4_task_board.md`, 4v, 4o, 4m (§3–4.2, §4.4 Procedural 1 only) |
+| **5 — automation** | **Make it repeatable** | **Spell Book** (Spell 1–3, quick prompts #300 as prompt spells, *Save as Spell*, recording) · wizard spells (Edit from Footage, Bake, Asset library) · **more video** (Video 4: titles, motion, transitions, #377; Video 6: Sequencer assets library, #379) · Procedural 2–3 + the asset-library ecosystem · Orchestrate 2 missions · Teams 1–3 (on threads) · Tools 9 · Security 5 · Rig 1–2 · Runtime 3 + Turbo mode · batch across files · icon migration into Bforartists · **guided tours** ("show me how", #368) | `plan_tier5c_artist_automation.md`, 4m §4.1 wizards + §5, `plan_tier5a_turbo_mode_speculative_decoding.md` |
 | **6 — generative** | **Make new things** | Generative local systems (the gen-plugin foundation already shipped stays as is) · generative 2D (ComfyUI) · moodboard & storyboarding · generative 3D · viewport diffusion renderer | `plan_tier6_generative_local_systems.md`, `plan_tier6_generative_2d.md`, `plan_tier6_moodboard_storyboarding.md`, `plan_tier6_generative_3d_systems.md`, `plan_tier6_viewport_diffusion_renderer.md` |
 
 Rule against creep: a new idea goes to the **lowest tier whose foundation it needs**, and
@@ -58,7 +58,7 @@ into Tier 4 only if it fixes or finishes something already in Tier 4.
 
 ### 0.2 Tier 4 goals and what each still needs (2026-10-21)
 
-Checked against `main` (897b7db); statuses updated 2026-11-10 against `main` (0b02684). 🟡 rows run with another agent and aren't re-planned here.
+Checked against `main` (897b7db); statuses updated 2026-11-10 against `main` (0b02684); goals 9 and 10 updated 2026-11-27. 🟡 rows run with another agent and aren't re-planned here.
 
 | #   | Goal                                                  | Status                     | Tier 4 tasks (board)                                                                                               |
 | --- | ----------------------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------ |
@@ -70,8 +70,8 @@ Checked against `main` (897b7db); statuses updated 2026-11-10 against `main` (0b
 | 6   | Explain this in the context menus (#290)              | ✅                          | #294 (citing docs: Chat 9)                                                                                         |
 | 7   | Sidebar chat in all editors (#291)                    | ✅                          | #298 #325; Chat 4 (#299) shows the context chip                                                                    |
 | 8   | Footer integration of agent status                    | ☐                          | **Footer 1**: one item in the global status bar, one icon per live thread                                          |
-| 9   | Orchestration layer + expanded domain tools (#71)     | ◐ Threads 0–2c done (1.1.42) | **Threads 3** side by side (`plan_tier4o_orchestration_threads.md`); Tools 1–5, 7–8 (Tools 6 long jobs done but Stop → cancel, #419); Orchestrate 1 (stretch) |
-| 10  | Quick tools in every editor                           | ☐                          | **Coworker operators** Wand 0–3 in native menus / toolshelf tabs. Quick prompts (#300) and the Spell Book → Tier 5 |
+| 9   | Orchestration layer + expanded domain tools (#71)     | ◐ Threads 0–3 built (Threads 3 in 1.1.44); Test 7 left | **Threads 3** side by side, built (`plan_tier4o_orchestration_threads.md`); real-model Test 7 left (#359); Tools 1–5, 7–8 (Tools 6 long jobs done but Stop → cancel, #419); Orchestrate 1 (stretch) |
+| 10  | Quick tools in every editor                           | ◐ Wand 0 and the Sequencer wands shipped (1.1.44); Wand 1 and 3 in 1.2.0 | **Coworker operators** Wand 0–3 in native menus / toolshelf tabs: Wand 0 (#331) and the Sequencer wands are done; Wand 1 (#332) and Wand 3 (#334) are in 1.2.0. Quick prompts (#300) and the Spell Book → Tier 5 |
 | 11  | Security checks                                       | ◐ Security 1–3 done (1.1.42) | Security 4 (untrusted content, #348)                                                                             |
 | 12  | Procedural first                                      | ☐ new                      | Procedural 1 (Make Parametric, the nudge → Tier 5)                                                                 |
 
@@ -89,7 +89,71 @@ Checked against `main` (897b7db); statuses updated 2026-11-10 against `main` (0b
 
 ### 0.4 Order (critical path) and batches
 
-**2026-11-24: where we are.** 1.1.43 is released (a hardening release: Blender registers
+**2026-11-27: two releases close Tier 4.** 1.1.44 is released (2026-11-28 UTC; zips #649,
+index #650). 63 issues are still open in the Tier 4 milestone, tracked in #97 (Tier 4
+tracker): 17 are built with one box left (a real-model run or a hand check), 16 are promised
+for 1.1.45, 25 are not started, 3 are outside our hands (#380 Bundle, #419 cancel a render,
+#638 the autosave crash, a Blender fault). The maintainer decided on 2026-11-27: **1.1.45**
+ships what is promised, **1.2.0** is "Tier 4 complete" and closes #97. Sizes: S up to 2 days,
+M up to 1 week, L more.
+
+*The scheduling constraint.* Only one PR may be open at a time on `agent_controller.py` /
+`ui_chat.py`, and every new MCP tool touches `agent_controller._TOOL_DOMAINS`, which a test
+keeps equal to `tool_domains.py`. About 15 of the remaining issues add tools, so they would
+queue behind each other. **First task of 1.1.45: #651 (one place says which domain a tool
+belongs to), size M.** The two copies of the mapping live in separate packages (the add-on
+and the MCP server) and several tests read the source as text, so it is not a small change.
+After it, a tool PR no longer edits `agent_controller.py`. If the check finds the copies are
+not as described, #651 is dropped and tool PRs go one at a time. Then each release runs as
+lanes: one hot lane (PRs that change the turn loop or the chat panel, one at a time) and free
+lanes (wand, video, docs, measurements) in parallel.
+
+*1.1.45, by lane:*
+- **V1, Highlights** (`plan_tier4v2_highlights_and_suggest_edits.md` §7), in this order:
+  (1) #610 (W0 wand panel rules), #611 (H1 scene reader) and #612 (H2 `ask_json`) together;
+  (2) #613 (H3 find and rank) and #614 (H4 picks, panel, preview) together; (3) #615 (H5 Make
+  Short, uses the Reframe layouts, #606); (4) #616 (H6 chat tools as a job, External Agent
+  path; hot lane).
+- **V2, Make Vertical and Reframe:** #592 (Make Vertical finds faces, people and the pointer);
+  when it lands, enable *Track All* (the last part of #606) and run the last box of #333.
+  Then #632 (a plain centre crop without a compositor modifier, before #625), #625 (Frame
+  Inside, probe first), #541 (the smaller video findings) and the rest of #542 (chapters,
+  speed up silences, a zoom-to-region preset; diarization gets its own Tier 5 issue).
+- **L, Local:** #635 (the first request fits 16K), with #311 (skills on demand) done in the
+  same pull request; #590 (prompt re-reads, the 8 GB cache experiment first); #636 (lighter,
+  curated models, benchmark first); the last boxes of #545 and #543 and the Local items of #558.
+- **E, External Agent:** #646 (record Codex CLI, Gemini CLI and Copilot CLI sessions).
+- **R, real-model runs by agents** (no code; evidence posted on each issue): Test 7 (#359, a
+  box of #71), helper chats (#479), a vision model gets the image (#487), a small Local
+  model moves a strip (#304), SRT in a player and Spanish captions (#376), Restart with a
+  port offset and a question card on a real agent (#564, #572), three measurements (#506),
+  one GPU render and the thumbnail cube (#527, #524), the Bforartists toolshelf button (#331).
+  Stay on the maintainer's hand list: #576, #498 and #591.
+- **Hand tests:** #652 (hand tests for 1.1.45), the successor of #561.
+- **Release prep:** version, notes, zips, then `extensions/index.json`. #419 becomes a
+  Known-issues line in the notes.
+
+*1.2.0, by batch (25 issues, each batch ends in a test round):*
+1. **The small master-plan goals:** #330 (Footer 1, goal 8), #299 (the "Where am I" line),
+   #367 (context folders), #348 (Security 4, untrusted content, goal 11).
+2. **Operators and scene tools** (goals 9, 10, 12): #332 (Wand 1 framework), then #334 (Wand 3
+   Tidy & Explain Tree); #327 (placement), #328 (organize my scene), #307 (save and export),
+   #308 (review sheet), #340 (Procedural first). Stretch: #343 (map over selection, after
+   #328); if it slips it moves to Tier 5 with Orchestrate 2.
+3. **Text Editor IDE** (#52, goal 4): #305 (Tools 2), then #313 (code panel), then #316
+   (recipes panel); #314 (rewrite the selection); #302 (Run and Fix on code blocks), then
+   #315 (run, then fix). The Classic-chat parts of #299, #302 and #313 are dropped.
+4. **Skills and guided chat:** #320 (skill format and checker), then #319 (API probes), then
+   #303 (honest docs), then #321 (new chapters); #322 (mesh quality check); #323 (skill-pack
+   docs); #324 (GPU 6, step-by-step wizards in the chat).
+- **Gates:** Test 4 (deeper tools, every engine), Test 5 (everywhere in the UI), Test 7 if not
+  passed in 1.1.45.
+- **Closing:** close #52, #71 (its Tier 5 lines move to a new Tier 5 tracker) and #97, then the
+  Tier 4 milestone. #380 (Bundle 1 to 3) and #419 move to a "with Bforartists" list in the
+  Tier 5 tracker. Release prep, version 1.2.0. Tier 4 is complete when the milestone shows 0
+  open issues and #97 is closed.
+
+**2026-11-24: where we are (history; its item 4 was updated on 2026-11-27).** 1.1.43 is released (a hardening release: Blender registers
 and draws, a .blend is a session, paste an image, mouse text selection, the scrolling,
 resizable input, a green test suite). **1.1.44 is the Sequencer core and chats side by
 side:** the Classic chat is gone (#430), the Video 0 spike (#374), Tools 1 (#304), Wand 0
@@ -109,12 +173,11 @@ while you drag, one undo per turn, keys hidden) and the Local fixes (#543, #544,
 3. **1.1.45, Make Vertical finds things:** #592 (faces, people and the pointer). *Track All*
    in the Reframe box is greyed out ("coming") until subject finding exists.
 4. **Then:** Footer 1 (#330) and context folders (Chat 10, #367), which only need Threads 1;
-   Video 4 (titles, motion, transitions) and Video 6 (the Sequencer assets library); Wand 1 →
-   Wand 3 with Tools 3; Tools 2 → Text Editor 1–4; Security 4; Tools 7–8; Procedural 1;
+   Wand 1 → Wand 3 with Tools 3; Tools 2 → Text Editor 1–4; Security 4; Tools 7–8; Procedural 1;
    Skills 4–8; GPU 6; Chat 1, 4, 8, 9; the polish notes. Open bugs from the 1.1.44 test
    round stay on their issues (#576, #591, #572, #564, #545, #543, #541, #527, #632, #638).
    Outside our hands: #419 (cancel a job from Python) and Bundle 1–3 (#380) need
-   Bforartists changes.
+   Bforartists changes. Video 4 (#377) and Video 6 (#379) moved to Tier 5 on 2026-11-27.
 
 **2026-10-25 (re-ordered the same day): architecture first, then the Sequencer.**
 - **1.1.42 (week 44):** threads per editor without the hard part. **Threads 0** spike →
@@ -150,7 +213,7 @@ release.
 Threads 1 and 3 rework `agent_controller.py` / `ui_chat.py`: the board's one-open-PR rule
 on those files applies, so they are scheduled between the other agent's PRs.
 
-### 0.5 What moved (2026-10-21)
+### 0.5 What moved (2026-10-21, updated 2026-11-27)
 
 | Moved                                                                                      | To               | Why                                                                                        |
 | ------------------------------------------------------------------------------------------ | ---------------- | ------------------------------------------------------------------------------------------ |
@@ -159,6 +222,7 @@ on those files applies, so they are scheduled between the other agent's PRs.
 | Procedural 2–3 (Make Parametric, the nudge), Tools 9, Orchestrate 2, Teams 1–3, Security 5 | **Tier 5**       | Build on threads / the asset library / sharing                                             |
 | Generative local systems, generative 2D, moodboard & storyboarding (were `plan_tier5*`)    | **Tier 6**       | Generation joins generative 3D and the diffusion renderer; files renamed to `plan_tier6_*` |
 | Turbo mode (speculative decoding)                                                          | stays **Tier 5** | An LLM accelerator, blocked upstream; not generative                                       |
+| 2026-11-27: Video 4 (#377, titles, motion, transitions) and Video 6 (#379, Sequencer assets library) | **Tier 5** | The maintainer's cut line for closing Tier 4 in 1.2.0: more video waits, the rest of Tier 4 stays |
 
 ### 0.6 Audit notes (2026-10-20/21)
 
@@ -412,5 +476,6 @@ native API has no tables, (3) keep the LaTeX→Unicode pre-pass. Moved from Tier
 - **2026-11-10: 1.1.42 merged.** Threads 0–2c, Security 1–3, the repeat guard and long jobs (all but Stop → cancel, which needs a Bforartists API, #419) are in; Remote runs passed for #310, #346 and #357. Decided: the Classic chat goes in 1.1.43 (#430), History becomes file-based with each area's tab restored (#431), and new UI work targets the GPU chat only. 1.1.43 starts with those two, then the Sequencer core; Threads 3 follows (§0.4).
 - **2026-11-13: 1.1.43 is a hardening release.** The 1.1.42 test round came first: #457, #459, #461, #462 (#431), #463, #464, #465, #468, #469, #470, #471, #474 (#389), #475 (#387), #476 (#473). #430 (the Classic chat), the Sequencer core and Threads 3 move to 1.1.44, in that order; #309 keeps one box open for Stop → cancel (#419, §0.4).
 - **2026-11-24: 1.1.44 is the Sequencer core and chats side by side.** Shipped: #430, #374, #304, #331, #375, #376, #333, #359, #479, #480, #498 and the follow-ups of the hand-test round (#561). **Moved to 1.1.45 by the maintainer (2026-11-18):** Highlights (design #571, build issues #610 to #616) and #592 (Make Vertical finds faces, people and the pointer). **Suggest Edits (#378) is shelved to Tier 5** as a wizard (design note #571, section 4). #637 `read_web_page` (PR #641), #642 (PR #645, the exact Coworker tool name on External Agent) and #643 (PR #644, the Reframe menu path) are merged and part of 1.1.44.
+- **2026-11-27: two releases close Tier 4.** (1) **Two releases:** 1.1.45 ships what is promised (Highlights, a Make Vertical that finds the subject, Local on small cards, the bugs from the 1.1.44 round); 1.2.0 is "Tier 4 complete" and closes #97 (§0.4). (2) **The cut line:** the Text Editor IDE, operators and scene tools, skills and guided chat stay in Tier 4; more video moves to Tier 5: #377 (Video 4) and #379 (Video 6). (3) **Real-model runs are done by agents** (Local 27B, Remote through OpenRouter, Claude Code as External Agent), with the evidence posted on each issue; what only a person can judge goes to #652 (hand tests for 1.1.45, successor of #561). Also: #651 (one place says which domain a tool belongs to) goes first, so tool PRs stop queuing on `agent_controller.py`; #311 is done inside #635.
 - **2026-10-21 (late): context folders and guided tours.** Context folders (point a chat at a folder; list / search / read, read-only, per thread) are a Tier 4 quick win after Threads 1 (#367). Guided tours go to Tier 5 (#368): Coworker **highlights** each step and waits for you; it never drives the UI for you. A tour is a spell played in teaching mode.
 - **2026-10-20: Tier 4a review.** Lane A (editors) is nearly closed: the Coworker editor, the compact chat in every editor's sidebar with *Use editor context only* (#298), Explain This (#290) and Translate (#42) in the right-click menus, permissions Strict / Permissive / Auto (#292). **Dropped:** viewport agent feedback (Editors 5), less in your face. **Moodboard** stays in Tier 5. Contextual, domain-aware operators per editor come with lanes F / G. The remaining Tier 4 tasks are logged one issue per task: #299-#324 (see the task board).

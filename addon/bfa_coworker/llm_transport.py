@@ -487,6 +487,7 @@ def openai_chat_completions(
     thinking_budget_tokens: int | None = None,
     chat_mode: str = "AGENT",
     timeout: float | None = None,
+    extra_body: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """POST to a chat completions endpoint and return the parsed JSON response.
 
@@ -502,6 +503,9 @@ def openai_chat_completions(
     *timeout* -- seconds for the whole call, retries included (#545: the memory
     writer's limit); ``None`` keeps the per-attempt ``_STREAM_TIMEOUT``.  The
     connection is closed when it passes, which also ends the server's work.
+    *extra_body* -- more request fields (#612: ``response_format`` for a schema-checked
+    answer), merged over the standard ones; ``None`` adds nothing.  They stay in the
+    body through every retry and reshape below.
     """
     # Start each call with a clean error classification so a stale overflow
     # from a previous call is never mistaken for the current failure.
@@ -517,6 +521,8 @@ def openai_chat_completions(
         **_CHAT_SAMPLING,
     }
     body.update(thinking_fields(thinking_budget_tokens))
+    if extra_body:
+        body.update(extra_body)
     if model:
         body["model"] = model
     if tools:

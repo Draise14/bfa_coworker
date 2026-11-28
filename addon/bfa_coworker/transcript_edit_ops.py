@@ -1404,12 +1404,27 @@ class BFACW_PT_transcript(Panel):  # type: ignore[misc]
         if flags:
             _draw_flags(layout, text, flags)
         layout.separator()
-        layout.label(text="Wands")
+        _wands_header(layout)
         col = layout.column(align=True)
+        # what makes something first, what cuts words or sound away last (wand rules, #610)
+        _wand(col, BFACW_OT_transcript_make_captions.bl_idname, "Make Captions...", "captions", "FONT_DATA")
+        _wand(col, BFACW_OT_transcript_remove_silences.bl_idname, "Remove Silences", "remove_silences", "SPEAKER")
         _wand(col, BFACW_OT_transcript_remove_fillers.bl_idname, "Remove Filler Words...", "remove_silences",
               "X")
-        _wand(col, BFACW_OT_transcript_remove_silences.bl_idname, "Remove Silences...", "remove_silences", "SPEAKER")
-        _wand(col, BFACW_OT_transcript_make_captions.bl_idname, "Make Captions", "captions", "FONT_DATA")
+
+
+def _wands_header(layout: Any) -> None:
+    """The section header of the wands: the wand icon, else a Blender one (a header has an icon, #610)."""
+    value = 0
+    try:
+        from .wand import icons
+        value = icons.icon_id("wand")
+    except Exception:  # pylint: disable=broad-exception-caught
+        pass
+    if value:
+        layout.label(text="Wands", icon_value=value)
+    else:
+        layout.label(text="Wands", icon=safe_icon('SHADERFX'))
 
 
 def _wand(layout: Any, idname: str, text: str, icon: str, fallback: str) -> None:

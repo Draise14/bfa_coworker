@@ -315,7 +315,8 @@ def _poll(cls: Any, context: Any) -> bool:
 
 # -- operators -------------------------------------------------------------------------------
 
-_ITEMS = [(item.id, item.label, item.description) for item in rl.LAYOUTS]
+_ITEMS = [(item.id, item.label, item.description, safe_icon(item.fallback), number)
+          for number, item in enumerate(rl.LAYOUTS)]
 
 
 class BFACW_OT_reframe_layout(Operator):
@@ -410,9 +411,9 @@ def _draw_buttons(layout: Any, context: Any) -> None:
     # Blender fallback icons there, and its own PNGs where the toolshelf has none (Blender, tabs off).
     previews = not getattr(context.space_data, "show_toolshelf_tabs", False)
     items = {item.id: item for item in rl.LAYOUTS}
-    for title, group in (("One picture", ("full", "full_blur", "full_tracked")),
-                         ("Split in two", ("split_half", "split_top", "split_bottom"))):
-        layout.label(text=title)
+    for title, icon_name, group in (("One picture", "IMAGE_DATA", ("full", "full_blur", "full_tracked")),
+                                    ("Split in two", "SPLIT_HORIZONTAL", ("split_half", "split_top", "split_bottom"))):
+        layout.label(text=title, icon=safe_icon(icon_name))
         grid = layout.grid_flow(row_major=True, columns=2, even_columns=True, even_rows=True, align=True)
         grid.scale_y = 1.5
         for layout_id in group:

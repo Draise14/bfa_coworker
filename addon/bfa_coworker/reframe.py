@@ -64,15 +64,23 @@ STRIP_TYPES = {"MOVIE", "IMAGE", "SCENE"}
 # Blur Fill blurs a quarter-size copy (much less work for the same look), then scales it back up.
 BLUR_DOWNSCALE = 0.25
 
+# Drop-down entries: (id, label, tooltip, Blender icon).  Every entry has an icon (wand rules, #610).
 RESOLUTIONS = (
-    ("1080x1920", "1080 x 1920 (Full HD)", "9:16 at 1080 x 1920, the usual size for short-form video"),
-    ("720x1280", "720 x 1280 (HD)", "9:16 at 720 x 1280: smaller files, faster renders"),
-    ("2160x3840", "2160 x 3840 (4K)", "9:16 at 2160 x 3840"),
+    ("1080x1920", "1080 x 1920 (Full HD)", "9:16 at 1080 x 1920, the usual size for short-form video",
+     'SEQ_PREVIEW'),
+    ("720x1280", "720 x 1280 (HD)", "9:16 at 720 x 1280: smaller files, faster renders", 'SEQ_PREVIEW'),
+    ("2160x3840", "2160 x 3840 (4K)", "9:16 at 2160 x 3840", 'SEQ_PREVIEW'),
 )
 MODES = (
-    ("CROP", "Centre Crop", "Fill the 9:16 frame with the middle of each shot (pan it afterwards with Offset X)"),
-    ("BLUR_FILL", "Blur Fill", "Show each whole shot over a blurred, dimmed copy of itself"),
+    ("CROP", "Centre Crop", "Fill the 9:16 frame with the middle of each shot (pan it afterwards with Offset X)",
+     'FULLSCREEN_ENTER'),
+    ("BLUR_FILL", "Blur Fill", "Show each whole shot over a blurred, dimmed copy of itself", 'MATFLUID'),
 )
+
+
+def _enum_items(entries: Iterable[tuple]) -> list[tuple]:
+    """Drop-down items ``(id, label, tooltip, icon, number)`` from ``(id, label, tooltip, icon name)`` rows."""
+    return [(ident, label, tip, icon(name), number) for number, (ident, label, tip, name) in enumerate(entries)]
 
 # The group's inputs: (name, socket type, default, min, max, description, in the Frame panel).
 INPUTS = (
@@ -711,12 +719,12 @@ class BFACW_OT_make_vertical(Operator):
     bl_description = agent_line(__doc__, "Follow Subject, if ticked, which needs a connected vision model")
     bl_options = {'REGISTER', 'UNDO'}
 
-    mode: EnumProperty(name="Mode", items=MODES, default="CROP")  # type: ignore[valid-type]
+    mode: EnumProperty(name="Mode", items=_enum_items(MODES), default="CROP")  # type: ignore[valid-type]
     in_copy: BoolProperty(  # type: ignore[valid-type]
         name="In a Copy of the Scene", default=True,
         description="Make a vertical copy of the scene ('<name> Vertical') and switch the Sequencer to it, "
                     "so the 16:9 edit stays as it is")
-    resolution: EnumProperty(name="Resolution", items=RESOLUTIONS, default="1080x1920")  # type: ignore[valid-type]
+    resolution: EnumProperty(name="Resolution", items=_enum_items(RESOLUTIONS), default="1080x1920")  # type: ignore[valid-type]
     reset: BoolProperty(  # type: ignore[valid-type]
         name="Reset Framing", default=False,
         description="Strips that already have a Reframe modifier get fresh framing too "
@@ -773,15 +781,16 @@ class BFACW_OT_make_vertical(Operator):
 
 
 _ACTIONS = (
-    ("LEFT", "Pan Left", "Pan the frame left (Offset X down)"),
-    ("RIGHT", "Pan Right", "Pan the frame right (Offset X up)"),
-    ("UP", "Pan Up", "Pan the frame up (Offset Y up)"),
-    ("DOWN", "Pan Down", "Pan the frame down (Offset Y down)"),
-    ("ZOOM_IN", "Zoom In", "Zoom in"),
-    ("ZOOM_OUT", "Zoom Out", "Zoom out"),
-    ("CROP", "Centre Crop", "Crop the shot to fill the frame"),
-    ("BLUR_FILL", "Blur Fill", "Show the whole shot over a blurred copy of itself"),
-    ("RESET_FRAMING", "Reset Framing", "Centre the shot again with zoom 1 (removes its framing keyframes)"),
+    ("LEFT", "Pan Left", "Pan the frame left (Offset X down)", 'TRIA_LEFT'),
+    ("RIGHT", "Pan Right", "Pan the frame right (Offset X up)", 'TRIA_RIGHT'),
+    ("UP", "Pan Up", "Pan the frame up (Offset Y up)", 'TRIA_UP'),
+    ("DOWN", "Pan Down", "Pan the frame down (Offset Y down)", 'TRIA_DOWN'),
+    ("ZOOM_IN", "Zoom In", "Zoom in", 'ZOOM_IN'),
+    ("ZOOM_OUT", "Zoom Out", "Zoom out", 'ZOOM_OUT'),
+    ("CROP", "Centre Crop", "Crop the shot to fill the frame", 'FULLSCREEN_ENTER'),
+    ("BLUR_FILL", "Blur Fill", "Show the whole shot over a blurred copy of itself", 'MATFLUID'),
+    ("RESET_FRAMING", "Reset Framing", "Centre the shot again with zoom 1 (removes its framing keyframes)",
+     'LOOP_BACK'),
 )
 
 
@@ -792,7 +801,7 @@ class BFACW_OT_reframe(Operator):
     bl_description = agent_line(__doc__)
     bl_options = {'REGISTER', 'UNDO'}
 
-    action: EnumProperty(name="Action", items=_ACTIONS, default="RIGHT")  # type: ignore[valid-type]
+    action: EnumProperty(name="Action", items=_enum_items(_ACTIONS), default="RIGHT")  # type: ignore[valid-type]
     step: FloatProperty(name="Step", default=0.1, min=0.01, max=1.0)  # type: ignore[valid-type]
 
     @classmethod
@@ -863,9 +872,11 @@ class BFACW_MT_reframe(Menu):
         layout.separator()
         layout.operator("bfacw.reframe", text="Centre Crop", icon=icon('FULLSCREEN_ENTER')).action = "CROP"
         layout.operator("bfacw.reframe", text="Blur Fill", icon=icon('MATFLUID')).action = "BLUR_FILL"
-        layout.operator("bfacw.reframe", text="Reset Framing", icon=icon('LOOP_BACK')).action = "RESET_FRAMING"
         layout.separator()
         layout.operator("bfacw.reframe_follow_subject", icon=icon('TRACKER'))
+        layout.separator()
+        # the one that throws framing away goes last (wand rules, #610)
+        layout.operator("bfacw.reframe", text="Reset Framing", icon=icon('LOOP_BACK')).action = "RESET_FRAMING"
 
 
 _CLASSES = (BFACW_OT_make_vertical, BFACW_OT_reframe, BFACW_OT_reframe_follow_subject, BFACW_MT_reframe)

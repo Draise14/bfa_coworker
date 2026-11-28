@@ -24,6 +24,7 @@ Run with::
 
 __all__ = ()
 
+import itertools
 import types
 import unittest
 
@@ -141,6 +142,45 @@ class TestTwoMicrophones(unittest.TestCase):
                                       "That sounds hard.", "It was."])
         self.assertEqual(out["report"]["duplicates"], [])
         self.assertEqual([s["speaker_change"] for s in out["sentences"]], [False, True, True, True])
+
+    def test_short_reply_on_another_mic_does_not_wipe_the_phrase(self):
+        ana = source("a" * 16, talk([(1.0, "We moved the whole project to a new rig")], p=0.9), piece("Ana", speaker="Ana"))
+        bo = source("b" * 16, talk([(2.0, "Right right")], p=0.95), piece("Bo", channel=2, speaker="Bo"))
+        out = SR.read_scene([ana, bo], FPS)
+        self.assertEqual(sum(s["words"] for s in out["sentences"]), 11)
+        self.assertIn("We moved the whole project to a new rig", texts(out))
+        self.assertEqual(out["report"]["duplicates"], [])
+
+    def test_camera_plus_two_lapels_loses_no_question(self):
+        ana_said = [(1.0, "Did you change the rig this year")]
+        bo_said = [(3.8, "Yes we changed all of it")]       # no pause: the camera hears one long phrase
+        cam_words = talk(ana_said + bo_said, p=0.8)
+        ana = source("a" * 16, talk(ana_said, p=0.7), piece("Ana lapel", channel=2, speaker="Ana"))
+        bo = source("b" * 16, talk(bo_said, p=0.95), piece("Bo lapel", channel=3, speaker="Bo"))
+        cam = source("c" * 16, cam_words, piece("Camera", channel=1, speaker="Cam"))
+        for order in itertools.permutations([ana, bo, cam]):
+            out = SR.read_scene(list(order), FPS)
+            self.assertEqual(sum(s["words"] for s in out["sentences"]), 13, order)
+            allwords = " ".join(texts(out)).split()
+            self.assertEqual(sorted(allwords), sorted("Did you change the rig this year Yes we changed all of it".split()))
+
+    def test_better_mic_trimmed_shorter_keeps_the_rest_of_the_phrase(self):
+        said = [(1.0, "We moved the whole project to a new rig and it was faster")]
+        a = source("a" * 16, talk(said, p=0.7), piece("mic A"))
+        b = source("b" * 16, talk(said, p=0.95), piece("mic B", channel=2, seconds=2.4))      # ends before the phrase does
+        out = SR.read_scene([a, b], FPS)
+        self.assertEqual(" ".join(texts(out)).split(), said[0][1].split())
+        dup = out["report"]["duplicates"]
+        self.assertEqual((dup[0]["kept"], dup[0]["dropped"]), ("mic B", "mic A"))
+        self.assertLess(dup[0]["words"], 13)
+
+    def test_overlapping_speakers_are_not_woven_into_one_sentence(self):
+        ana = source("a" * 16, talk([(1.0, "I think the main thing we learned this year was patience")]), piece("Ana", speaker="Ana"))
+        bo = source("b" * 16, talk([(4.4, "yes and also that tools matter a lot for artists")], p=0.6), piece("Bo", channel=2, speaker="Bo"))
+        out = SR.read_scene([ana, bo], FPS)
+        self.assertEqual(texts(out), ["I think the main thing we learned this year was patience",
+                                      "yes and also that tools matter a lot for artists"])
+        self.assertEqual([s["speaker"] for s in out["sentences"]], ["Ana", "Bo"])
 
     def test_one_microphone_cut_in_pieces_is_not_a_duplicate(self):
         words = talk([(1.0, "One part."), (5.0, "Another part.")])
@@ -379,6 +419,7 @@ class TestBlenderSide(unittest.TestCase):
         self.mod.context_tokens = lambda: 16384
         out = self.mod.tool_read_edit_sentences()
         self.assertEqual(out["status"], "ok")
+        self.assertEqual(out["windows_total"], len(out["windows"]))
         self.assertEqual(out["total"], 2)
         self.assertEqual(out["text"].splitlines()[0][:2], "S1")
         self.assertIn("Hello there", out["text"])
@@ -392,6 +433,7 @@ class TestBlenderSide(unittest.TestCase):
         self.assertEqual(first["next_first"], 2)
 
     def test_tool_without_speech_or_strips(self):
+        self.mod.context_tokens = lambda: None          # no network in a test
         scene = self.scene([])
         self.ops._tool_scene = lambda: scene
         out = self.mod.tool_read_edit_sentences()
@@ -399,6 +441,72 @@ class TestBlenderSide(unittest.TestCase):
         self.assertIn("No speech", out["message"])
         scene.sequence_editor = None
         self.assertEqual(self.mod.tool_read_edit_sentences()["status"], "error")
+
+    def test_two_end_keys_retimed_only_when_the_speed_changed(self):
+        import sys
+        pkg = self.ops.__name__.rsplit(".", 1)[0]
+        fake = types.ModuleType(pkg + ".wand.sequencer")
+        wand = types.ModuleType(pkg + ".wand")
+        wand.sequencer = fake
+        self.addCleanup(lambda: [sys.modules.pop(k, None) for k in (pkg + ".wand", pkg + ".wand.sequencer")])
+        sys.modules[pkg + ".wand"], sys.modules[pkg + ".wand.sequencer"] = wand, fake
+        fake._speed_changed = lambda strip, fps: strip.name == "fast"
+        strips = [_Strip("fast", 'SOUND', "fast.wav", 1, 30, keys=2), _Strip("ana", 'SOUND', "ana.wav", 1, 30, channel=2, keys=2)]
+        by = {s["name"]: s["pieces"][0].get("skip") for s in self.mod.collect_sources(self.scene(strips))}
+        self.assertEqual(by, {"fast.wav": "retimed", "ana.wav": None})
+
+    def test_two_end_keys_that_cannot_be_measured_count_as_retimed(self):
+        import sys
+        pkg = self.ops.__name__.rsplit(".", 1)[0]
+        fake = types.ModuleType(pkg + ".wand.sequencer")
+        wand = types.ModuleType(pkg + ".wand")
+        wand.sequencer = fake
+        self.addCleanup(lambda: [sys.modules.pop(k, None) for k in (pkg + ".wand", pkg + ".wand.sequencer")])
+        sys.modules[pkg + ".wand"], sys.modules[pkg + ".wand.sequencer"] = wand, fake      # no _speed_changed in it
+        sources = self.mod.collect_sources(self.scene([_Strip("ana", 'SOUND', "ana.wav", 1, 30, keys=2)]))
+        self.assertEqual(sources[0]["pieces"][0]["skip"], "retimed")
+
+    def test_speakers_from_strip_names_clashes_numbered_and_muted_files_not_counted(self):
+        self.words["x/ana.wav"] = self.words["ana.wav"]
+        self.words["y/ana.wav"] = self.words["bo.wav"]
+        strips = [_Strip("Ana", 'SOUND', "x/ana.wav", 1, 30), _Strip("Ana.001", 'SOUND', "y/ana.wav", 1, 30, channel=2)]
+        by = {s["path"]: s["pieces"][0]["speaker"] for s in self.mod.collect_sources(self.scene(strips))}
+        self.assertEqual(sorted(by.values()), ["Ana", "Ana 2"])
+        muted = [_Strip("ana", 'SOUND', "ana.wav", 1, 30), _Strip("bo", 'SOUND', "bo.wav", 1, 30, channel=2, mute=True)]
+        for src in self.mod.collect_sources(self.scene(muted)):
+            self.assertNotIn("speaker", src["pieces"][0])
+
+    def test_tool_output_lists_have_a_limit(self):
+        for k in range(30):
+            self.words["m%d.wav" % k] = talk([(1.0, "x y z")])
+        strips = [_Strip("ana", 'SOUND', "ana.wav", 1, 30)] + [
+            _Strip("m%d" % k, 'SOUND', "m%d.wav" % k, 1, 5, channel=2 + k % 7, mute=True) for k in range(30)]
+        scene = self.scene(strips)
+        self.ops._tool_scene = lambda: scene
+        self.mod.context_tokens = lambda: None
+        out = self.mod.tool_read_edit_sentences()
+        row = out["report"]["skipped"]["muted"]
+        self.assertEqual(len(row["names"]), self.mod.MAX_NAMES)
+        self.assertEqual(row["names_more"], 30 - self.mod.MAX_NAMES)
+        self.assertEqual(row["strips"], 30)
+
+    def test_context_tokens_does_not_ask_the_network_without_a_running_server(self):
+        import importlib
+        pkg = self.ops.__name__.rsplit(".", 1)[0]
+        lm = importlib.import_module(pkg + ".llm_manager")
+        calls = []
+        old = lm.get_runtime_ctx
+        lm.get_runtime_ctx = lambda *a, **k: calls.append(1) or 4096
+        self.addCleanup(setattr, lm, "get_runtime_ctx", old)
+        saved = lm._llama_process
+        self.addCleanup(setattr, lm, "_llama_process", saved)
+        lm._llama_process = None
+        self.assertEqual(self.mod.context_tokens(), lm._config.local_ctx_size)
+        lm._llama_process = types.SimpleNamespace(poll=lambda: 1)       # exited
+        self.assertEqual(self.mod.context_tokens(), lm._config.local_ctx_size)
+        self.assertEqual(calls, [])
+        lm._llama_process = types.SimpleNamespace(poll=lambda: None)    # running
+        self.assertEqual(self.mod.context_tokens(), 4096)
 
 
 if __name__ == "__main__":

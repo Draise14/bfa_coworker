@@ -28,6 +28,9 @@ from typing import Any
 from . import scene_reader as sr
 
 MAX_ROWS = 400          # sentences one call returns
+MAX_NAMES = 10          # strip names listed per skipped reason
+MAX_PAIRS = 20          # duplicate pairs listed
+MAX_WINDOWS = 60        # windows listed
 DEFAULT_ROWS = 150
 
 
@@ -55,14 +58,26 @@ def _speed_inputs(ed: Any) -> set[str]:
     return out
 
 
-def _retimed(strip: Any, speed_inputs: set[str]) -> bool:
+def _retimed(strip: Any, speed_inputs: set[str], fps: float = 24.0) -> bool:
+    """A Speed effect on the strip, or retiming keys that change its speed.  Three keys or more
+    always do; one or two (the ends) are measured as the Remove Silences wand does
+    (``wand.sequencer._speed_changed``: a sound against its file).  When that can't be measured the
+    strip counts as retimed, so its words are never placed at the wrong frames unreported."""
     if strip.name in speed_inputs:
         return True
     try:
-        keys = strip.retiming_keys
-        return len(keys) > 2
+        n = len(strip.retiming_keys)
     except Exception:  # pylint: disable=broad-exception-caught
         return False
+    if n == 0:
+        return False
+    if n > 2:
+        return True
+    try:
+        from .wand import sequencer
+        return n == 1 or bool(sequencer._speed_changed(strip, fps))  # pylint: disable=protected-access
+    except Exception:  # pylint: disable=broad-exception-caught
+        return True
 
 
 def _inner_speakers(strip: Any) -> bool:
@@ -81,6 +96,7 @@ def collect_sources(scene: Any) -> list[dict[str, Any]]:
     if ed is None:
         return []
     speed = _speed_inputs(ed)
+    fps = ops._fps(scene)  # pylint: disable=protected-access
     by_path: dict[str, dict[str, list]] = {}
     metas: list[Any] = []
     for s in ed.strips:
@@ -111,7 +127,7 @@ def collect_sources(scene: Any) -> list[dict[str, Any]]:
             piece = ops._piece(s)
             if s.mute or _channel_muted(ed, s):
                 piece["skip"] = "muted"
-            elif _retimed(s, speed):
+            elif _retimed(s, speed, fps):
                 piece["skip"] = "retimed"
             pieces.append(piece)
         sources.append({"key": key, "path": path, "name": os.path.basename(path), "words": words,
@@ -120,21 +136,51 @@ def collect_sources(scene: Any) -> list[dict[str, Any]]:
         piece = {"name": m.name, "left": int(m.left_handle), "right": int(m.right_handle), "content_start": 0.0,
                  "offset": 0.0, "channel": int(m.channel), "skip": "muted" if (m.mute or _channel_muted(ed, m)) else "meta"}
         sources.append({"key": "meta:" + m.name, "path": "", "name": m.name, "words": None, "pieces": [piece]})
-    speaking = [s for s in sources if s["words"]]
-    if len(speaking) > 1:           # one file one speaker, as the captions name them (#542)
-        for src in speaking:
-            for p in src["pieces"]:
-                p["speaker"] = captions.speaker_name(src["name"])
+    # One media file, one speaker, named as the captions name them (#542): from the strip's name,
+    # "Ana 2" when two files would share a name.  Only files with a playing piece count.
+    todo = []
+    for src in sources:
+        playing = sorted((p for p in src["pieces"] if p.get("skip") != "muted"), key=lambda p: (p["left"], p["name"]))
+        if src["words"] and playing:
+            todo.append({"name": playing[0]["name"], "key": src["key"]})
+    if len(todo) > 1:
+        names = captions.plan_speakers(todo, "CLEAN", "BOTTOM")
+        for src in sources:
+            if src["key"] in names:
+                for p in src["pieces"]:
+                    p["speaker"] = names[src["key"]]["name"]
     return sources
 
 
 def context_tokens() -> int | None:
-    """The context of the Local server (its real value when it runs), None when unknown."""
+    """The context of the Local server: its real value when its process runs (asked once, then
+    cached), else the configured size.  Never asks the network without a running server (this runs
+    on Blender's main thread).  None when unknown."""
     try:
         from . import llm_manager
-        return llm_manager.get_runtime_ctx() or int(llm_manager._config.local_ctx_size)  # pylint: disable=protected-access
+        cfg = int(llm_manager._config.local_ctx_size)  # pylint: disable=protected-access
+        proc = llm_manager.get_llama_process()
+        if proc is None or proc.poll() is not None:
+            return cfg
+        return llm_manager.get_runtime_ctx() or cfg
     except Exception:  # pylint: disable=broad-exception-caught
         return None
+
+
+def _capped(report: dict[str, Any]) -> dict[str, Any]:
+    """The report for the answer: lists cut to a limit, with the count of what was left off."""
+    out = {k: v for k, v in report.items() if k not in {"sentences", "words"}}
+    out["skipped"] = {}
+    for key, row in report["skipped"].items():
+        row = dict(row)
+        if len(row["names"]) > MAX_NAMES:
+            row["names_more"] = len(row["names"]) - MAX_NAMES
+            row["names"] = row["names"][:MAX_NAMES]
+        out["skipped"][key] = row
+    if len(report["duplicates"]) > MAX_PAIRS:
+        out["duplicates_more"] = len(report["duplicates"]) - MAX_PAIRS
+        out["duplicates"] = report["duplicates"][:MAX_PAIRS]
+    return out
 
 
 def read(scene: Any, context: int | None = None) -> dict[str, Any]:
@@ -169,7 +215,7 @@ def tool_read_edit_sentences(first: int = 1, count: int = DEFAULT_ROWS) -> dict[
     return {
         "status": "ok" if total else "error", "scene": scene.name, "total": total, "first": first, "last": last,
         "next_first": last + 1 if last < total else None, "version": sr.version(sentences),
-        "text": sr.format_sentences(page), "windows": got["windows"], "report": {
-            k: v for k, v in report.items() if k not in {"sentences", "words"}},
+        "text": sr.format_sentences(page), "windows": got["windows"][:MAX_WINDOWS],
+        "windows_total": len(got["windows"]), "report": _capped(report),
         "message": msg if total else "No speech to read: " + " ".join(report["messages"]),
     }

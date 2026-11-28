@@ -19,8 +19,10 @@ whole scene: every speaking strip, every media file, merged in the order it play
 * **Words** are placed where they play now (``transcript_edit.timeline_words``).  A clip used twice
   gives its words twice, each use with its own frames.
 * **The same speech twice at once** (two microphones, camera sound plus recorder): the words of two
-  different strips are cut into phrases; two phrases that play over the same frames are the same
-  speech, and the one with the higher mean word confidence stays.  The result lists what was dropped.
+  different strips are cut into phrases; two phrases that play over the same frames *and* hold the
+  same words are the same speech.  Phrases are settled best first (higher mean word confidence);
+  a phrase gives up only the words a better one already holds, so a reply on another microphone or
+  a strip cut shorter loses nothing it alone has.  The result lists what was dropped.
 * **Sentences** are the lines ``transcript_edit.render`` makes; one longer than :data:`MAX_SENTENCE_S`
   is split at its longest pause.  Each carries the facts the code can count (seconds, words per
   second, fillers, pause before it, question, number, speaker change) and where its words come from
@@ -49,8 +51,10 @@ __all__ = (
     "windows",
 )
 
+import difflib
 import hashlib
 import json
+import math
 import re
 from typing import Any, Iterable, Sequence
 
@@ -59,7 +63,9 @@ from . import transcript_edit as te
 MAX_SENTENCE_S = 20.0       # a sentence longer than this is split at its longest pause
 RUN_GAP_S = 0.3             # a pause this long ends a phrase (for telling the same speech on two strips)
 MAX_RUN_S = 12.0            # a phrase longer than this is split at its longest pause
-SAME_SPEECH = 0.5           # two phrases whose overlap is this share of the shorter one are the same speech
+SAME_SPEECH = 0.5           # two phrases overlap in time by this share of the shorter one and share this share of its words: the same speech
+MAX_DUPLICATE_LINES = 5      # the report's messages name this many duplicate pairs, then count the rest
+MATCH_S = 1.0               # a word matches a word of the other strip when they start this close
 NEUTRAL_P = 0.5             # the confidence of a word the transcript gave none for
 MAX_WINDOW_WORDS = 2400     # about 16 minutes of speech
 OVERLAP_S = 60.0            # windows share this much speech
@@ -131,48 +137,76 @@ def _score(run: Sequence[dict]) -> float:
     return sum(NEUTRAL_P if o["p"] is None else o["p"] for o in run) / max(1, len(run))
 
 
+def _token(o: dict) -> str:
+    return te.norm(o["text"]) or str(o["text"]).lower()
+
+
+def _same_speech(run: list[dict], other: list[dict], fps: float) -> list[int]:
+    """The positions in *run* whose word *other* (a phrase of another strip) holds too: the words
+    that match in order and start within :data:`MATCH_S` of each other.  Empty unless that is at
+    least :data:`SAME_SPEECH` of the shorter phrase's words (a phrase that merely overlaps in time,
+    another person's reply, shares no words)."""
+    sm = difflib.SequenceMatcher(None, [_token(o) for o in run], [_token(o) for o in other], autojunk=False)
+    hit: list[int] = []
+    for i, j, size in sm.get_matching_blocks():
+        for k in range(size):
+            if abs(run[i + k]["frame"] - other[j + k]["frame"]) / fps <= MATCH_S:
+                hit.append(i + k)
+    need = max(1, math.ceil(SAME_SPEECH * min(len(run), len(other))))
+    return hit if len(hit) >= need else []
+
+
 def _dedupe(per_piece: dict[str, list[dict]], rank: dict[str, int], fps: float) -> tuple[dict[str, list[dict]], list[dict]]:
-    """Drop the phrases that are the same speech as a phrase of another strip.  Returns the words
-    left per strip and the list of what was dropped."""
+    """Drop the words that another strip holds too (the same speech on two microphones).  Returns
+    the words left per strip and the list of what was dropped.
+
+    Phrases are settled best first (higher mean word confidence, then the strip order), all at
+    once, so a phrase that has won never loses later.  Each phrase gives up only the words a
+    better phrase of another strip, playing over the same frames, already has; the rest of it
+    stays (a reply on another microphone, a strip cut shorter than the phrase)."""
     runs: list[dict[str, Any]] = []
     for name, occs in per_piece.items():
         for run in _runs(occs, fps):
             runs.append({"piece": name, "a": float(run[0]["frame"]), "b": float(run[-1]["end_frame"]),
-                         "occs": run, "dead": False})
-    runs.sort(key=lambda r: (r["a"], rank[r["piece"]], r["b"]))
-    active: list[dict] = []
+                         "occs": run, "score": _score(run)})
+    runs.sort(key=lambda r: (-round(r["score"], 9), rank[r["piece"]], r["a"]))
+    bucket = max(1.0, 30.0 * fps)
+    settled: dict[int, list[dict]] = {}
     drops: dict[tuple[str, str], dict] = {}
     for r in runs:
-        active = [s for s in active if s["b"] > r["a"] and not s["dead"]]
-        for s in list(active):
-            if r["dead"]:
+        lo, hi = int((r["a"] - MATCH_S * fps) // bucket), int((r["b"] + MATCH_S * fps) // bucket)
+        seen: list[dict] = []
+        for k in range(lo, hi + 1):
+            for s in settled.get(k, ()):
+                if s["piece"] != r["piece"] and s["occs"] and not any(s is x for x in seen):
+                    seen.append(s)
+        seen.sort(key=lambda s: (s["a"], rank[s["piece"]]))
+        for s in seen:
+            if not r["occs"]:
                 break
-            if s["piece"] == r["piece"] or s["dead"]:
-                continue
             overlap = min(s["b"], r["b"]) - max(s["a"], r["a"])
             shorter = max(1.0, min(s["b"] - s["a"], r["b"] - r["a"]))
             if overlap <= 0 or overlap < SAME_SPEECH * shorter:
                 continue
-            ks, kr = _score(s["occs"]), _score(r["occs"])
-            if abs(ks - kr) < 1e-9:
-                s_wins = rank[s["piece"]] < rank[r["piece"]]
-            else:
-                s_wins = ks > kr
-            kept, lost = (s, r) if s_wins else (r, s)
-            lost["dead"] = True
-            rec = drops.setdefault((kept["piece"], lost["piece"]), {
-                "kept": kept["piece"], "dropped": lost["piece"], "kept_media": kept["occs"][0]["media"],
-                "dropped_media": lost["occs"][0]["media"], "words": 0,
-                "first_frame": int(lost["a"]), "last_frame": int(lost["b"])})
-            rec["words"] += len(lost["occs"])
-            rec["first_frame"] = min(rec["first_frame"], int(lost["a"]))
-            rec["last_frame"] = max(rec["last_frame"], int(lost["b"]))
-        if not r["dead"]:
-            active.append(r)
+            hit = _same_speech(r["occs"], s["occs"], fps)
+            if not hit:
+                continue
+            gone = [r["occs"][i] for i in hit]
+            r["occs"] = [o for i, o in enumerate(r["occs"]) if i not in set(hit)]
+            rec = drops.setdefault((s["piece"], r["piece"]), {
+                "kept": s["piece"], "dropped": r["piece"], "kept_media": s["occs"][0]["media"],
+                "dropped_media": gone[0]["media"], "words": 0,
+                "first_frame": int(gone[0]["frame"]), "last_frame": int(gone[-1]["end_frame"])})
+            rec["words"] += len(gone)
+            rec["first_frame"] = min(rec["first_frame"], int(gone[0]["frame"]))
+            rec["last_frame"] = max(rec["last_frame"], int(gone[-1]["end_frame"]))
+        if r["occs"]:
+            r["a"], r["b"] = float(r["occs"][0]["frame"]), float(r["occs"][-1]["end_frame"])
+            for k in range(int(r["a"] // bucket), int(r["b"] // bucket) + 1):
+                settled.setdefault(k, []).append(r)
     kept_words: dict[str, list[dict]] = {name: [] for name in per_piece}
     for r in runs:
-        if not r["dead"]:
-            kept_words[r["piece"]].extend(r["occs"])
+        kept_words[r["piece"]].extend(r["occs"])
     for occs in kept_words.values():
         occs.sort(key=lambda o: (o["frame"], o["i"]))
     return kept_words, sorted(drops.values(), key=lambda d: (d["first_frame"], d["kept"], d["dropped"]))
@@ -198,16 +232,21 @@ def _split_long(occs: list[dict], fps: float) -> list[list[dict]]:
 
 
 def _sentences(merged: list[dict], fps: float, frame_start: int) -> list[dict[str, Any]]:
+    """Sentences per voice (one media file and speaker), then all of them in playing order: two
+    people who talk over each other are never woven into one sentence."""
     if not merged:
         return []
-    flat = [{"w": o["text"], "start": o["frame"] / fps, "end": o["end_frame"] / fps} for o in merged]
-    occs = [{"i": k, "frame": o["frame"], "end_frame": o["end_frame"], "t": (o["frame"] - frame_start) / fps}
-            for k, o in enumerate(merged)]
-    lines = te.render(occs, flat, None, fps)["lines"]
+    streams: dict[tuple[str, str], list[dict]] = {}
+    for o in merged:
+        streams.setdefault((o["media"], o["speaker"]), []).append(o)
     parts: list[list[dict]] = []
-    for line in lines:
-        words = [merged[k] for k in line["words"]]
-        parts.extend(_split_long(words, fps))
+    for voice in streams.values():
+        flat = [{"w": o["text"], "start": o["frame"] / fps, "end": o["end_frame"] / fps} for o in voice]
+        occs = [{"i": k, "frame": o["frame"], "end_frame": o["end_frame"], "t": (o["frame"] - frame_start) / fps}
+                for k, o in enumerate(voice)]
+        for line in te.render(occs, flat, None, fps)["lines"]:
+            parts.extend(_split_long([voice[k] for k in line["words"]], fps))
+    parts.sort(key=lambda part: (part[0]["frame"], part[0]["media"], part[0]["i"]))
     out: list[dict[str, Any]] = []
     prev: dict | None = None
     for n, part in enumerate(parts, 1):
@@ -316,9 +355,12 @@ def _messages(report: dict, fps: float) -> list[str]:
     if "no_transcript" in sk:
         out.append("{:s} without a transcript ({:.0f} s): transcribe them first.".format(
             _plural(sk["no_transcript"]["strips"], "strip"), sk["no_transcript"]["frames"] / fps))
-    for d in report["duplicates"]:
+    for d in report["duplicates"][:MAX_DUPLICATE_LINES]:
         out.append("The same speech was on “{:s}” and “{:s}”: kept “{:s}” (higher word confidence), "
                    "left out {:s}.".format(d["kept"], d["dropped"], d["kept"], _plural(d["words"], "word")))
+    more = len(report["duplicates"]) - MAX_DUPLICATE_LINES
+    if more > 0:
+        out.append("... and the same on {:s} more.".format(_plural(more, "other pair")))
     if not report["sentences"]:
         out.append("No speech to read.")
     return out

@@ -31,6 +31,14 @@ _USE_HTTP_SUPPORT = True
 _TRANSPORTS = ("stdio", *(("http",) if _USE_HTTP_SUPPORT else ()))
 
 
+def instructions_with_skill_index(instructions: str) -> str:
+    """#311: the server's instructions followed by the skill index (name + one line each),
+    so an External Agent / External Harness client can ask for a skill with ``load_skill``."""
+    from blmcp import skill_index
+    index = skill_index.get_skill_index()
+    return "{:s}\n\n{:s}".format(instructions.rstrip(), index) if index else instructions
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="MCP server for Blender.")
     parser.add_argument(
@@ -58,7 +66,7 @@ def main() -> int:
     with open(os.path.join(data_dir, "prompts.yml"), encoding="utf-8") as fh:
         prompts = yaml.safe_load(fh)
 
-    mcp = FastMCP("bfa-coworker", instructions=str(prompts["initial_instructions"]))
+    mcp = FastMCP("bfa-coworker", instructions=instructions_with_skill_index(str(prompts["initial_instructions"])))
 
     # Engine 9: every tool's result is kept short (a preview + a handle to the rest).
     # #479: a blocking tool runs in a worker thread, so one waiting call never holds up the rest.

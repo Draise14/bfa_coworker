@@ -38,7 +38,7 @@ SURFACE = frozenset({
     "get_attached_image", "get_job_status", "bake_textures", "render_viewport_to_path",
     "get_polyhaven_status", "get_screenshot_of_window_as_image", "get_screenshot_of_window_as_json",
     "render_thumbnail_to_path", "get_python_api_docs", "search_api_docs", "search_manual_docs",
-    "load_tools",
+    "load_tools", "load_skill",
 })
 
 DOMAINS: dict[str, frozenset[str]] = {

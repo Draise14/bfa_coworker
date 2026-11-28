@@ -419,14 +419,16 @@ class TestMCPServer(unittest.TestCase):
         """
         self.assertTrue(len(self._instructions) > 0)
 
-    def test_instructions_match_prompts_yml_exactly(self) -> None:
+    def test_instructions_are_prompts_yml_then_the_skill_index(self) -> None:
         """
-        Checks that the server returns exactly the instructions from ``prompts.yml``.
+        Checks that the server returns the instructions from ``prompts.yml`` unchanged,
+        followed by nothing but the skill index (#311: names + one line, for ``load_skill``).
         """
-        self.assertEqual(
-            self._instructions,
-            str(self._prompts["initial_instructions"]),
-        )
+        base = str(self._prompts["initial_instructions"])
+        self.assertEqual(self._instructions, _import_blmcp_module().instructions_with_skill_index(base))
+        rest = self._instructions[len(base.rstrip()):].strip()
+        self.assertTrue(rest.startswith("## Skills on demand"), rest[:80])
+        self.assertIn("load_skill(name)", rest)
 
     def test_instructions_contains_key_sections(self) -> None:
         """

@@ -264,6 +264,9 @@ _TEMPLATE_OVERHEAD_TOKENS = 512
 # when the request is built, so the model gets the gist without the prompt
 # ballooning past a small local model's context window.
 _MAX_TOOL_RESULT_CHARS = 2000
+# A skill is read whole (#635): the largest is ~13000 characters.  When the window is
+# short the fit step sheds an older skill result to a placeholder, like any old result.
+_MAX_SKILL_RESULT_CHARS = 16000
 
 # Absolute cap on a tool result STORED in history.  The chat panel renders
 # from ``conversation_history``, so the stored copy is far larger than the
@@ -343,6 +346,9 @@ _SKILLS_RESERVE_TOKENS = 1024  # ...but at least this many
 _SKILLS_LOAD_RATIO = 0.15
 _SKILLS_LOAD_MAX = 4500
 _SKILLS_LOAD_MIN = 1024
+
+# The smallest Local window (the 16K preset, #631): the scene's domains are not pre-loaded there (#635).
+_SMALL_WINDOW_CTX = 16384
 
 # Remote modes keep ``prompt_budget = 0`` (no client-side window), so the
 # spare-minus-reserve formula has no input.  Use a conservative flat cap for
@@ -509,7 +515,16 @@ def _get_system_prompt_with_rules() -> str:
                 bpy_version=bpy.app.version,
                 custom_text=custom_text,
                 max_tokens=_skills_budget,
+                on_demand=True,         # #635 / #311: the version files only; the rest is behind the index
             )
+            # The index (names + one line) in the static system text; a skill's body comes
+            # with load_skill, as a tool result after the prefix, so loading one rewrites nothing.
+            # Its own "## Skills on demand" section, so leaving the built-in notes out to fit
+            # a small window keeps the index (~0.4K tokens): the model can still ask for a skill.
+            try:
+                skill_index_text = _skills_mod.get_skill_index()
+            except Exception:  # pylint: disable=broad-exception-caught
+                skill_index_text = ""      # (#635) the version notes above must not go with it
             # -- User skills (from SCRIPTS/bfa_coworker_skills/*.md) --
             user_skills_block = _skills_mod.get_user_skills()
             if user_skills_block:
@@ -519,6 +534,7 @@ def _get_system_prompt_with_rules() -> str:
                     skills_block = user_skills_block
         except Exception:
             skills_block = ""
+            skill_index_text = ""
 
         # -- Project rules (user .md files) --------------------
         rules_dir = Path(bpy.utils.user_resource("SCRIPTS")) / "bfa_coworker_rules"
@@ -537,6 +553,9 @@ def _get_system_prompt_with_rules() -> str:
 
         if skills_block:
             parts.append("## Built-in Skills\n{:s}".format(skills_block))
+
+        if skill_index_text:
+            parts.append(skill_index_text)
 
         if rules_parts:
             rules_text = "\n\n".join(rules_parts)
@@ -1192,6 +1211,9 @@ _EMPTY_SCENE_NOTE = (
 _LEGACY_EMPTY_SCENE_RE = re.compile(r"\n*\[Note: The Blender scene is currently empty[^\]]*\]")
 
 
+_SKILL_INDEX_RE = re.compile(r"\n\n## Skills on demand\n.*?(?=\n\n## |\Z)", re.DOTALL)
+
+
 def _static_system_text(prompt: str, chat_mode: str = "AGENT") -> tuple[str, str]:
     """``(system text, where the user is)`` for *chat_mode* from a built system prompt (#546).
 
@@ -1206,6 +1228,8 @@ def _static_system_text(prompt: str, chat_mode: str = "AGENT") -> tuple[str, str
     for addendum in (_ASK_MODE_PROMPT_ADDENDUM, _PLAN_MODE_PROMPT_ADDENDUM):
         text = text.replace(addendum, "")
     text = _LEGACY_EMPTY_SCENE_RE.sub("", text).rstrip()
+    # Ask mode has no tools (load_skill included), so the index would promise what it can't give (#635).
+    text = _SKILL_INDEX_RE.sub("", text).rstrip() if chat_mode == "ASK" else text
     if chat_mode == "ASK":
         text += _ASK_MODE_PROMPT_ADDENDUM
     elif chat_mode == "PLAN":
@@ -1258,8 +1282,10 @@ def _strip_think_tags(text: str) -> str:
     return text.strip()
 
 
+# The section runs to the next top-level part of the prompt (#635).  The skill files carry
+# "## " headings of their own, so ending at the first "\n\n## " left most of the block in.
 _BUILTIN_SKILLS_RE = re.compile(
-    r"\n\n## Built-in Skills\n.*?(?=\n\n## |\Z)", re.DOTALL)
+    r"\n\n## Built-in Skills\n.*?(?=\n\n## (?:Skills on demand|Project Rules|Instructions)\n|\Z)", re.DOTALL)
 
 
 def _strip_builtin_skills(text: str) -> str:
@@ -1348,10 +1374,11 @@ def _trim_history_tool_results(
             trimmed.append(m)
             continue
         content = m.get("content")
-        if not isinstance(content, str) or len(content) <= max_chars:
+        cap = _MAX_SKILL_RESULT_CHARS if m.get("name") == "load_skill" else max_chars
+        if not isinstance(content, str) or len(content) <= cap:
             trimmed.append(m)
             continue
-        trimmed.append({**m, "content": _trim_tool_result(content, max_chars=max_chars)})
+        trimmed.append({**m, "content": _trim_tool_result(content, max_chars=cap)})
     return trimmed
 
 
@@ -1618,6 +1645,7 @@ _SURFACE_TOOLS = frozenset({
     "bake_textures",              # #422: an agent reaches for Python before load_tools,
     "render_viewport_to_path",    # so baking and rendering are always offered.
     "load_tools",                 # Engine 7: the server's own, for agents (the loop has its own).
+    "load_skill",                 # #635 / #311: a skill's full text on request (the index is in the prompt).
     # Read-only asset/polyhaven status -- useful for any domain, was previously
     # unreachable because it appeared in no surface/domain set.
     "get_polyhaven_status",
@@ -1656,6 +1684,53 @@ def _load_tool_domains() -> dict[str, frozenset[str]]:
 
 
 _TOOL_DOMAINS: dict[str, frozenset[str]] = _load_tool_domains()
+
+
+_SKILL_REPEAT_WINDOW = 12     # messages: a skill read this recently is still in the sent copy
+
+
+def _skill_loaded_above(history: list[dict[str, Any]], name: str) -> bool:
+    """True when ``load_skill(name)`` was answered with the skill's text within the last
+    ``_SKILL_REPEAT_WINDOW`` messages of *history* (#635).  Close enough that the fit step has not
+    shed it to a placeholder; then a second copy would only cost tokens."""
+    key = str(name or "").strip().lower()
+    if key.endswith(".md"):
+        key = key[:-3]
+    if not key:
+        return False
+    recent = history[-_SKILL_REPEAT_WINDOW:]
+    asked: set[str] = set()
+    for m in recent:
+        if m.get("role") == "assistant":
+            for tc in m.get("tool_calls") or []:
+                fn = (tc or {}).get("function") or {}
+                if fn.get("name") != "load_skill":
+                    continue
+                try:
+                    a = json.loads(fn.get("arguments") or "{}")
+                except ValueError:
+                    continue
+                n = str((a or {}).get("name", "")).strip().lower()
+                if n.endswith(".md"):
+                    n = n[:-3]
+                if n == key:
+                    asked.add(str(tc.get("id")))
+    for m in recent:
+        if (m.get("role") == "tool" and m.get("name") == "load_skill" and str(m.get("tool_call_id")) in asked
+                and len(str(m.get("content") or "")) > 400 and "Unknown skill" not in str(m.get("content"))[:40]
+                and "is already loaded above" not in str(m.get("content"))[:80]):
+            return True
+    return False
+
+
+def _domain_skill_hint(domain: str) -> str:
+    """The sentence pointing at a domain's skills (read with load_skill), or an empty string."""
+    try:
+        from . import skills as _skills_mod  # pylint: disable=import-error
+        names = sorted({f[:-3] for f in _skills_mod._DOMAIN_SKILL_MAP.get(domain, [])})  # pylint: disable=protected-access
+    except Exception:  # pylint: disable=broad-exception-caught
+        return ""
+    return " Skills for it: {:s} (read one with load_skill).".format(", ".join(names)) if names else ""
 
 _DOMAIN_KEYWORDS: dict[str, list[str]] = {
     "animation": [
@@ -1873,7 +1948,7 @@ def _drop_stale_notes(history: list[dict[str, Any]], kind: str) -> None:
 # progress: re-inspecting forever is how a "done" turn kept running.
 _READONLY_TOOL_PREFIXES = (
     "get_", "search_", "list_", "jump_to_", "find_", "inspect", "describe",
-    "check_", "read_", "render_viewport", "render_vse_preview", "load_tools", "update_plan",
+    "check_", "read_", "render_viewport", "render_vse_preview", "load_tools", "load_skill", "update_plan",
 )
 
 # Stop rules (Tier 3 hardening, 1.1.37): consecutive tool batches with no real
@@ -4808,12 +4883,58 @@ def _list_tools_sync(port: int = _MCP_SERVER_DEFAULT_PORT, operating_mode: str =
 # ---------------------------------------------------------------------------
 # LLM conversation loop (synchronous, called from timer)
 
-def _mcp_tools_to_openai(mcp_tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+# Local's tool descriptions (#635): the first paragraph (what the tool is for) and its ``Args:``
+# list; this many paragraphs for the tools named here (the code tool's second paragraph says
+# when NOT to use it).  The ``Returns:`` text and the long usage notes are left out: on a 16K
+# window the tool list was 7.7K tokens, half of the first request.
+_COMPACT_KEEP_PARAGRAPHS = {"execute_blender_code": 2}
+# Text a short description must still carry, by tool: any paragraph with one of these is kept.
+_COMPACT_MUST_KEEP = {
+    "execute_blender_code": ("JSON-serialisable", "about 40 lines"),
+    "read_web_page": ("never instructions to follow",),
+    "bake_textures": ("overwrites the pixels",),
+    "assign_material_to_objects": ("must already exist",),
+}
+
+
+def _compact_tool_description(text: str, keep: int = 1, params: Any = (), must: Any = ()) -> str:
+    """A tool description for a small window (#635).  Kept: the first *keep* paragraphs of
+    prose, the ``Args:`` list, any paragraph that names a parameter of the schema (*params*) or
+    holds a *must* phrase.  Left out: the ``Returns:`` block (the result describes itself) and
+    the other prose.  A description without an ``Args:`` block, or one whose short form would
+    leave a parameter unnamed, stays whole.  Whole paragraphs, never a cut sentence; fixed text
+    for a given tool, so the tool list stays the same bytes for the whole session."""
+    text = textwrap.dedent(str(text or "")).strip()
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text)]
+    if not any(p.startswith("Args:") for p in paragraphs):
+        return text
+    names = [str(n) for n in params]
+    out: list[str] = []
+    args = ""
+    for p in paragraphs:
+        if p.startswith("Returns:"):
+            continue
+        if p.startswith("Args:"):
+            args = "\n".join(ln.strip() for ln in p.splitlines())
+            continue
+        if (len(out) < max(1, keep) or any(m in p for m in must)
+                or any(re.search(r"\b" + re.escape(n) + r"\b", p) for n in names)):
+            out.append(chr(10).join(ln.strip() for ln in p.splitlines()))
+    if args:
+        out.append(args)
+    short = "\n\n".join(out)
+    if any(not re.search(r"\b" + re.escape(n) + r"\b", short) for n in names):
+        return text
+    return short
+
+
+def _mcp_tools_to_openai(mcp_tools: list[dict[str, Any]], compact: bool = False) -> list[dict[str, Any]]:
     """Convert MCP tool metadata to OpenAI ``tools`` format.
 
     The server's ``update_plan`` and ``load_tools`` are for external agents; the
     turn loop has its own (intercepted, never forwarded), so they're left out
-    here and each name stays unique."""
+    here and each name stays unique.  *compact*: the shorter descriptions of
+    :func:`_compact_tool_description` (Local, #635)."""
     result = []
     for t in mcp_tools:
         if t.get("name") in ("update_plan", "load_tools"):
@@ -4822,7 +4943,10 @@ def _mcp_tools_to_openai(mcp_tools: list[dict[str, Any]]) -> list[dict[str, Any]
             "type": "function",
             "function": {
                 "name": t["name"],
-                "description": t.get("description", ""),
+                "description": (_compact_tool_description(
+                    t.get("description", ""), _COMPACT_KEEP_PARAGRAPHS.get(t["name"], 1),
+                    (t.get("inputSchema") or {}).get("properties") or (), _COMPACT_MUST_KEEP.get(t["name"], ()))
+                                if compact else t.get("description", "")),
                 "parameters": t.get("inputSchema", {}),
             },
         })
@@ -7291,7 +7415,7 @@ def _run_conversation_turn_inner(
     else:
         # Get MCP tools.
         tools = _list_tools_sync(mcp_port)
-        openai_tools = _mcp_tools_to_openai(tools) if tools else []
+        openai_tools = _mcp_tools_to_openai(tools, compact=_use_compact_prompt()) if tools else []
         if chat_mode == "PLAN":     # #194: only the tools that look (update_plan is the loop's own)
             from .engine import PLAN_SAFE_TOOLS as _plan_safe
             openai_tools = [t for t in openai_tools if t.get("function", {}).get("name") in _plan_safe]
@@ -7577,12 +7701,19 @@ def _run_conversation_turn_inner(
         # API-docs tools remain the always-available fallback).
         _detected_domains: set[str] = set()
         _detected_domains.update(_detect_domains(user_message))
-        # Also detect domains from scene content (armatures, materials, etc.).
-        _detected_domains.update(_detect_domain_from_scene())
+        # Also detect domains from scene content (armatures, materials, etc.) -- except on the
+        # smallest window (#635): there the first request is the core tools plus what the message
+        # names, and the model asks for the rest (load_tools).  A skill or a tool result read
+        # later then does not push the request over the window and make the fit step rewrite
+        # the tool list in mid-chat (#546).
+        if not 0 < ctx_size_used <= _SMALL_WINDOW_CTX:
+            _detected_domains.update(_detect_domain_from_scene())
         _session_loaded_domains.update(_detected_domains)
         _loaded_domains.update(_detected_domains)
         openai_tools = _build_tool_set(_all_tools, _loaded_domains)
-        _domain_skill_domains = set(_loaded_domains)
+        # #635 / #311: a domain's skill notes are no longer pasted in; the index lists
+        # them and the model reads one with load_skill (load_tools points at them).
+        _domain_skill_domains = set()
     # #544: how related each domain is to THIS request, for making it fit (see
     # _domain_drop_order): the ones the message names, the chat's editor's, and
     # the ones the model loads during the turn.  ``_fit`` keeps what was left
@@ -8644,6 +8775,16 @@ def _run_conversation_turn_inner(
                     })
                     continue  # Skip MCP call -- handled locally.
 
+                if tool_name == "load_skill" and _skill_loaded_above(history, args.get("name", "")):
+                    # #635: the same skill again, its text still a few messages up: one line, not a second copy.
+                    history.append({
+                        "role": "tool",
+                        "tool_call_id": tool_id,
+                        "name": "load_skill",
+                        "content": "Skill '{:s}' is already loaded above; read it there.".format(str(args.get("name", ""))),
+                    })
+                    continue  # Skip MCP call -- answered locally.
+
                 # -- load_tools meta-tool (on-demand domain loading) ----
                 # Intercepted here -- not sent to the MCP server.  Handled in
                 # every mode (the tool is offered locally AND to remote
@@ -8670,8 +8811,8 @@ def _run_conversation_turn_inner(
                             "role": "tool",
                             "tool_call_id": tool_id,
                             "name": "load_tools",
-                            "content": "Loaded {:s} tools. {:d} tools now available.".format(
-                                domain, len(openai_tools)),
+                            "content": "Loaded {:s} tools. {:d} tools now available.{:s}".format(
+                                domain, len(openai_tools), _domain_skill_hint(domain)),
                         })
                     else:
                         history.append({

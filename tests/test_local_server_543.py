@@ -360,8 +360,9 @@ class TestSizingRule(unittest.TestCase):
                            est(self.model27, self.proj27, self.p27, 32768, False, 1) + 400)
 
     def test_floor_holds_the_first_request(self) -> None:
-        self.assertGreaterEqual(self.llm.min_agent_ctx(), 18359 + 1024)
-        self.assertEqual(self.llm.min_agent_ctx(), 32768)
+        # #635: skills and tools on demand: the first request fits the smallest preset.
+        self.assertGreaterEqual(self.llm.min_agent_ctx(), self.llm._FIRST_REQUEST_TOKENS + self.llm._REPLY_ROOM_TOKENS)
+        self.assertEqual(self.llm.min_agent_ctx(), 16384)
 
     def test_recommendation_prefers_16_bit_then_8_bit(self) -> None:
         plan = self.llm.plan_server_memory
@@ -378,6 +379,12 @@ class TestSizingRule(unittest.TestCase):
         capped = plan(self.model27, self.proj27, self.p27, 40000, ctx_cap=16384)
         self.assertEqual(capped.ctx, 16384)                             # the model's own window
 
+    def test_16k_is_recommended_only_when_32k_fits_in_neither_kv_type(self) -> None:
+        plan = self.llm.plan_server_memory
+        small = plan(self.model27, self.proj27, self.p27, 18950)       # neither 32K f16 nor 32K q8 fits
+        self.assertEqual((small.ctx, small.kv_q8, small.fits), (16384, True, True))
+        self.assertEqual(self.llm.min_agent_ctx(), 16384)              # the warning's floor stays 16K
+
     def test_forced_q8_skips_16_bit(self) -> None:
         p = self.llm.plan_server_memory(self.model27, self.proj27, self.p27, 21612, kv_q8_forced=True)
         self.assertTrue(p.kv_q8)
@@ -393,15 +400,20 @@ class TestSizingRule(unittest.TestCase):
         self.assertIsNone(plan(self.model27, self.proj27, self.p27, None, ctx=32768).fits)
 
     def test_validate_warns_below_the_first_request(self) -> None:
-        w = self.llm.validate_ctx_against_hardware(15.3, "cuda", 16384)
+        w = self.llm.validate_ctx_against_hardware(15.3, "cuda", 8192)
         self.assertIsNotNone(w)
         self.assertIn("first request", w)
+        self.assertIn("16K", w)                       # #635: the smallest size that holds it
+        # 16K holds the first request now: whatever else it says, not "the first message fails".
+        w16 = self.llm.validate_ctx_against_hardware(15.3, "cuda", 16384)
+        self.assertNotIn("first request", w16 or "")
 
     def test_hint_uses_free_vram(self) -> None:
         with mock.patch.object(self.llm, "_detect_hardware_cached", lambda: (64.0, 24.0)), \
                 mock.patch.object(self.llm, "resolve_gpu_backend", lambda b: "cuda"):
             text = self.llm.hardware_context_hint(15.3, "cuda", free_vram_mib=21612, projector_bytes=self.proj27)
             self.assertIn("32K", text)
+            self.assertIn("11K tokens", text)    # #635: the first request, now with skills and tools on demand
             self.assertIn("21.1 GB free VRAM", text)
             low = self.llm.hardware_context_hint(15.3, "cuda", free_vram_mib=12000, projector_bytes=self.proj27)
             self.assertIn("only 11.7 GB", low)

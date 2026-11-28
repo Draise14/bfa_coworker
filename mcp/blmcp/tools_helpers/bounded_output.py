@@ -39,6 +39,7 @@ LIMIT = 8000
 # Reading documentation is deliberate and its examples matter: a larger allowance.
 _LIMITS = {"get_python_api_docs": 24000, "search_api_docs": 16000, "search_manual_docs": 16000,
            "read_tool_output": 1 << 30,
+           "load_skill": 24000,          # #635: a skill is read whole, never cut (the largest is ~13000)
            "read_web_page": 110_000}      # #637: it pages its own text (at most 50000 characters, doubled by JSON escapes)
 # A longer result keeps this much of its start and end (~2 KB together).
 _HEAD, _TAIL = 1400, 600

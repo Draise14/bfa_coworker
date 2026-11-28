@@ -30,7 +30,7 @@ def register(mcp: FastMCP) -> None:
         )
     )
     def make_short(
-        pick: str,
+        pick: str | int,
         steps: list[str] | None = None,
     ) -> dict[str, object]:
         """

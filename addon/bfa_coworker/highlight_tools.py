@@ -133,7 +133,7 @@ def tool_suggest_highlights(kind: str = "auto", max_seconds: float = 60.0, count
     text, _where = ops._engine()      # pylint: disable=protected-access
     return {"status": "ok", "job_id": job_id, "scene": scene.name, "sentences": sentences,
             "message": "Searching {:d} sentences for up to {:d} shorts of at most {:.0f} s. This takes minutes: call "
-                       "get_job_status(job_id, wait_seconds=60) until it is done; its result lists the picks.".format(
+                       "get_job_status(job_id, wait_seconds=240) until it is done; its result lists the picks.".format(
                            sentences, count, seconds),
             "privacy": text}
 
@@ -182,9 +182,9 @@ def tool_propose_highlights(picks: Any = None, kind: str = "auto", max_seconds: 
     if not replace:
         ops.check(scene)
         store = ops.load(scene)
-    keep = [] if replace else [p for p in store["picks"] if p["state"] == hp.State.OK]
+    keep = [] if replace else list(store["picks"])      # changed and gone picks stay: adding never shrinks the list
     made, refused = ha.check_proposals(picks, sentences, fps, chapter, kind=kind, max_seconds=max_s,
-                                       taken=[(p["start"], p["end"]) for p in keep])
+                                       taken=[(p["start"], p["end"]) for p in keep if p["state"] == hp.State.OK])
     stored = hp.from_found(made, sentences)
     room = max(0, hp.MAX_PICKS - len(keep))
     if len(stored) > room:

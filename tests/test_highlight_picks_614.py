@@ -267,7 +267,7 @@ class TestMarkersPreviewAndWords(unittest.TestCase):
         self.assertIn("sent", text)
         text, kind = HP.engine_line("external")
         self.assertEqual(kind, "external")
-        self.assertIn("needs Local or Remote", text)       # the search is refused in this mode: the line says so
+        self.assertIn("agent", text)       # the search is handed to the agent (#616): the line says where the text goes
         self.assertNotIn("Nothing leaves", text)
 
     def test_the_privacy_line_follows_the_decision_the_search_acts_on(self):

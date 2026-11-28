@@ -2229,8 +2229,15 @@ EXPECTED_TOOLS = [
         "inputSchema": {
             "properties": {
                 "pick": {
-                    "title": "Pick",
-                    "type": "string"
+                    "anyOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "integer"
+                        }
+                    ],
+                    "title": "Pick"
                 },
                 "steps": {
                     "anyOf": [

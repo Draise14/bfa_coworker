@@ -44,6 +44,7 @@ import bpy  # pylint: disable=import-error
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty  # pylint: disable=import-error
 from bpy.types import Operator, Panel  # pylint: disable=import-error
 
+from . import coworker_api
 from . import highlight_picks as hp
 from . import scene_reader_ops
 from .shared import icon as safe_icon
@@ -221,7 +222,8 @@ def _job_tick() -> float | None:
         if store["markers_on"]:
             sync_markers(scene, store)
         save(scene, store)
-        if _JOB["source"] == "panel":       # a search the agent started ends after its turn: no undo step of its own (#616)
+        # a search the agent started has no step of its own while its chat turn is open (the turn's step holds the picks)
+        if _JOB["source"] == "panel" or not coworker_api.any_turn_open():
             _wand._push_undo("Find Highlights")      # pylint: disable=protected-access
         notes = " ".join(out["report"].get("messages") or [])
         _JOB.update(report=out["report"], message=(hp.summary(store, _wand._fps(scene), scene.frame_start).splitlines()[0] + " " + notes).strip(),   # pylint: disable=protected-access

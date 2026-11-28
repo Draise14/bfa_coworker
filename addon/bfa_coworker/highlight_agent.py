@@ -34,6 +34,7 @@ __all__ = (
     "rows",
 )
 
+import math
 from typing import Any, Sequence
 
 from . import highlight_picks as hp
@@ -67,7 +68,7 @@ def _scores(raw: Any, criteria: Sequence[str]) -> dict[str, int]:
         return out
     for key in criteria:
         value = raw.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
             continue
         out[key] = max(0, min(hl.SCORE_MAX, int(round(value))))
     return out
@@ -102,8 +103,10 @@ def check_proposals(raw: Any, sentences: Sequence[dict], fps: float, chapter: di
 
     for i, item in enumerate(raw):
         if i >= MAX_PROPOSALS:
-            refuse(i, item, "too_many")
-            continue
+            refused.append({"index": i, "first": None, "last": None, "why": "too_many",
+                            "message": "{:d} more picks past the first {:d} were left out: {:s}".format(
+                                len(raw) - MAX_PROPOSALS, MAX_PROPOSALS, REFUSED_TEXT["too_many"])})
+            break
         title = item.get("title") if isinstance(item, dict) else ""
         cand, why = hl.check_candidate({"first": item.get("first"), "last": item.get("last"), "label": title}
                                        if isinstance(item, dict) else item, by_n, fps, min_s, max_s)

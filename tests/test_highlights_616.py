@@ -292,6 +292,7 @@ class TestSuggestHighlights(_Base):
         self.assertEqual(self.ops._JOB["source"], "agent")
 
     def test_the_job_ends_with_the_picks_which_are_on_the_scene_and_in_the_panels_list(self):
+        self._patch(self.ops.coworker_api, "any_turn_open", lambda: True)
         _model, info = self.stand_in()
         out = self.tools.tool_suggest_highlights("podcast", 60, 5)
         self.finish_search()
@@ -312,7 +313,24 @@ class TestSuggestHighlights(_Base):
         self.assertTrue(st["result"]["report"]["requests"] >= 2)
         found = [i for i in info if any(self._holds(p, i) for p in self.ops.load(self.scene)["picks"])]
         self.assertGreaterEqual(len(found), 2)            # a stand-in, so only the plumbing: planted moments came through
-        self.assertEqual(self.undo, [])                   # an agent's search ends after its turn: no step of its own
+        self.assertEqual(self.undo, [])                   # the turn is open: its step holds the picks, none of its own
+
+    def test_a_search_that_ends_after_the_turn_gets_its_own_undo_step(self):
+        self.stand_in()
+        self._patch(self.ops.coworker_api, "any_turn_open", lambda: False)
+        out = self.tools.tool_suggest_highlights("podcast", 60, 5)
+        self.finish_search()
+        for _ in range(3):
+            LJ.poll()
+            if LJ.status(out["job_id"])["state"] != "running":
+                break
+            self.ops._job_tick()
+        self.assertEqual(self.undo, ["Find Highlights"])
+
+    def test_the_tool_tells_the_agent_to_wait_the_longest_poll(self):
+        self.stand_in()
+        out = self.tools.tool_suggest_highlights("podcast", 60, 5)
+        self.assertIn("wait_seconds=240", out["message"])
 
     def _holds(self, pick, info):
         start = next(s for s in self.ss if s["n"] == info["nums"][0])["start"]
@@ -718,3 +736,60 @@ class TestRegistration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReviewFixes616(unittest.TestCase):
+
+    def test_too_many_proposals_give_one_refused_entry_not_one_each(self):
+        ss = H613.simple_sentences(40, seconds=5.0)
+        picks, refused = HA.check_proposals([proposal(1, 4)] * 500, ss, FPS, CHAPTER)
+        self.assertEqual(len(picks), 1)
+        self.assertEqual([r["why"] for r in refused].count("too_many"), 1)
+        self.assertLess(len(refused), HA.MAX_PROPOSALS + 2)
+        self.assertIn("480", [r["message"] for r in refused if r["why"] == "too_many"][0])
+
+    def test_an_infinite_score_is_dropped_not_a_crash(self):
+        ss = H613.simple_sentences(40, seconds=5.0)
+        bad = proposal(3, 6, scores={"hook": float("inf"), "alone": float("-inf"), "energy": 2})
+        picks, refused = HA.check_proposals([bad], ss, FPS, CHAPTER)
+        self.assertEqual(refused, [])
+        self.assertEqual(len(picks), 1)
+
+    def test_the_find_dialog_on_an_external_agent_no_longer_says_to_switch_engines(self):
+        text, kind = HP.engine_line("external")
+        self.assertEqual(kind, "external")
+        self.assertNotIn("Switch Coworker", text)
+        self.assertNotIn("needs Local or Remote", text)
+        self.assertIn("agent", text)
+
+    def test_make_short_takes_the_picks_number_as_a_whole_number_too(self):
+        import asyncio
+        from mcp.server.fastmcp import FastMCP
+        sys.path.insert(0, str(_ROOT / "mcp"))
+        from blmcp.tools import make_short as mod
+        mcp = FastMCP("t")
+        mod.register(mcp)
+        schema = next(t for t in asyncio.run(mcp.list_tools()) if t.name == "make_short").inputSchema
+        kinds = {x.get("type") for x in schema["properties"]["pick"].get("anyOf", [schema["properties"]["pick"]])}
+        self.assertEqual(kinds, {"string", "integer"})
+
+
+class TestAddingKeepsPicksThatChanged(_Base):
+
+    def test_changed_and_gone_picks_stay_when_the_agent_adds(self):
+        info = H613.planted_info(self.data, self.ss)
+        self.tools.tool_propose_highlights([proposal(info[0]["nums"][0], info[0]["nums"][-1])])
+        real = self.ops.check
+
+        def check(scene):                      # the edit was touched: the first pick reads "check it" after the re-placing
+            got = real(scene)
+            store = self.ops.load(scene)
+            store["picks"][0]["state"] = "changed"
+            self.ops.save(scene, store)
+            return got
+        self._patch(self.ops, "check", check)
+        out = self.tools.tool_propose_highlights([proposal(info[1]["nums"][0], info[1]["nums"][-1], title="Second")])
+        self.assertEqual(out["status"], "ok", out)
+        states = sorted(p["state"] for p in self.ops.load(self.scene)["picks"])
+        self.assertEqual(len(states), 2)
+        self.assertIn("changed", states)

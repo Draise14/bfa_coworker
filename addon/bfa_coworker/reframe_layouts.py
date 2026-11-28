@@ -237,7 +237,10 @@ class BlenderBackend(ra.Backend):
     def modifier_state(self, strip: Any) -> dict | None:
         mod = reframe.find_modifier(strip)
         if mod is None:
-            return None
+            if reframe.plain_marker(strip) is None:         # the plain Centre Crop (#632)
+                return None
+            keyed = self.scene is not None and reframe.plain_keyed(self.scene, strip)
+            return {"blur": False, "keyed": keyed}
         keyed = self.scene is not None and reframe.fcurve_for(self.scene, mod, "Offset X") is not None
         return {"blur": bool(reframe.get_inputs(mod).get("Blur Fill")), "keyed": keyed}
 
@@ -246,6 +249,8 @@ class BlenderBackend(ra.Backend):
         if mod is not None:
             reframe.clear_keys(scene, mod)
             strip.modifiers.remove(mod)
+        if reframe.plain_marker(strip) is not None:
+            reframe.clear_plain(scene, strip)
 
     def make_full(self, scene: Any, strip: Any, mode: str) -> None:
         try:

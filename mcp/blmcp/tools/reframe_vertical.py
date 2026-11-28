@@ -37,11 +37,10 @@ def register(mcp: FastMCP) -> None:
         """
         Make the Sequencer's edit vertical (9:16), one undo step.
 
-        Each movie, image and scene strip gets an editable "Reframe" compositor
-        modifier (Offset X / Y from -1 to 1 pan inside the picture, Zoom 1 = just
-        covers, Blur Fill on / off, Blur Amount, Background Dim); change a shot's
-        framing afterwards through that modifier's inputs. Strips that already have
-        one keep their framing unless ``reset``.
+        CROP frames each movie, image and scene strip with its own crop and transform
+        (no compositor, so playback stays fast); BLUR_FILL gives it an editable "Reframe"
+        compositor modifier (Offset X / Y from -1 to 1, Zoom 1 = just covers, Blur Amount,
+        Background Dim). Strips that already have a framing keep it unless ``reset``.
 
         Args:
             strips: Strip names to reframe (empty = every visible movie / image / scene strip).
@@ -50,7 +49,7 @@ def register(mcp: FastMCP) -> None:
             in_copy: Work in a copy of the scene named "<scene> Vertical" and show it in the
                 Sequencer, leaving the 16:9 edit as it is.
             resolution: Output size, e.g. 1080x1920, 720x1280, 2160x3840.
-            reset: Give strips that already have a Reframe modifier fresh framing too.
+            reset: Give strips that already have a framing fresh framing too.
 
         Returns:
             ``status``, the ``scene`` used (and ``source_scene``, ``copied``), ``mode``,

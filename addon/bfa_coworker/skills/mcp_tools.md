@@ -78,11 +78,12 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   strips follow their caption's font, bold, italic, size and position by themselves. Several speakers, each on their own sound file: `speakers=True` gives each a caption channel;
   `speaker_settings` sets a speaker's `name`, `style`, `position`; `speaker_labels` puts "Name:" in front.
   Running it again replaces the captions over those strips but keeps the ones edited by hand.
-- `reframe_vertical(strips, mode)` — Make the edit vertical (9:16): each movie / image / scene strip gets
-  an editable "Reframe" modifier, `CROP` (centre crop) or `BLUR_FILL` (the whole shot over a blurred copy).
+- `reframe_vertical(strips, mode)` — Make the edit vertical (9:16): each movie / image / scene strip is
+  framed: `CROP` (centre crop) with the strip's own crop and transform (no compositor, playback stays fast), or
+  `BLUR_FILL` (the whole shot over a blurred copy) with an editable "Reframe" modifier.
   Works in a copy of the scene by default (`in_copy`); one undo step. Change a shot's framing afterwards
-  through that modifier's inputs (Properties > Strip Modifiers: Offset X / Y -1..1, Zoom, Blur Fill), not the
-  strip transform.
+  with Strip > Reframe, or select the strip and run `bpy.ops.bfacw.reframe(action=...)` (`LEFT` `RIGHT` `UP` `DOWN`
+  `ZOOM_IN` `ZOOM_OUT` `RESET_FRAMING`; `step` 0.1 by default): it works on either form. `reframe_strips` only changes layouts.
 - `reframe_strips(layout, strips=None, swap=False)` — Change the vertical layout of the named (or selected) movie /
   image / scene strips, after `reframe_vertical` or on any strips; one undo step. `layout`: `full` (centre fills
   the frame), `full_blur` (whole shot over a blurred copy), `full_tracked` (follows the subject: the tracking needs

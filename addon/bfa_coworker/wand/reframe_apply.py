@@ -277,6 +277,11 @@ def _set_part(strip: Any, part: rl.Part) -> None:
     strip.crop.min_x, strip.crop.max_x, strip.crop.min_y, strip.crop.max_y = part.crop
 
 
+def set_part(strip: Any, part: rl.Part) -> None:
+    """Give *strip* the crop, scale and offset of *part* (Make Vertical's plain Centre Crop uses it too, #632)."""
+    _set_part(strip, part)
+
+
 def _no_rotation(strip: Any) -> None:
     t = strip.transform
     t.rotation = 0.0

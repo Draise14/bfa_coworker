@@ -7,10 +7,15 @@
 Make Vertical (9:16) and Reframe in the Sequencer (Video 3, #333).
 
 *Make Vertical* sets the output to 9:16 -- in a copy of the scene by default, so the
-16:9 edit stays -- and gives every visible movie, image and scene strip a **Reframe**
-compositor modifier: Centre Crop, or *Blur Fill* (the whole shot over a blurred,
-dimmed copy of itself).  The framing stays editable: it is just the modifier's
-inputs (Properties editor > Strip Modifiers tab, or Strip > Reframe), one value set per shot.
+16:9 edit stays -- and frames every visible movie, image and scene strip: Centre Crop
+with the strip's own crop and transform (no compositor, so preview playback keeps its
+speed, #632), or *Blur Fill* (the whole shot over a blurred, dimmed copy of itself)
+with a **Reframe** compositor modifier, which Blur Fill needs.  The framing stays
+editable: for Blur Fill it is the modifier's inputs (Properties editor > Strip
+Modifiers tab, or Strip > Reframe), for Centre Crop the strip's Transform and Crop
+(or Strip > Reframe), one value set per shot.  Scenes made before #632 have a modifier
+on every strip: both forms are read, and a Centre Crop modifier that is not keyed is
+turned into the plain crop the next time Make Vertical runs.
 Coworker captions in the edit are laid out again for the new frame (#497,
 ``captions_ops.relayout_captions``); text strips get no Reframe modifier.
 
@@ -29,6 +34,9 @@ from __future__ import annotations
 
 __all__ = (
     "GROUP_NAME",
+    "plain_framing_of",
+    "plain_keyed",
+    "plain_marker",
     "ReframeError",
     "ensure_group",
     "find_modifier",
@@ -50,6 +58,7 @@ from bpy.types import Menu, Operator  # pylint: disable=import-error
 
 from . import reframe_follow
 from . import reframe_math as rm
+from . import reframe_plain as rp
 from .shared import icon
 from .wand import reframe_apply as _layouts
 from .wand import scene as _seq
@@ -72,7 +81,7 @@ RESOLUTIONS = (
     ("2160x3840", "2160 x 3840 (4K)", "9:16 at 2160 x 3840", 'SEQ_PREVIEW'),
 )
 MODES = (
-    ("CROP", "Centre Crop", "Fill the 9:16 frame with the middle of each shot (pan it afterwards with Offset X)",
+    ("CROP", "Centre Crop", "Fill the 9:16 frame with the middle of each shot, with the strip's own crop and transform (pan it afterwards with Strip > Reframe)",
      'FULLSCREEN_ENTER'),
     ("BLUR_FILL", "Blur Fill", "Show each whole shot over a blurred, dimmed copy of itself", 'MATFLUID'),
 )
@@ -390,14 +399,181 @@ def _reset_transform(strip: Any) -> None:
         pass
 
 
+# -- Centre Crop without the modifier (#632) -------------------------------------------------
+
+def frame_size(scene: Any) -> tuple[int, int]:
+    """The frame in whole-frame pixels, whatever Resolution % says (what strip transforms are in)."""
+    return max(1, int(scene.render.resolution_x)), max(1, int(scene.render.resolution_y))
+
+
+def plain_marker(strip: Any) -> Any:
+    """The strip's plain-crop marker (``{"w", "h"}``: the frame it was made for), or ``None``."""
+    try:
+        raw = strip.get(rp.MARKER)
+    except (AttributeError, TypeError):
+        return None
+    return raw if raw is not None and hasattr(raw, "get") else None
+
+
+def _offset_path(strip: Any) -> str:
+    return strip.transform.path_from_id("offset_x")
+
+
+def plain_keyed(scene: Any, strip: Any) -> bool:
+    """True when the strip's pan is keyed (Follow Subject)."""
+    path = _offset_path(strip)
+    return any(fc.data_path == path for bag in _channelbags(scene) for fc in bag.fcurves)
+
+
+def _clear_plain_keys(scene: Any, strip: Any) -> int:
+    path = _offset_path(strip)
+    gone = 0
+    for bag in _channelbags(scene):
+        for fc in list(bag.fcurves):
+            if fc.data_path == path:
+                bag.fcurves.remove(fc)
+                gone += 1
+    return gone
+
+
+def clear_plain(scene: Any, strip: Any) -> None:
+    """Take the plain crop off *strip*: keys, marker, crop and transform back to neutral."""
+    _clear_plain_keys(scene, strip)
+    try:
+        del strip[rp.MARKER]
+    except (KeyError, TypeError, AttributeError):
+        pass
+    _reset_transform(strip)
+    c = strip.crop
+    c.min_x = c.max_x = c.min_y = c.max_y = 0
+
+
+def plain_framing_of(scene: Any, strip: Any) -> dict[str, float]:
+    """Offset X / Y and Zoom of a plain-crop strip, read from its crop and transform (so a picture
+    dragged by hand is read as it is now), in the frame the strip was made for."""
+    sw, sh = source_size(strip)
+    fw, fh = rp.marker_canvas(plain_marker(strip), frame_size(scene))
+    t = strip.transform
+    return rp.plain_framing(sw, sh, fw, fh, float(t.scale_x), (float(t.offset_x), float(t.offset_y)))
+
+
+def _apply_part(strip: Any, part: Any) -> None:
+    _layouts.set_part(strip, part)
+
+
+def _set_marker(scene: Any, strip: Any) -> None:
+    """Say which frame size the strip's numbers are for (so a later read uses the right cover scale)."""
+    fw, fh = frame_size(scene)
+    strip[rp.MARKER] = {"w": fw, "h": fh}
+
+
+def _offset_fcurves(scene: Any, strip: Any) -> list[Any]:
+    path = _offset_path(strip)
+    return [fc for bag in _channelbags(scene) for fc in bag.fcurves if fc.data_path == path]
+
+
+def _key_fractions(scene: Any, strip: Any) -> list[tuple[Any, list[float]]]:
+    """Each pan key of a followed plain strip as the picture fraction at the frame's middle (0..1), read
+    with the strip's scale as it is now: call before the numbers change."""
+    sw, _sh = source_size(strip)
+    span = max(1e-9, sw * float(strip.transform.scale_x))
+    return [(fc, [0.5 - float(kp.co[1]) / span for kp in fc.keyframe_points]) for fc in _offset_fcurves(scene, strip)]
+
+
+def _restore_keys(scene: Any, strip: Any, saved: list[tuple[Any, list[float]]]) -> None:
+    """Write the saved subject fractions back as pan keys for the strip's new scale and frame."""
+    sw, sh = source_size(strip)
+    fw, fh = frame_size(scene)
+    f = plain_framing_of(scene, strip)
+    for fc, fractions in saved:
+        for kp, u in zip(fc.keyframe_points, fractions):
+            part = rp.subject_part(sw, sh, fw, fh, u, f["Offset Y"], f["Zoom"])
+            delta = part.offset[0] - float(kp.co[1])
+            kp.co[1] = part.offset[0]
+            kp.handle_left[1] += delta
+            kp.handle_right[1] += delta
+        fc.update()
+
+
+def build_plain(scene: Any, strip: Any, framing: dict[str, float] | None = None, tracked: bool = False) -> None:
+    """Give *strip* a plain Centre Crop for the scene's frame, at *framing* (default centred).
+    *tracked*: a followed strip (no horizontal crop): its pan keys are kept, in the new frame's pixels."""
+    sw, sh = source_size(strip)
+    fw, fh = frame_size(scene)
+    f = framing or {}
+    saved = _key_fractions(scene, strip) if tracked else []
+    part = rp.plain_part(sw, sh, fw, fh, f.get("Offset X", 0.0), f.get("Offset Y", 0.0), f.get("Zoom", 1.0),
+                         tracked=tracked)
+    _apply_part(strip, part)
+    _set_marker(scene, strip)
+    if saved:
+        _restore_keys(scene, strip, saved)
+
+
+def _key_free(scene: Any, mod: Any) -> bool:
+    """No keyframes on the three framing inputs of *mod*."""
+    return all(fcurve_for(scene, mod, n) is None for n in ("Offset X", "Offset Y", "Zoom"))
+
+
+def _modifier_framing(mod: Any) -> dict[str, float]:
+    vals = get_inputs(mod)
+    return {k: float(vals.get(k, rm.DEFAULTS[k])) for k in ("Offset X", "Offset Y", "Zoom")}
+
+
+def to_plain(scene: Any, strip: Any, from_blur: bool = False) -> bool:
+    """Turn a Centre Crop modifier (not Blur Fill, nothing keyed) into the plain crop at the same framing.
+    *from_blur*: a Blur Fill one too (the user asked for Centre Crop).  False when the strip has to keep
+    its modifier."""
+    mod = find_modifier(strip)
+    if mod is None or (get_inputs(mod).get("Blur Fill") and not from_blur) or not _key_free(scene, mod):
+        return False
+    framing = _modifier_framing(mod)
+    strip.modifiers.remove(mod)
+    _reset_transform(strip)
+    build_plain(scene, strip, framing)
+    return True
+
+
 def reframe_strip(scene: Any, strip: Any, mode: str, reset: bool = False) -> str:
-    """Give *strip* its Reframe modifier (or update its sizes); returns added / kept / reset."""
+    """Frame *strip* in *mode*; returns added / kept / reset / converted.
+
+    ``CROP`` is the strip's own crop and transform (no modifier, #632); ``BLUR_FILL`` is the Reframe
+    modifier.  A Centre Crop modifier from before #632 is turned into the plain crop (``converted``,
+    same framing) unless it is Blur Fill or keyed."""
     if _layouts.is_split_part(strip):
         raise ReframeError("'{:s}' is part of a split: use the Reframe layouts (Strip > Reframe Layout) to change it.".format(strip.name))
+    mod = find_modifier(strip)
+    plain = plain_marker(strip) is not None
+    if mode == "CROP":
+        if mod is None:
+            if plain and not reset:
+                # A followed strip keeps its pan keys (rescaled to this frame), not a horizontal crop.
+                build_plain(scene, strip, plain_framing_of(scene, strip), tracked=plain_keyed(scene, strip))
+                return "kept"
+            if plain:
+                clear_plain(scene, strip)
+            _reset_transform(strip)
+            build_plain(scene, strip)
+            return "reset" if plain else "added"
+        if reset:
+            clear_keys(scene, mod)
+            strip.modifiers.remove(mod)
+            _reset_transform(strip)
+            build_plain(scene, strip)
+            return "reset"
+        if to_plain(scene, strip):
+            return "converted"
+        # Blur Fill or keyed: the modifier stays, its sizes follow the frame (as before).
+        w, h = canvas_size(scene)
+        sw, sh = source_size(strip)
+        _action, values = rm.plan_modifier(get_inputs(mod), mode, sw, sh, w, h, False)
+        set_inputs(mod, values)
+        return "kept"
     ng = ensure_group()
     w, h = canvas_size(scene)
     sw, sh = source_size(strip)
-    mod = find_modifier(strip)
+    if mod is None and plain:
+        clear_plain(scene, strip)
     action, values = rm.plan_modifier(get_inputs(mod) if mod else None, mode, sw, sh, w, h, reset)
     if mod is None:
         mod = strip.modifiers.new(MOD_NAME, type='COMPOSITOR')
@@ -459,7 +635,7 @@ def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resoluti
     old_res = (target.render.resolution_x, target.render.resolution_y)
     target.render.resolution_x, target.render.resolution_y = w, h
     ed = target.sequence_editor
-    done: dict[str, list[str]] = {"added": [], "kept": [], "reset": []}
+    done: dict[str, list[str]] = {"added": [], "kept": [], "reset": [], "converted": []}
     for name in names:
         strip = ed.strips_all.get(name)
         if strip is not None:
@@ -480,7 +656,7 @@ def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resoluti
             window.scene = target
     return {"scene": target.name, "source_scene": scene.name, "copied": copied, "mode": mode,
             "resolution": [w, h], "added": done["added"], "kept": done["kept"], "reset": done["reset"],
-            "captions": captions, "left_alone": left_alone}
+            "converted": done["converted"], "captions": captions, "left_alone": left_alone}
 
 
 # -- Nudge / mode / reset ------------------------------------------------------------------
@@ -493,21 +669,58 @@ def _set_animated(scene: Any, mod: Any, name: str, value: Any) -> None:
         item.keyframe_insert("value", frame=scene.frame_current)
 
 
+def _nudge_plain(scene: Any, strip: Any, action: str, step: float) -> str:
+    """Pan / zoom a plain-crop strip: the same steps as the modifier's inputs.  A keyed pan gets a key on the
+    current frame (like auto-keying)."""
+    f = plain_framing_of(scene, strip)
+    if action in {"LEFT", "RIGHT", "UP", "DOWN"}:
+        name, d = {"LEFT": ("Offset X", -step), "RIGHT": ("Offset X", step), "UP": ("Offset Y", step),
+                   "DOWN": ("Offset Y", -step)}[action]
+        f[name] = rm.clamp(f[name] + d)
+        result = "nudged"
+    else:
+        z = f["Zoom"] * ((1.0 + step) if action == "ZOOM_IN" else 1.0 / (1.0 + step))
+        f["Zoom"] = min(10.0, max(1.0, z))
+        result = "zoomed"
+    keyed = plain_keyed(scene, strip)
+    # Every pan key follows the new scale / frame (a zoom or a resolution change moves them all).
+    build_plain(scene, strip, f, tracked=keyed)
+    if keyed and result == "nudged":                 # a zoom keeps each key's subject, it adds none
+        strip.transform.keyframe_insert("offset_x", frame=scene.frame_current)
+    return result
+
+
 def apply_reframe(scene: Any, strip: Any, action: str, step: float = 0.1) -> str:
     if _layouts.is_split_part(strip):          # a split's parts have crop and transform, not the modifier (#606)
         raise ReframeError("'{:s}' is part of a split: use the Reframe layouts (Strip > Reframe Layout) to change it.".format(strip.name))
     mod = find_modifier(strip)
-    if mod is None:
+    if mod is None and plain_marker(strip) is None:
         reframe_strip(scene, strip, "BLUR_FILL" if action == "BLUR_FILL" else "CROP")
         if action in {"CROP", "BLUR_FILL", "RESET_FRAMING"}:
             return "added"
         mod = find_modifier(strip)
+    if mod is None:                             # the plain crop (#632)
+        if action == "RESET_FRAMING":
+            reframe_strip(scene, strip, "CROP", reset=True)
+            return "reset"
+        if action == "CROP":
+            return "mode"
+        if action == "BLUR_FILL":
+            reframe_strip(scene, strip, "BLUR_FILL")
+            return "mode"
+        if action in {"LEFT", "RIGHT", "UP", "DOWN", "ZOOM_IN", "ZOOM_OUT"}:
+            return _nudge_plain(scene, strip, action, step)
+        raise ReframeError("Unknown Reframe action {!r}.".format(action))
     vals = get_inputs(mod)
     if action == "RESET_FRAMING":
         reframe_strip(scene, strip, "BLUR_FILL" if vals.get("Blur Fill") else "CROP", reset=True)
         return "reset"
-    if action in {"CROP", "BLUR_FILL"}:
-        _set_animated(scene, mod, "Blur Fill", action == "BLUR_FILL")
+    if action == "CROP":
+        if not to_plain(scene, strip, from_blur=True):          # keyed: the modifier stays, Blur Fill off
+            _set_animated(scene, mod, "Blur Fill", False)
+        return "mode"
+    if action == "BLUR_FILL":
+        _set_animated(scene, mod, "Blur Fill", True)
         return "mode"
     deltas = {"LEFT": ("Offset X", -step), "RIGHT": ("Offset X", step), "UP": ("Offset Y", step),
               "DOWN": ("Offset Y", -step)}
@@ -595,8 +808,10 @@ def _follow_targets(scene: Any, strips: Iterable[Any]) -> tuple[list[Any], list[
     ok, skipped = [], []
     for s in strips:
         mod = find_modifier(s)
-        if mod is None:
-            skipped.append("{:s} (no Reframe modifier)".format(s.name))
+        if mod is None and plain_marker(s) is not None:
+            ok.append(s)                                   # the plain crop (#632)
+        elif mod is None:
+            skipped.append("{:s} (not reframed yet)".format(s.name))
         elif get_inputs(mod).get("Blur Fill"):
             skipped.append("{:s} (Blur Fill shows the whole shot)".format(s.name))
         else:
@@ -613,7 +828,7 @@ def start_follow(scene: Any, strips: Iterable[Any], samples: int = 4, on_done: A
         raise ReframeError("Follow subject is already running.")
     targets, skipped = _follow_targets(scene, strips)
     if not targets:
-        raise ReframeError("Nothing to follow: " + ("; ".join(skipped) or "select strips with a Reframe modifier"))
+        raise ReframeError("Nothing to follow: " + ("; ".join(skipped) or "select strips that Make Vertical has framed"))
     ask = reframe_follow.resolve_asker()          # raises reframe_follow.Unavailable with the reason
     outdir = tempfile.mkdtemp(prefix="bfacw_follow_", dir=bpy.app.tempdir or None)
     jobs = []
@@ -637,6 +852,23 @@ def start_follow(scene: Any, strips: Iterable[Any], samples: int = 4, on_done: A
     return "Following the subject in {:d} shot(s) ({:d} frames)...".format(len(targets), len(jobs))
 
 
+def _follow_plain(scene: Any, strip: Any, samples: list[tuple[int, Any]], fps: float) -> int:
+    """Key the pan of a plain-crop strip (``transform.offset_x``) from the subject positions."""
+    sw, sh = source_size(strip)
+    fw, fh = frame_size(scene)
+    f = plain_framing_of(scene, strip)
+    keys = rm.smooth_track(samples, fps)
+    if not keys:
+        return 0
+    _clear_plain_keys(scene, strip)
+    for frame, x in keys:
+        part = rp.subject_part(sw, sh, fw, fh, x, f["Offset Y"], f["Zoom"])
+        _apply_part(strip, part)
+        strip.transform.keyframe_insert("offset_x", frame=frame)
+    _set_marker(scene, strip)
+    return len(keys)
+
+
 def apply_follow(scene: Any, results: dict[str, list[tuple[int, Any]]]) -> dict[str, int]:
     """Key Offset X from sampled subject positions; returns keys per strip."""
     fps = scene.render.fps / (scene.render.fps_base or 1.0)
@@ -644,8 +876,12 @@ def apply_follow(scene: Any, results: dict[str, list[tuple[int, Any]]]) -> dict[
     keyed = {}
     for name, samples in results.items():
         strip = scene.sequence_editor.strips_all.get(name) if scene.sequence_editor else None
-        mod = find_modifier(strip) if strip is not None else None
+        if strip is None:
+            continue
+        mod = find_modifier(strip)
         if mod is None:
+            if plain_marker(strip) is not None:
+                keyed[name] = _follow_plain(scene, strip, samples, fps)
             continue
         sw, sh = source_size(strip)
         zoom = float(get_inputs(mod).get("Zoom", 1.0))
@@ -713,7 +949,7 @@ def _seq_poll(context: Any, cls: Any) -> bool:
 
 
 class BFACW_OT_make_vertical(Operator):
-    """Make this edit vertical (9:16): every shot gets an editable Reframe modifier, Centre Crop or Blur Fill"""
+    """Make this edit vertical (9:16): every shot is framed and editable, Centre Crop (the strip's own crop, fast) or Blur Fill (a Reframe modifier)"""
     bl_idname = "bfacw.make_vertical"
     bl_label = "Make Vertical (9:16)"
     bl_description = agent_line(__doc__, "Follow Subject, if ticked, which needs a connected vision model")
@@ -727,7 +963,7 @@ class BFACW_OT_make_vertical(Operator):
     resolution: EnumProperty(name="Resolution", items=_enum_items(RESOLUTIONS), default="1080x1920")  # type: ignore[valid-type]
     reset: BoolProperty(  # type: ignore[valid-type]
         name="Reset Framing", default=False,
-        description="Strips that already have a Reframe modifier get fresh framing too "
+        description="Strips that already have a framing get a fresh one too "
                     "(otherwise they keep what you set)")
     follow: BoolProperty(  # type: ignore[valid-type]
         name="Follow Subject", default=False,
@@ -795,7 +1031,7 @@ _ACTIONS = (
 
 
 class BFACW_OT_reframe(Operator):
-    """Change the framing of the selected strips' Reframe modifier (also in Properties > Strip Modifiers)"""
+    """Change the framing of the selected strips: pan, zoom, Centre Crop, Blur Fill (also in Properties > Strip Modifiers)"""
     bl_idname = "bfacw.reframe"
     bl_label = "Reframe"
     bl_description = agent_line(__doc__)

@@ -253,6 +253,9 @@ def make_short(op: Any, scene: Any, pick: dict[str, Any]) -> set[str]:
         op.report({'ERROR'}, "Make Short stopped: {!s}".format(ex))
         return {'CANCELLED'}
     for line in got["lines"]:
-        op.report({'WARNING' if "failed" in line or line.startswith("Warning") else 'INFO'}, line)
+        if "failed" in line or line.startswith("Warning"):
+            op.report({'WARNING'}, line)
+        else:
+            op.report({'INFO'}, line)
     ops._redraw()      # pylint: disable=protected-access
     return {'FINISHED'}

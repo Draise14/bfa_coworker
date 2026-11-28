@@ -508,7 +508,7 @@ class BFACW_OT_highlights_make_short(_PickOperator):
         box = self.layout.box()
         box.label(text="Polish the short: each step is optional", icon=safe_icon("SEQUENCE"))
         for prop, wand_icon, fallback in (("silences", "remove_silences", "SPEAKER"), ("vertical", "vertical", "SEQ_PREVIEW"),
-                                          ("captions", "captions", "FONT_DATA"), ("hook", "", "SEQ_TEXT")):
+                                          ("captions", "captions", "FONT_DATA"), ("hook", "", "TEXT")):
             value = 0
             if wand_icon:
                 try:

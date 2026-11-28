@@ -665,11 +665,13 @@ def scene_digest(since: str = "") -> dict[str, Any]:
     return head
 
 
-def reframe_strips(layout: str = "", strips: list[str] | None = None, swap: bool = False) -> dict[str, Any]:
+def reframe_strips(layout: str = "", strips: list[str] | None = None, swap: bool = False,
+                   pan_x: float | None = None, pan_y: float | None = None, zoom: float | None = None,
+                   key: bool = False) -> dict[str, Any]:
     """Reframe's layouts for *strips* (the selected ones when empty) in the Sequencer's scene (#606), one
     undo step (``reframe_layouts.tool_reframe_strips``).  Main thread only."""
     from . import reframe_layouts
-    return reframe_layouts.tool_reframe_strips(layout, strips, swap)
+    return reframe_layouts.tool_reframe_strips(layout, strips, swap, pan_x, pan_y, zoom, key)
 
 
 def reframe_vertical(strips: list[str] | None = None, mode: str = "CROP", in_copy: bool = True,

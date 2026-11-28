@@ -85,7 +85,7 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   `layout="auto"|"single"|"split"`: two subjects apart become two crops, top and bottom. The keys come a moment after the call returns, as a second undo step (see `following`). Change a shot's framing afterwards
   with Strip > Reframe, or select the strip and run `bpy.ops.bfacw.reframe(action=...)` (`LEFT` `RIGHT` `UP` `DOWN`
   `ZOOM_IN` `ZOOM_OUT` `RESET_FRAMING`; `step` 0.1 by default): it works on either form. `reframe_strips` only changes layouts.
-- `reframe_strips(layout, strips=None, swap=False)` — Change the vertical layout of the named (or selected) movie /
+- `reframe_strips(layout, strips=None, swap=False, pan_x=None, pan_y=None, zoom=None, key=False)` — Change the vertical layout of the named (or selected) movie /
   image / scene strips, after `reframe_vertical` or on any strips; one undo step. `layout`: `full` (centre fills
   the frame), `full_blur` (whole shot over a blurred copy), `full_tracked` (follows the subject: the tracking needs
   a vision model, the layout does not), `split_half` (two crops, 50 / 50), `split_top` (2/3 on top, 1/3 below),
@@ -93,7 +93,9 @@ For long jobs, start them and check with `get_job_status`; don't loop faster tha
   same source (the strip, and its duplicate below on the next free channel) with crop and transform each; it
   replaces the earlier layout, so any order of layouts ends the same as the last one alone. `swap=true` exchanges
   top and bottom (alone with `layout=""`). With neither a layout nor `swap` it only reads: `layouts` gives each
-  named / selected strip's current layout (and its part and partner in a split). The layout is stored on each strip (`coworker_layout`). Captions and
+  named / selected strip's current layout (and its part, partner and `inside` framing in a split). `pan_x` / `pan_y` (-1 .. 1) and
+  `zoom` (1 .. 4) frame the picture inside each split part named (its own strip only; plain crop and transform, no
+  modifier); `key=true` keys it at the current frame (more keys move it smoothly; Swap and Reset include them). The layout is stored on each strip (`coworker_layout`). Captions and
   audio are never touched; Remove Silences and Edit by Transcript cut both parts together. It adds and removes
   strips, so it waits while a render or bake runs.
 - `get_transcript_text(strip)` — A transcribed clip's words as they play now, one numbered line per sentence

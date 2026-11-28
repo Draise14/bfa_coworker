@@ -24,6 +24,7 @@ from __future__ import annotations
 __all__ = (
     "BFACW_MT_reframe_layout",
     "BFACW_OT_reframe_layout",
+    "BFACW_OT_reframe_inside_key",
     "BFACW_OT_reframe_reset",
     "BFACW_OT_reframe_swap",
     "BlenderBackend",
@@ -37,7 +38,7 @@ import re
 from typing import Any
 
 import bpy  # pylint: disable=import-error
-from bpy.props import EnumProperty  # pylint: disable=import-error
+from bpy.props import EnumProperty, FloatProperty  # pylint: disable=import-error
 from bpy.types import Menu, Operator, Panel  # pylint: disable=import-error
 
 from . import reframe, reframe_subjects
@@ -45,6 +46,7 @@ from .shared import icon as safe_icon
 from .wand import icons as wand_icons
 from .wand import reframe_apply as ra
 from .wand import reframe_entries as re_entries
+from .wand import reframe_inside as ri
 from .wand import reframe_layout as rl
 from .wand import scene as _seq
 from .wand import sequencer as _wand
@@ -53,6 +55,8 @@ from .wand.spec import agent_line, model_line
 CATEGORY = "Coworker"
 PANEL_LABEL = "Reframe"
 SWAP_ICON, RESET_ICON = "ARROW_LEFTRIGHT", "LOOP_BACK"
+INSIDE_KEY = "coworker_inside"          # a part's Frame Inside keys the artist set: {frame - origin: [u, v, zoom]} (#625)
+INSIDE_ICON, KEY_ICON = "VIEW_ZOOM", "KEY_HLT"
 # Strip properties a duplicate takes over (it is a faithful copy: only crop and transform are the layout's).
 _COPIED = ("blend_type", "blend_alpha", "color_multiply", "color_saturation", "mute", "use_flip_x", "use_flip_y",
            "alpha_mode", "multiply_alpha", "use_deinterlace", "use_float", "color_tag", "use_reverse_frames",
@@ -263,6 +267,58 @@ class BlenderBackend(ra.Backend):
 
     def clear_keys(self, scene: Any, strip: Any) -> None:
         reframe_subjects.clear_strip_keys(scene, strip)
+        try:
+            del strip[INSIDE_KEY]
+        except (KeyError, TypeError, AttributeError):
+            pass
+
+    # -- Frame Inside (#625) --
+
+    @staticmethod
+    def _origin(strip: Any) -> int:
+        """Where the strip's content starts in time.  Blender moves a strip's F-curve keys with it, so the
+        anchors are stored relative to this and move with the keys (Remove Silences, a drag in the timeline)."""
+        for name in ("content_start", "frame_start"):
+            try:
+                return int(round(float(getattr(strip, name))))
+            except (AttributeError, TypeError, ValueError):
+                continue
+        return 0
+
+    def anchors(self, strip: Any) -> dict[int, tuple[float, float, float]]:
+        """The anchors in scene frames (stored relative to the strip's start)."""
+        try:
+            raw = strip.get(INSIDE_KEY)
+            origin = self._origin(strip)
+            return {int(frame) + origin: (float(v[0]), float(v[1]), float(v[2])) for frame, v in raw.items()}
+        except (AttributeError, TypeError, ValueError, IndexError, KeyError):
+            return {}
+
+    def has_keys(self, scene: Any, strip: Any) -> bool:
+        prefixes = tuple(getattr(strip, group).path_from_id() + "." for group in ("transform", "crop"))
+        return any(fc.data_path.startswith(prefixes) for bag in reframe._channelbags(scene)  # pylint: disable=protected-access
+                   for fc in bag.fcurves)
+
+    def key_part(self, scene: Any, strip: Any, anchors: dict[int, tuple[float, float, float]],
+                 parts: list[tuple[int, Any]]) -> None:
+        reframe_subjects.clear_strip_keys(scene, strip)
+        for frame, part in parts:
+            ra.set_part(strip, part)
+            for group, prop in reframe_subjects._KEYED_PROPS:      # pylint: disable=protected-access
+                getattr(strip, group).keyframe_insert(prop, frame=frame)
+        prefixes = (strip.transform.path_from_id() + ".", strip.crop.path_from_id() + ".")
+        for bag in reframe._channelbags(scene):                    # pylint: disable=protected-access
+            for fc in bag.fcurves:
+                if fc.data_path.startswith(prefixes):
+                    for kp in fc.keyframe_points:
+                        kp.interpolation = 'LINEAR'
+        origin = self._origin(strip)
+        strip[INSIDE_KEY] = {str(int(f) - origin): [float(a) for a in v] for f, v in anchors.items()}
+        if parts:                                                  # the strip shows the framing of the current frame
+            ra.set_part(strip, min(parts, key=lambda row: abs(row[0] - scene.frame_current))[1])
+
+    def current_frame(self, scene: Any) -> int:
+        return int(scene.frame_current)
 
     def start_tracking(self, scene: Any, strips: list) -> str:
         try:
@@ -401,6 +457,93 @@ class BFACW_OT_reframe_reset(Operator):
         return _report(self, out)
 
 
+class BFACW_OT_reframe_inside_key(Operator):
+    """Key the framing inside the selected split parts at the current frame"""
+    bl_idname = "bfacw.reframe_inside_key"
+    bl_label = "Key Framing"
+    bl_description = agent_line("Key the framing inside the selected split parts (pan and zoom) at the current "
+                                "frame; keys at other frames then move it smoothly between them.")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context: Any) -> bool:
+        return _poll(cls, context)
+
+    def execute(self, context: Any) -> set[str]:
+        scene = _seq.sequencer_scene(context)
+        out = ra.set_inside(scene, _level_strips(scene), _selected_names(scene), BlenderBackend(scene), key=True)
+        return _report(self, out)
+
+
+def _active_part(context: Any = None) -> tuple[Any, Any]:
+    """``(scene, active split part)`` for the sliders, ``(scene, None)`` where there is none."""
+    context = context or bpy.context
+    scene = _seq.sequencer_scene(context)
+    ed = getattr(scene, "sequence_editor", None)
+    active = getattr(ed, "active_strip", None) if ed is not None else None
+    if active is None or active.type not in ra.PICTURE_TYPES or not ra.is_split_part(active):
+        return scene, None
+    return scene, active
+
+
+def _inside_get(name: str, default: float) -> Any:
+    def get(_self: Any) -> float:
+        scene, strip = _active_part()
+        if strip is None:
+            return default
+        try:
+            return float(ra.inside_of(scene, strip, BlenderBackend(scene))[name])
+        except Exception:  # pylint: disable=broad-exception-caught
+            return default
+    return get
+
+
+def _inside_set(name: str) -> Any:
+    def set_(_self: Any, value: float) -> None:
+        scene, strip = _active_part()
+        if strip is not None:
+            ra.set_inside(scene, _level_strips(scene), [strip.name], BlenderBackend(scene), **{name: float(value)})
+    return set_
+
+
+def _register_sliders() -> None:
+    # On the Scene, not the WindowManager: the UI pushes an undo step for a button whose owner is an undoable ID
+    # (a WindowManager's are left out), so one drag is one Ctrl+Z.
+    wm = bpy.types.Scene
+    wm.bfacw_inside_x = FloatProperty(
+        name="X", description="Pan the picture inside this part sideways (0 centred, -1 far left, 1 far right)",
+        min=-1.0, max=1.0, precision=2, subtype='FACTOR', get=_inside_get("x", 0.0), set=_inside_set("x"))
+    wm.bfacw_inside_y = FloatProperty(
+        name="Y", description="Pan the picture inside this part up or down (0 centred, -1 bottom, 1 top)",
+        min=-1.0, max=1.0, precision=2, subtype='FACTOR', get=_inside_get("y", 0.0), set=_inside_set("y"))
+    wm.bfacw_inside_zoom = FloatProperty(
+        name="Zoom", description="Zoom the picture inside this part (1 just fills the part)",
+        min=1.0, max=ri.MAX_ZOOM, soft_max=3.0, precision=2, get=_inside_get("zoom", 1.0), set=_inside_set("zoom"))
+
+
+def _unregister_sliders() -> None:
+    for name in ("bfacw_inside_x", "bfacw_inside_y", "bfacw_inside_zoom"):
+        try:
+            delattr(bpy.types.Scene, name)
+        except AttributeError:
+            pass
+
+
+def _draw_inside(layout: Any, context: Any) -> None:
+    """Frame Inside: X, Y and Zoom of the active split part, and Key."""
+    scene, strip = _active_part(context)
+    if strip is None:
+        return
+    row = layout.row(align=True)
+    row.label(text="Frame Inside", icon=safe_icon(INSIDE_ICON))
+    row.operator("bfacw.reframe_inside_key", text="", icon=safe_icon(KEY_ICON))
+    wm = scene
+    col = layout.column(align=True)
+    col.prop(wm, "bfacw_inside_x", slider=True)
+    col.prop(wm, "bfacw_inside_y", slider=True)
+    col.prop(wm, "bfacw_inside_zoom", slider=True)
+
+
 # -- placement -------------------------------------------------------------------------------
 
 def _layout_button(layout: Any, item: rl.Layout, current: str, *, text: str = "", previews: bool = True) -> None:
@@ -436,6 +579,7 @@ def _draw_buttons(layout: Any, context: Any) -> None:
     row = layout.row(align=True)
     row.operator("bfacw.reframe_swap", text="Swap", icon=safe_icon(SWAP_ICON))
     row.operator("bfacw.reframe_reset", text="Reset", icon=safe_icon(RESET_ICON))
+    _draw_inside(layout, context)
 
 
 class BFACW_PT_reframe_sidebar(Panel):
@@ -516,9 +660,12 @@ def layout_id(text: Any) -> str:
     return ""
 
 
-def tool_reframe_strips(layout: Any = "", strips: Any = None, swap: bool = False) -> dict[str, Any]:
+def tool_reframe_strips(layout: Any = "", strips: Any = None, swap: bool = False, pan_x: Any = None,
+                        pan_y: Any = None, zoom: Any = None, key: bool = False) -> dict[str, Any]:
     """``reframe_strips`` (MCP): the operators' work without a UI, one undo step.  *layout* ``""`` with
-    *swap* only swaps; both builds the layout, then swaps; neither answers each strip's current layout."""
+    *swap* only swaps; both builds the layout, then swaps; neither answers each strip's current layout.
+    *pan_x*, *pan_y*, *zoom* (Frame Inside, #625) set the picture's framing inside each split part named, after
+    the layout and the swap; *key* keys it at the current frame."""
     wanted = layout_id(layout) if str(layout or "").strip() else ""
     if str(layout or "").strip() and not wanted:
         return {"status": "error", "message": "Unknown layout '{!s}'. Use one of: {:s}.".format(
@@ -532,7 +679,8 @@ def tool_reframe_strips(layout: Any = "", strips: Any = None, swap: bool = False
     if not names:
         return {"status": "nothing", "message": "No strips named and none selected: name the movie, image or scene "
                                                  "strips (strips=[...])", "scene": scene.name}
-    if not wanted and not swap:            # read mode: what layout the strips are in
+    inside = {k: float(v) for k, v in (("x", pan_x), ("y", pan_y), ("zoom", zoom)) if v is not None}
+    if not wanted and not swap and not inside and not key:            # read mode: what layout the strips are in
         found = ra.layouts_of(scene, _level_strips(scene), names, BlenderBackend(scene))
         text = ", ".join("{:s}: {:s}".format(n, row["layout"] or "none") for n, row in found.items())
         return {"status": "ok", "message": text or "No movie, image or scene strip among them",
@@ -551,7 +699,15 @@ def tool_reframe_strips(layout: Any = "", strips: Any = None, swap: bool = False
             out["status"] = swapped["status"]
     elif swap:
         out["swapped"] = []
-    if out["status"] == "ok" and (out.get("changed") or out.get("swapped")):
+    if (inside or key) and out["status"] == "ok":
+        framed = ra.set_inside(scene, _level_strips(scene), names, BlenderBackend(scene), key=bool(key), **inside)
+        out["framed"] = framed.get("changed", [])
+        out["message"] = (out["message"] + ". " if out["message"] else "") + framed["message"]
+        if framed["status"] != "ok" and not wanted and not swap:
+            out["status"] = framed["status"]
+        if framed.get("skipped"):
+            out["skipped"] = list(out.get("skipped", [])) + framed["skipped"]
+    if out["status"] == "ok" and (out.get("changed") or out.get("swapped") or out.get("framed")):
         _wand._push_undo("Reframe")  # pylint: disable=protected-access
     out["scene"] = scene.name
     return out
@@ -559,12 +715,14 @@ def tool_reframe_strips(layout: Any = "", strips: Any = None, swap: bool = False
 
 # -- registration ----------------------------------------------------------------------------
 
-_CLASSES = (BFACW_OT_reframe_layout, BFACW_OT_reframe_swap, BFACW_OT_reframe_reset, BFACW_MT_reframe_layout,
+_CLASSES = (BFACW_OT_reframe_layout, BFACW_OT_reframe_swap, BFACW_OT_reframe_reset, BFACW_OT_reframe_inside_key,
+            BFACW_MT_reframe_layout,
             BFACW_PT_reframe_sidebar)
 _DONE: list[type] = []
 
 
 def register() -> None:
+    _register_sliders()
     classes = list(_CLASSES)
     if _wand._has_toolshelf_tabs():                       # pylint: disable=protected-access
         classes.append(BFACW_PT_reframe_toolshelf)       # Bforartists only: Blender refuses a TOOLS category
@@ -580,3 +738,4 @@ def unregister() -> None:
         except RuntimeError:
             pass
     _DONE.clear()
+    _unregister_sliders()

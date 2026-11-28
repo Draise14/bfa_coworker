@@ -2451,12 +2451,18 @@ EXPECTED_TOOLS = [
 "            strips: Strip names (a split's either part stands for both). Empty: the selected strips.\n"
 "            swap: Exchange which framing of the picture is shown top and bottom in the splits named\n"
 "                (after building ``layout`` when one is given).\n"
+"            pan_x: Frame Inside: pan the picture sideways inside each split part named, -1 (far left)\n"
+"                to 1 (far right), 0 centred. Name the part's own strip (its partner is not changed).\n"
+"            pan_y: Frame Inside: pan up or down, -1 (bottom) to 1 (top).\n"
+"            zoom: Frame Inside: 1 (just fills the part) to 4.\n"
+"            key: Key the framing at the current frame; keys at other frames then move it smoothly. A\n"
+"                part that already has keys is keyed by any pan or zoom you set.\n"
 "\n"
 "        Returns:\n"
 "            ``status`` (ok / nothing / error), ``message``, ``layout``, ``changed`` (strips given\n"
 "            the layout), ``created`` / ``removed`` (strip names), ``unchanged`` (already in that\n"
-"            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``tracking``, ``layouts`` (read mode: strip ->\n"
-"            {layout, part, partner}; layout is \"\" when it has none) and ``scene``.\n"
+"            layout), ``skipped`` ([{strip, reason}]), ``swapped``, ``framed``, ``tracking``, ``layouts`` (read mode: strip ->\n"
+"            {layout, part, partner, inside: {x, y, zoom, keyed}}; layout is \"\" when it has none) and ``scene``.\n"
 "        ",
         "inputSchema": {
             "properties": {
@@ -2483,6 +2489,47 @@ EXPECTED_TOOLS = [
                 "swap": {
                     "default": False,
                     "title": "Swap",
+                    "type": "boolean"
+                },
+                "pan_x": {
+                    "anyOf": [
+                        {
+                            "type": "number"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Pan X"
+                },
+                "pan_y": {
+                    "anyOf": [
+                        {
+                            "type": "number"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Pan Y"
+                },
+                "zoom": {
+                    "anyOf": [
+                        {
+                            "type": "number"
+                        },
+                        {
+                            "type": "null"
+                        }
+                    ],
+                    "default": None,
+                    "title": "Zoom"
+                },
+                "key": {
+                    "default": False,
+                    "title": "Key",
                     "type": "boolean"
                 }
             },

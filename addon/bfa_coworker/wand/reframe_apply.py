@@ -41,13 +41,16 @@ __all__ = (
     "layouts_of",
     "partners_of",
     "plan_channel",
+    "inside_of",
     "reset_framing",
+    "set_inside",
     "swap_parts",
     "tag_of",
 )
 
 from typing import Any, Callable
 
+from . import reframe_inside as ri
 from . import reframe_layout as rl
 
 TAG = "coworker_layout"
@@ -110,7 +113,25 @@ class Backend:
         raise NotImplementedError
 
     def clear_keys(self, scene: Any, strip: Any) -> None:
-        """Take the crop and transform keys (a Track All part's) off *strip*; nothing to do where none are made."""
+        """Take the crop and transform keys (a Track All part's) off *strip*, and its Frame Inside anchors;
+        nothing to do where there are none."""
+
+    # Frame Inside (#625)
+    def anchors(self, strip: Any) -> dict[int, tuple[float, float, float]]:
+        """The artist's Frame Inside keys on *strip*: ``frame -> (u, v, zoom)``."""
+        return {}
+
+    def has_keys(self, scene: Any, strip: Any) -> bool:
+        """Whether *strip*'s crop or transform carries keys of any kind."""
+        return False
+
+    def key_part(self, scene: Any, strip: Any, anchors: dict[int, tuple[float, float, float]],
+                 parts: list[tuple[int, rl.Part]]) -> None:
+        """Replace *strip*'s keys by one key per ``(frame, part)`` of *parts* and remember *anchors*."""
+        raise NotImplementedError
+
+    def current_frame(self, scene: Any) -> int:
+        return 1
 
 
 # -- tags ----------------------------------------------------------------------------------
@@ -529,6 +550,17 @@ def swap_parts(scene: Any, strips: Any, names: list[str], backend: Backend) -> d
             backend.align(strips, top, bottom)
         layout_id = tag_of(top)["layout"]                       # type: ignore[index]
         sw, sh = backend.source_size(top)
+        a_top, a_bottom = dict(backend.anchors(top)), dict(backend.anchors(bottom))
+        if a_top or a_bottom:                                   # Frame Inside keys: the keys change places too
+            first = min(list(a_top) + list(a_bottom))
+            if not a_top:                                       # the unkeyed one holds its framing from the first key
+                a_top = {first: tuple(_framing(top, layout_id, 0, sw, sh, fw, fh))}
+            if not a_bottom:
+                a_bottom = {first: tuple(_framing(bottom, layout_id, 1, sw, sh, fw, fh))}
+            backend.key_part(scene, top, a_bottom, _keyed_parts(top, layout_id, 0, a_bottom, sw, sh, fw, fh))
+            backend.key_part(scene, bottom, a_top, _keyed_parts(bottom, layout_id, 1, a_top, sw, sh, fw, fh))
+            done.append(base_name)
+            continue
         f_top = _framing(top, layout_id, 0, sw, sh, fw, fh)
         f_bottom = _framing(bottom, layout_id, 1, sw, sh, fw, fh)
         _show(top, layout_id, 0, f_bottom, sw, sh, fw, fh)
@@ -587,5 +619,83 @@ def layouts_of(scene: Any, strips: Any, names: list[str], backend: Backend) -> d
         if tag is not None and _is_split(tag["layout"]):
             partner = find_partner(strips, strip)
             row.update(part=tag["part"], partner=partner.name if partner is not None else "")
+            try:
+                row["inside"] = inside_of(scene, strip, backend)
+            except (LayoutError, KeyError, ValueError, ZeroDivisionError):
+                pass
         out[name] = row
     return out
+
+
+# -- Frame Inside (#625) ---------------------------------------------------------------------
+
+def _inside_context(strip: Any, backend: Backend, scene: Any) -> tuple[str, int, rl.Rect, int, int]:
+    """``(layout id, part index, window, source w, source h)`` of the split part *strip* (``LayoutError`` otherwise)."""
+    tag = tag_of(strip)
+    if tag is None or not _is_split(tag["layout"]):
+        raise LayoutError("is not a part of a split: Frame Inside works on the parts of a split layout")
+    fw, fh = backend.canvas_size(scene)
+    sw, sh = backend.source_size(strip)
+    return tag["layout"], tag["part"], _rect_of(tag["layout"], tag["part"], fw, fh), sw, sh
+
+
+def inside_of(scene: Any, strip: Any, backend: Backend) -> dict[str, Any]:
+    """The Frame Inside values the part *strip* shows now: ``{"x", "y", "zoom", "keyed"}`` (``LayoutError`` for a
+    strip that is no split part)."""
+    layout_id, index, rect, sw, sh = _inside_context(strip, backend, scene)
+    fw, fh = backend.canvas_size(scene)
+    framing = _framing(strip, layout_id, index, sw, sh, fw, fh)
+    now = ri.inside_from_framing(framing, rect, sw, sh)
+    return {"x": round(now.x, 4), "y": round(now.y, 4), "zoom": round(now.zoom, 4), "keyed": backend.has_keys(scene, strip)}
+
+
+def _keyed_parts(strip: Any, layout_id: str, index: int, anchors: dict[int, tuple[float, float, float]],
+                 sw: int, sh: int, fw: int, fh: int) -> list[tuple[int, rl.Part]]:
+    rect = _rect_of(layout_id, index, fw, fh)
+    return [(frame, rl.part_for(index, rect, sw, sh, fw, fh, framing)) for frame, framing in ri.bake(anchors)]
+
+
+def set_inside(scene: Any, strips: Any, names: list[str], backend: Backend, x: float | None = None,
+               y: float | None = None, zoom: float | None = None, key: bool = False) -> dict[str, Any]:
+    """Pan and zoom the picture inside each split part named (the strip itself, not its partner).
+
+    Only the values given change.  A part that has Frame Inside keys gets its framing keyed at the current
+    frame (the anchor is added or replaced); *key* True keys an unkeyed part too (its first key, at the current frame).  A part keyed by something else (Track All) is refused: Reset it first."""
+    found = _by_name(strips)
+    done: list[str] = []
+    skipped: list[dict] = []
+    frame = int(backend.current_frame(scene))
+    for name in [str(n) for n in names]:
+        strip = found.get(name)
+        if strip is None:
+            skipped.append({"strip": name, "reason": "no strip of that name here"})
+            continue
+        why = _problem(strip)
+        if why:
+            skipped.append({"strip": name, "reason": why})
+            continue
+        try:
+            layout_id, index, rect, sw, sh = _inside_context(strip, backend, scene)
+            fw, fh = backend.canvas_size(scene)
+            anchors = dict(backend.anchors(strip))
+            if backend.has_keys(scene, strip) and not anchors:
+                raise LayoutError("is keyed by Track All: Reset it first, then frame it")
+            now = ri.inside_from_framing(_framing(strip, layout_id, index, sw, sh, fw, fh), rect, sw, sh)
+            wanted = ri.Inside(now.x if x is None else float(x), now.y if y is None else float(y),
+                               now.zoom if zoom is None else float(zoom))
+            framing = ri.framing_from_inside(wanted, rect, sw, sh)
+            if anchors or key:
+                anchors[frame] = (framing.u, framing.v, framing.zoom)
+                backend.key_part(scene, strip, anchors, _keyed_parts(strip, layout_id, index, anchors, sw, sh, fw, fh))
+            else:
+                _show(strip, layout_id, index, framing, sw, sh, fw, fh)
+        except LayoutError as ex:
+            skipped.append({"strip": name, "reason": str(ex)})
+            continue
+        done.append(name)
+    if not done:
+        return {"status": "nothing", "changed": [], "skipped": skipped,
+                "message": "Nothing to frame: select the parts of a split" +
+                           ("".join(" ('{:s}' {:s})".format(s["strip"], s["reason"]) for s in skipped[:2]))}
+    return {"status": "ok", "changed": done, "skipped": skipped,
+            "message": "Framed inside {:d} part{:s}".format(len(done), "" if len(done) == 1 else "s")}

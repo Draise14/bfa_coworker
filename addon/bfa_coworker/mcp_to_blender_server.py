@@ -30,6 +30,7 @@ __all__ = (
     "get_actual_port",
 )
 
+import contextlib
 import json
 import math
 import random
@@ -1452,16 +1453,25 @@ def _execute_code_from_request(
         # #669: the step really runs now, so its depsgraph updates are Coworker's own.  Only here:
         # a deferred (waiting) or refused step must not call this, or ``ui_activity.own`` hides the
         # user's drag updates for a second and the gate reads "quiet" in the middle of the drag.
-        coworker_api.own_change()
+        # A read (no depsgraph change) marks nothing either: another client's read that runs while a
+        # write waits would blind the guard the same way.  Coworker's own bookkeeping always marks.
+        _owns = _internal or scene_busy.changes_scene(_tool, c)
+        if _owns:
+            coworker_api.own_change()
         _logged = None
         if not _internal and (not is_toolcode(c) or scene_busy.changes_scene(_tool, c)):
             _logged = step_code_log.begin(_tool, c, _thread)
         try:
-            with ui_activity.stepping():
+            with (ui_activity.stepping() if _owns else contextlib.nullcontext()):
                 result = _for_thread(_execute_code)(c, strict_json=s, **_data_kw)
         except BaseException:
             step_code_log.end(_logged, "raised")
             raise
+        finally:
+            if _owns:
+                # The window must end 1 s after the step ENDS (Revert's check, #359): a long
+                # step's updates are evaluated after it returns.
+                coworker_api.own_change()
         step_code_log.end(_logged, "error" if result.response.get("status") == "error" else "finished")
         return result if result.check_fn is None else _ExecResult(result.response, _for_thread(result.check_fn))
 

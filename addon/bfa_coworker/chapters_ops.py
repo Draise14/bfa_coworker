@@ -149,16 +149,16 @@ def _redraw() -> None:
             area.tag_redraw()
 
 
-def finish() -> tuple[str, str]:
+def finish() -> tuple[set[str], str]:
     """On the main thread, when the worker is over: write what it found (or say why not).  ``(level, line)``:
-    the level is ``INFO``, ``WARNING`` or ``ERROR`` for the report."""
+    the level is the report's set (info, warning or error)."""
     box = _JOB["box"] or {}
     stopped = _JOB["stop"] is not None and _JOB["stop"].is_set()
     _JOB.update(running=False, thread=None, progress="")
     _status(None)
     scene = bpy.data.scenes.get(_JOB["scene"])
     if scene is None:
-        return "WARNING", "The scene is gone: nothing was written"
+        return {'WARNING'}, "The scene is gone: nothing was written"
     fps = _wand._fps(scene)       # pylint: disable=protected-access
     if stopped:
         _JOB.update(message="Stopped: nothing was written", level="warn")
@@ -183,7 +183,7 @@ def finish() -> tuple[str, str]:
         else:
             _JOB.update(message=notes or "No chapters were made.", level="warn")
     _redraw()
-    return {"ok": "INFO", "warn": "WARNING"}.get(_JOB["level"], "ERROR"), _JOB["message"]
+    return {"ok": {'INFO'}, "warn": {'WARNING'}}.get(_JOB["level"], {'ERROR'}), _JOB["message"]
 
 
 def _job_tick() -> float | None:
@@ -367,7 +367,7 @@ class BFACW_OT_make_chapters_watch(Operator):
             return {'PASS_THROUGH'}
         self._end(context)
         level, line = finish()
-        self.report({level}, line)
+        self.report(level, line)
         return {'FINISHED'}
 
     def cancel(self, context: Any) -> None:

@@ -20,6 +20,8 @@ the result.  Make Short is H5 (#615), ``highlight_short.py``: the button asks wh
 from __future__ import annotations
 
 __all__ = (
+    "SearchError",
+    "start_search",
     "BFACW_OT_highlights_check",
     "BFACW_OT_highlights_dismiss",
     "BFACW_OT_highlights_find",
@@ -147,7 +149,7 @@ def _poll(cls: Any, context: Any) -> bool:
 
 def _idle_job() -> dict[str, Any]:
     return {"running": False, "progress": "", "stop": None, "thread": None, "scene": "", "box": None,
-            "message": "", "level": "ok", "id": 0}
+            "message": "", "level": "ok", "id": 0, "source": "panel", "report": None}
 
 
 _JOB: dict[str, Any] = _idle_job()
@@ -219,9 +221,10 @@ def _job_tick() -> float | None:
         if store["markers_on"]:
             sync_markers(scene, store)
         save(scene, store)
-        _wand._push_undo("Find Highlights")      # pylint: disable=protected-access
+        if _JOB["source"] == "panel":       # a search the agent started ends after its turn: no undo step of its own (#616)
+            _wand._push_undo("Find Highlights")      # pylint: disable=protected-access
         notes = " ".join(out["report"].get("messages") or [])
-        _JOB.update(message=(hp.summary(store, _wand._fps(scene), scene.frame_start).splitlines()[0] + " " + notes).strip(),   # pylint: disable=protected-access
+        _JOB.update(report=out["report"], message=(hp.summary(store, _wand._fps(scene), scene.frame_start).splitlines()[0] + " " + notes).strip(),   # pylint: disable=protected-access
                     level="ok" if found else "warn", summary=hp.summary(store, _wand._fps(scene), scene.frame_start))   # pylint: disable=protected-access
     _redraw()
     return None
@@ -238,6 +241,59 @@ def _work(finder: Any, box: dict[str, Any], asker: Any, opts: dict[str, Any], st
             progress=progress)
     except Exception as ex:  # pylint: disable=broad-exception-caught
         box["error"] = str(ex) or type(ex).__name__
+
+
+class SearchError(Exception):
+    """The search can't start.  ``kind``: ``external`` (the engine is an External Agent or Harness: hand the job to
+    it), ``busy`` (a search is running), or empty."""
+
+    def __init__(self, message: str, kind: str = "") -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
+def start_search(scene: Any, seconds: Any, kind: str, count: int, source: str = "panel") -> int:
+    """Read the edit's sentences and start the search on a worker thread (the panel's Find and the agent's
+    ``suggest_highlights`` are this one function).  Returns the number of sentences; raises :class:`SearchError`
+    with what to do when it can't start.  *source*: ``panel`` or ``agent`` (an agent's search has no undo step)."""
+    if _JOB["running"]:
+        raise SearchError("A search is already running: Stop it first", "busy")
+    finder = _finder()
+    if finder is None:
+        raise SearchError(NO_FINDER)
+    ed = scene.sequence_editor
+    if ed is None:
+        raise SearchError("The Sequencer's scene “{:s}” has no strips".format(scene.name))
+    if len(ed.meta_stack):
+        raise SearchError("Leave the meta strip first (Tab): the edit is read from its top level")
+    try:
+        got = scene_reader_ops.read(scene, scene_reader_ops.context_tokens())
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        raise SearchError("Couldn't read the edit: {!s}".format(ex)) from ex
+    if not got["sentences"]:
+        raise SearchError("No speech to pick from. Make a transcript first (Edit Transcript or Auto "
+                          "Captions). " + " ".join(got["report"]["messages"]))
+    from . import ask_json
+    try:
+        asker = ask_json.resolve_asker("Find Highlights")
+    except ask_json.Unavailable as ex:
+        raise SearchError(str(ex), ex.kind) from ex
+    # the edit's signature belongs to the sentences read now, not to the edit as it is when the search ends
+    box: dict[str, Any] = {"sentences": got["sentences"], "seconds": seconds, "kind": kind,
+                           "count": count, "edit": edit_signature(scene)}
+    opts = {"fps": _wand._fps(scene), "kind": kind, "seconds": float(seconds),      # pylint: disable=protected-access
+            "count": int(count), "context": scene_reader_ops.context_tokens()}
+    stop = threading.Event()
+    job_id = int(_JOB["id"]) + 1
+    thread = threading.Thread(target=_work, args=(finder, box, asker, opts, stop, job_id), name="bfacw-highlights",
+                              daemon=True)
+    _JOB.update(running=True, progress="Reading the transcript...", stop=stop, thread=thread, id=job_id,
+                scene=scene.name, box=box, message="", level="ok", summary="", source=source, report=None)
+    thread.start()
+    if not bpy.app.timers.is_registered(_job_tick):
+        # persistent: a file load must not drop the timer and leave the panel stuck on "Searching"
+        bpy.app.timers.register(_job_tick, first_interval=TICK, persistent=True)
+    return len(got["sentences"])
 
 
 class BFACW_OT_highlights_find(Operator):
@@ -265,50 +321,18 @@ class BFACW_OT_highlights_find(Operator):
         _draw_dialog(self.layout, self)
 
     def execute(self, context: Any) -> set[str]:
-        if _JOB["running"]:
-            self.report({'WARNING'}, "A search is already running: Stop it first")
-            return {'CANCELLED'}
-        finder = _finder()
-        if finder is None:
-            self.report({'ERROR'}, NO_FINDER)
-            return {'CANCELLED'}
         scene = _seq.sequencer_scene(context)
-        ed = scene.sequence_editor
-        if len(ed.meta_stack):
-            self.report({'ERROR'}, "Leave the meta strip first (Tab): the edit is read from its top level")
-            return {'CANCELLED'}
         try:
-            got = scene_reader_ops.read(scene, scene_reader_ops.context_tokens())
-        except Exception as ex:  # pylint: disable=broad-exception-caught
-            self.report({'ERROR'}, "Couldn't read the edit: {!s}".format(ex))
-            return {'CANCELLED'}
-        if not got["sentences"]:
-            self.report({'ERROR'}, "No speech to pick from. Make a transcript first (Edit Transcript or Auto "
-                                   "Captions). " + " ".join(got["report"]["messages"]))
-            return {'CANCELLED'}
-        from . import ask_json
-        try:
-            asker = ask_json.resolve_asker("Find Highlights")
-        except ask_json.Unavailable as ex:
+            count = start_search(scene, self.seconds, self.kind, self.count)
+        except SearchError as ex:
+            if ex.kind == "external":        # #616: an External Agent or Harness runs its own model: hand it the job
+                from . import highlight_tools
+                level, text = highlight_tools.hand_to_agent(context, float(self.seconds), self.kind, int(self.count))
+                self.report({level}, text)
+                return {'FINISHED'} if level == 'INFO' else {'CANCELLED'}
             self.report({'ERROR'}, str(ex))
             return {'CANCELLED'}
-        # the edit's signature belongs to the sentences read now, not to the edit as it is when the search ends
-        box: dict[str, Any] = {"sentences": got["sentences"], "seconds": self.seconds, "kind": self.kind,
-                               "count": self.count, "edit": edit_signature(scene)}
-        opts = {"fps": _wand._fps(scene), "kind": self.kind, "seconds": float(self.seconds),      # pylint: disable=protected-access
-                "count": int(self.count), "context": scene_reader_ops.context_tokens()}
-        stop = threading.Event()
-        job_id = int(_JOB["id"]) + 1
-        thread = threading.Thread(target=_work, args=(finder, box, asker, opts, stop, job_id), name="bfacw-highlights",
-                                  daemon=True)
-        _JOB.update(running=True, progress="Reading the transcript...", stop=stop, thread=thread, id=job_id,
-                    scene=scene.name, box=box, message="", level="ok", summary="")
-        thread.start()
-        if not bpy.app.timers.is_registered(_job_tick):
-            # persistent: a file load must not drop the timer and leave the panel stuck on "Searching"
-            bpy.app.timers.register(_job_tick, first_interval=TICK, persistent=True)
-        self.report({'INFO'}, "Searching {:d} sentences. The Highlights panel shows the progress.".format(
-            len(got["sentences"])))
+        self.report({'INFO'}, "Searching {:d} sentences. The Highlights panel shows the progress.".format(count))
         return {'FINISHED'}
 
 
@@ -710,6 +734,7 @@ def _on_load(*_args: Any) -> None:
 
 
 def register() -> None:
+    importlib.import_module(__package__ + ".highlight_tools")      # #616: the bridge's tools find it among the loaded modules
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
         _DONE.append(cls)

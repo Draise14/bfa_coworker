@@ -136,12 +136,20 @@ def _ask(context: Any, text: str, mode: str, thread_id: str = "") -> bool:
     props = getattr(context.window_manager, "bfacw_chat_props", None)
     if props is None or not chat_ready():
         return False
+    # The mode is for this request only (#670): chat_send copies it into the prompt it
+    # submits (a queued one carries it too), so the chat goes back to the user's mode
+    # when the send returns, also when it raises or is refused.
+    before = props.chat_mode
     props.chat_mode = mode
-    # The text goes as is: the target thread's half-typed draft stays (#417).
-    if thread_id:
-        bpy.ops.bfacw.chat_send(thread_id=thread_id, text=text)
-    else:
-        bpy.ops.bfacw.chat_send(editor=_editor_kind(context), text=text)
+    try:
+        # The text goes as is: the target thread's half-typed draft stays (#417).
+        if thread_id:
+            bpy.ops.bfacw.chat_send(thread_id=thread_id, text=text)
+        else:
+            bpy.ops.bfacw.chat_send(editor=_editor_kind(context), text=text)
+    finally:
+        if props.chat_mode != before:
+            props.chat_mode = before
     return True
 
 

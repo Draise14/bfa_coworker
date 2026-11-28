@@ -116,3 +116,70 @@ class TestTranslateText(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# -- #670: a wand's mode is for its request only ---------------------------------------
+
+def _ask_under_test(chat_send, ready=True):
+    """``_ask`` from the source, with a fake bpy whose chat_send is *chat_send(props)*."""
+    import types
+    src = (_ADDON / "ui_context_menus.py").read_text(encoding="utf-8")
+    start = src.index("def _ask(")
+    end = src.index("\n\n\n", start)
+    props = types.SimpleNamespace(chat_mode="AGENT")
+    ops = types.SimpleNamespace(chat_send=lambda **kw: chat_send(props, kw))
+    ns = {"bpy": types.SimpleNamespace(ops=types.SimpleNamespace(bfacw=ops)),
+          "chat_ready": lambda: ready, "_editor_kind": lambda _c: "",
+          "Any": object}
+    exec(compile(src[start:end], "ui_context_menus.py", "exec"), ns)   # noqa: S102
+    context = types.SimpleNamespace(window_manager=types.SimpleNamespace(bfacw_chat_props=props))
+    return ns["_ask"], context, props
+
+
+class TestAskKeepsTheChatsMode(unittest.TestCase):
+
+    def test_the_request_runs_in_ask_and_the_chat_gets_its_mode_back(self):
+        seen = []
+        ask, ctx, props = _ask_under_test(lambda p, kw: seen.append(p.chat_mode))
+        for before in ("AGENT", "PLAN", "AUTO"):
+            props.chat_mode = before
+            self.assertTrue(ask(ctx, "hi", "ASK"))
+            self.assertEqual(props.chat_mode, before)
+        self.assertEqual(seen, ["ASK"] * 3)
+
+    def test_a_thread_send_restores_too(self):
+        ask, ctx, props = _ask_under_test(lambda p, kw: None)
+        props.chat_mode = "PLAN"
+        self.assertTrue(ask(ctx, "hi", "ASK", thread_id="t1"))
+        self.assertEqual(props.chat_mode, "PLAN")
+
+    def test_a_failing_send_restores_it(self):
+        def boom(p, kw):
+            raise RuntimeError("Operator failed")
+        ask, ctx, props = _ask_under_test(boom)
+        props.chat_mode = "AGENT"
+        with self.assertRaises(RuntimeError):
+            ask(ctx, "hi", "ASK")
+        self.assertEqual(props.chat_mode, "AGENT")
+
+    def test_a_chat_that_is_not_ready_is_left_alone(self):
+        ask, ctx, props = _ask_under_test(lambda p, kw: self.fail("sent"), ready=False)
+        props.chat_mode = "PLAN"
+        self.assertFalse(ask(ctx, "hi", "ASK"))
+        self.assertEqual(props.chat_mode, "PLAN")
+
+
+class TestEveryWandGoesThroughAsk(unittest.TestCase):
+    """The three callers (Explain This, the editor spot, Translate Captions) all send via
+    ``_ask`` and none sets the chat's mode itself, so the restore covers each."""
+
+    def _body(self, marker):
+        src = (_ADDON / "ui_context_menus.py").read_text(encoding="utf-8")
+        start = src.index(marker)
+        return src[start:src.index("\nclass ", start) if "\nclass " in src[start:] else len(src)]
+
+    def test_each_caller_uses_ask_and_never_sets_the_mode(self):
+        src = (_ADDON / "ui_context_menus.py").read_text(encoding="utf-8")
+        self.assertEqual(src.count("chat_mode ="), 2)    # only inside _ask (set + restore)
+        for cls in ("class BFACW_OT_explain(", "class BFACW_OT_explain_spot(", "class BFACW_OT_translate("):
+            self.assertIn('_ask(', self._body(cls), cls)

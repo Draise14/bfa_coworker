@@ -382,6 +382,12 @@ def _tool(name, size=4000):
 
 class _LoopBase(_TurnLoopTestBase):
 
+    def setUp(self):
+        super().setUp()
+        # These tests are about the fit step leaving the SCENE's domains out; on the 16K preset those wait
+        # for load_tools from the start (#635), and the small windows here (8K) stand for a full one.
+        self.ac._SMALL_WINDOW_CTX = 0
+
     def _mk(self, script, ctx=8192, max_tokens=1024, thinking=0, tools=(), mode="local"):
         self.server.shutdown()
         self.server.server_close()

@@ -86,6 +86,7 @@ class _Base(_TurnLoopTestBase):
         self.helpers = importlib.import_module("bfa_coworker.helpers")
         # Every chat sees the same scene: the same domains (the default scene's).
         self.ac._detect_domain_from_scene = lambda: {"material"}
+        self.ac._SMALL_WINDOW_CTX = 0       # the fit step's own tests (8K stands for a full window; #635 defers the scene's domains on 16K)
 
     def _serve(self, script, ctx=32768, mode="local", mcp=None):
         self.server.shutdown()

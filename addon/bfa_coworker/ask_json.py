@@ -16,8 +16,9 @@ sentence ranges, Suggest Edits' menu of edits) asks through :func:`ask_json`:
    promised (:func:`validate`).
 3. A wrong answer gets one retry with the errors named.  After that
    :class:`AskFailed` is raised, which the caller counts ("1 of 5 parts could not be read").
-4. A server that refuses the ``response_format`` field (HTTP 400) is asked again without
-   it, and remembered for the session.
+4. A server that refuses the ``response_format`` field with a plain HTTP 400 is asked
+   again without it, and remembered (per URL and model) for the session.  A dead server, a
+   loading model (503), a timeout or a context overflow is not asked twice.
 5. External Agent and External Harness run their own model loop, so there is no direct
    request: :class:`Unavailable` is raised with ``kind == "external"`` so the caller can
    hand the job to the agent as a message instead.
@@ -61,8 +62,10 @@ STUB: Callable[..., Any] | None = None
 
 _MAX_ERRORS_SHOWN = 5
 _ECHO_LIMIT = 2000
-# Endpoints that refused ``response_format`` this session (asked without it from then on).
-_NO_SCHEMA: set[str] = set()
+# (url, model) pairs that refused ``response_format`` this session (asked without it from then on).
+_NO_SCHEMA: set[tuple[str, str]] = set()
+# ``llm_transport`` sets this ``error_kind`` for a plain 400 (a request the server rejects as written).
+_REFUSED_KIND = "bad_request"
 
 
 class Unavailable(Exception):
@@ -124,7 +127,7 @@ def validate(value: Any, schema: dict[str, Any], path: str = "$") -> list[str]:
         props = schema.get("properties") or {}
         for key in schema.get("required") or ():
             if key not in value:
-                errors.append("{:s}: missing \"{:s}\"".format(path, key))
+                errors.append("{:s}: missing \"{:s}\"".format(path, str(key)))
         for key, sub in props.items():
             if key in value:
                 errors += validate(value[key], sub, "{:s}.{:s}".format(path, key))
@@ -178,13 +181,13 @@ def extract_candidates(text: Any) -> Iterator[Any]:
     try:
         yield json.loads(s)
         return
-    except ValueError:
+    except (ValueError, RecursionError):
         pass
     seen: list[Any] = []
     for m in re.finditer(r"```(?:json|JSON)?\s*(.*?)```", s, re.S):
         try:
             seen.append(json.loads(m.group(1).strip()))
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
     decoder = json.JSONDecoder()
     i = 0
@@ -192,7 +195,7 @@ def extract_candidates(text: Any) -> Iterator[Any]:
         if s[i] in "{[":
             try:
                 value, end = decoder.raw_decode(s, i)
-            except ValueError:
+            except (ValueError, RecursionError):
                 i += 1
                 continue
             seen.append(value)
@@ -229,13 +232,44 @@ def _with_instruction(messages: list[dict[str, Any]], schema: dict[str, Any]) ->
     return out
 
 
+def strict_ok(schema: Any) -> bool:
+    """Whether *schema* meets OpenAI's strict structured-output rules: every object sets
+    ``additionalProperties: false`` and lists every property in ``required``."""
+    if not isinstance(schema, dict):
+        return True
+    if schema.get("type") == "object" or "properties" in schema:
+        props = schema.get("properties") or {}
+        if schema.get("additionalProperties") is not False:
+            return False
+        if set(schema.get("required") or ()) != set(props):
+            return False
+        if not all(strict_ok(v) for v in props.values()):
+            return False
+    if isinstance(schema.get("items"), dict) and not strict_ok(schema["items"]):
+        return False
+    return True
+
+
 def _schema_field(schema: dict[str, Any], name: str) -> dict[str, Any]:
+    # ``strict`` only for a schema the strict rules accept; a Remote API would answer 400 otherwise.
     return {"response_format": {"type": "json_schema",
-                                "json_schema": {"name": name, "strict": True, "schema": schema}}}
+                                "json_schema": {"name": name, "strict": strict_ok(schema), "schema": schema}}}
 
 
 def _is_local(url: str) -> bool:
     return bool(re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\])[:/]", url))
+
+
+def _was_refusal(transport: Callable[..., Any]) -> bool:
+    """Whether the transport's last failure was a plain 400.  A transport that cannot say
+    (a scripted stand-in without ``error_kind``) counts as a refusal."""
+    getter = getattr(transport, "error_kind", None)
+    if not callable(getter):
+        return True
+    try:
+        return getter() == _REFUSED_KIND
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False
 
 
 def reset_schema_memory() -> None:
@@ -257,7 +291,8 @@ def ask_json(messages: list[dict[str, Any]], schema: dict[str, Any], *,
     url, key, model = target
     convo = _with_instruction(messages, schema)
     budget = 0 if (thinking_off and _is_local(url)) else None
-    use_schema = bool(send_schema) and url not in _NO_SCHEMA
+    memo = (url, model or "")
+    use_schema = bool(send_schema) and memo not in _NO_SCHEMA
     errors: list[str] = []
     text = ""
     attempt = 0
@@ -266,13 +301,14 @@ def ask_json(messages: list[dict[str, Any]], schema: dict[str, Any], *,
         extra = _schema_field(schema, name) if use_schema else None
         response = transport(url, convo, None, key or None, model or None, max_tokens=max_tokens,
                              thinking_budget_tokens=budget, chat_mode="ASK", extra_body=extra)
-        if not response and use_schema:
-            # Perhaps the server refuses response_format: once more without it, and remember.
+        if not response and use_schema and _was_refusal(transport):
+            # The server rejected the request as written (plain 400), perhaps for
+            # response_format: once more without it, and remember.
             use_schema = False
             response = transport(url, convo, None, key or None, model or None, max_tokens=max_tokens,
                                  thinking_budget_tokens=budget, chat_mode="ASK", extra_body=None)
             if response:                  # only a server that answers plain was refusing the field
-                _NO_SCHEMA.add(url)
+                _NO_SCHEMA.add(memo)
         if not response:
             raise Unavailable("The model didn't answer (is the engine running?).")
         text = _response_text(response) or ""
@@ -376,4 +412,5 @@ def resolve_asker(purpose: str = "This tool", vision: bool = False) -> Callable[
     def transport(*args: Any, **kwargs: Any) -> Any:
         with llm_transport.using(scratch, threading.Event()):
             return llm_transport.openai_chat_completions(*args, **kwargs)
+    transport.error_kind = lambda: str(getattr(scratch, "error_kind", "") or "")    # type: ignore[attr-defined]
     return make_asker(target, transport)

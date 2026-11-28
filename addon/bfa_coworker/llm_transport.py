@@ -920,6 +920,7 @@ def openai_chat_completions(
                     print("[Coworker] _openai_chat_completions:   400 body = {:s}".format(_error_body[:500]))
                 _state().error = _msg[:500]
                 _state().error_full = _msg
+                _state().error_kind = "bad_request"      # #612: lets ask_json drop response_format
                 return None
 
             # -- 429 Too Many Requests: this chat waits, the others go on --

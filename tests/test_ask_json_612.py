@@ -321,8 +321,12 @@ class TestOverTheWire(unittest.TestCase):
         with lt.using(self.state, threading.Event()):
             return lt.openai_chat_completions(*args, **kwargs)
 
-    def _ask(self, **kw):
-        return aj.ask_json(MESSAGES, SCHEMA, target=(self.url, "", ""), transport=self._transport, **kw)
+    def _ask(self, url=None, model="", schema=SCHEMA, **kw):
+        # Same shape as resolve_asker's transport: it says what kind its last failure was.
+        def transport(*args, **kwargs):
+            return self._transport(*args, **kwargs)
+        transport.error_kind = lambda: self.state.error_kind
+        return aj.ask_json(MESSAGES, schema, target=(url or self.url, "", model), transport=transport, **kw)
 
     def test_schema_travels_and_a_valid_answer_passes(self):
         self.server.respond = lambda body: (200, _reply(json.dumps(GOOD)))
@@ -360,6 +364,75 @@ class TestOverTheWire(unittest.TestCase):
         self.assertEqual(["response_format" in b for b in self.server.bodies], [True, False])
         self._ask()                                                    # remembered
         self.assertEqual(["response_format" in b for b in self.server.bodies], [True, False, False])
+
+    def test_dead_server_gets_exactly_one_call(self):
+        calls = []
+        real = self._transport
+
+        def counting(*args, **kwargs):
+            calls.append(1)
+            return real(*args, **kwargs)
+
+        def transport(*args, **kwargs):
+            return counting(*args, **kwargs)
+        transport.error_kind = lambda: self.state.error_kind
+        dead = "http://127.0.0.1:1/v1/chat/completions"
+        with self.assertRaises(aj.Unavailable):
+            aj.ask_json(MESSAGES, SCHEMA, target=(dead, "", ""), transport=transport)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(aj._NO_SCHEMA, set())
+
+    def test_context_overflow_400_is_not_asked_twice(self):
+        self.server.respond = lambda body: (400, {"error": {"message": "the request exceeds the available context size"}})
+        with self.assertRaises(aj.Unavailable):
+            self._ask()
+        self.assertEqual(len(self.server.bodies), 1)
+        self.assertEqual(aj._NO_SCHEMA, set())
+
+    def test_refusal_is_remembered_per_model(self):
+        def respond(body):
+            if "response_format" in body and body.get("model") == "picky":
+                return 400, {"error": {"message": "unsupported field response_format"}}
+            return 200, _reply(json.dumps(GOOD))
+        self.server.respond = respond
+        self._ask(model="picky")
+        self._ask(model="easy")
+        self.assertEqual([("response_format" in b, b.get("model")) for b in self.server.bodies],
+                         [(True, "picky"), (False, "picky"), (True, "easy")])
+
+    def test_refused_schema_and_first_answer_invalid(self):
+        answers = ["{}", json.dumps(GOOD)]
+
+        def respond(body):
+            if "response_format" in body:
+                return 400, {"error": {"message": "unsupported field response_format"}}
+            return 200, _reply(answers.pop(0))
+        self.server.respond = respond
+        r = self._ask()
+        self.assertEqual((r.value, r.attempts, r.schema_sent), (GOOD, 2, False))
+        self.assertEqual(["response_format" in b for b in self.server.bodies], [True, False, False])
+
+    def test_strict_only_for_a_schema_that_meets_the_rules(self):
+        self.server.respond = lambda body: (200, _reply(json.dumps(GOOD)))
+        self._ask()                                                   # SCHEMA: optional "label", no additionalProperties
+        self.assertFalse(self.server.bodies[0]["response_format"]["json_schema"]["strict"])
+        self.assertTrue(aj.strict_ok(rf.X_SCHEMA))
+        self.server.respond = lambda body: (200, _reply('{"x": 0.5}'))
+        self._ask(schema=rf.X_SCHEMA)
+        self.assertTrue(self.server.bodies[1]["response_format"]["json_schema"]["strict"])
+
+
+class TestEdges(_Fresh):
+    def test_deeply_nested_brackets_are_a_failed_answer_not_a_crash(self):
+        t = _Script("Answer: " + "[" * 1500, "[" * 3000)
+        with self.assertRaises(aj.AskFailed) as cm:
+            _ask(t)
+        self.assertEqual(cm.exception.attempts, 2)
+        fenced = "```json" + chr(10) + "[" * 5000 + chr(10) + "```"
+        self.assertEqual(list(aj.extract_candidates(fenced)), [])
+
+    def test_non_string_required_key_does_not_raise(self):
+        self.assertTrue(aj.validate({}, {"type": "object", "required": [1]}))
 
 
 class TestFollowSubjectOnTheHelper(_Fresh):

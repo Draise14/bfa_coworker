@@ -51,7 +51,8 @@ PROMPT = (
 )
 # The answer's shape; ``ask_json`` checks it and asks once more when it is wrong.
 X_SCHEMA = {"type": "object", "properties": {"x": {"type": ["number", "null"], "minimum": 0, "maximum": 1}},
-            "required": ["x"]}
+            "required": ["x"],
+            "additionalProperties": False}
 _LIMIT_BYTES = 2_000_000
 # Replace the model: ``STUB(png_path, strip_name, frame) -> x | None``.
 STUB: Callable[[str, str, int], float | None] | None = None
@@ -153,6 +154,7 @@ def resolve_asker() -> Callable[[str, str, int], float | None]:
     def transport(*args: Any, **kwargs: Any) -> Any:
         with llm_transport.using(scratch, threading.Event()):
             return llm_transport.openai_chat_completions(*args, **kwargs)
+    transport.error_kind = lambda: str(getattr(scratch, "error_kind", "") or "")    # type: ignore[attr-defined]
     return make_asker(target, transport)
 
 

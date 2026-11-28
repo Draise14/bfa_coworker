@@ -35,6 +35,7 @@ __all__ = (
     "plan",
     "stretch_edges",
     "subtract",
+    "within",
 )
 
 import bisect
@@ -71,6 +72,17 @@ def subtract(ranges: Iterable[tuple], holes: Iterable[tuple]) -> list[tuple]:
                 break
         if cursor < end:
             out.append((cursor, end))
+    return out
+
+
+def within(ranges: Iterable[tuple], first: int, end: int) -> list[tuple]:
+    """*ranges* cut down to the frames ``first..end`` (end exclusive): the "this frame range only" mode of
+    Remove Silences (#615).  What lies outside is dropped, what crosses a border is shortened."""
+    out = []
+    for a, b in _merge(ranges):
+        a, b = max(a, first), min(b, end)
+        if b > a:
+            out.append((a, b))
     return out
 
 

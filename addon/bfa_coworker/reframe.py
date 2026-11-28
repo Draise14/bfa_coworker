@@ -41,6 +41,7 @@ __all__ = (
     "ensure_group",
     "find_modifier",
     "get_inputs",
+    "copy_scene",
     "make_vertical",
     "register",
     "set_inputs",
@@ -585,7 +586,9 @@ def reframe_strip(scene: Any, strip: Any, mode: str, reset: bool = False) -> str
     return action
 
 
-def _copy_scene(scene: Any) -> Any:
+def copy_scene(scene: Any, name: str, tags: dict[str, Any] | None = None) -> Any:
+    """A copy of *scene* called *name* that survives a save, with its own animation action and the custom
+    properties *tags* (Make Vertical's " Vertical" copy and Make Short's scene, #615, are made with it)."""
     copy = scene.copy()
     # ID.copy() hands back a copy with no user (the caller is meant to assign it), and
     # nothing counts as a scene's user -- not the window, not the workspace's Sequencer --
@@ -593,14 +596,19 @@ def _copy_scene(scene: Any) -> Any:
     # every scene it makes itself (bpy.data.scenes.new, Scene > New): not a fake user, so
     # deleting the copy by hand still removes it and leaves nothing behind.
     copy.use_extra_user = True
-    copy.name = scene.name + " Vertical"
-    copy[VERTICAL_TAG] = scene.name
+    copy.name = name
+    for key, value in (tags or {}).items():
+        copy[key] = value
     # scene.copy() shares the action: keyframes on the copy's modifiers would land in
     # the original's.  Give the copy its own.
     ad = copy.animation_data
     if ad is not None and ad.action is not None:
         ad.action = ad.action.copy()
     return copy
+
+
+def _copy_scene(scene: Any) -> Any:
+    return copy_scene(scene, scene.name + " Vertical", {VERTICAL_TAG: scene.name})
 
 
 def make_vertical(scene: Any, mode: str = "CROP", in_copy: bool = True, resolution: str = "1080x1920",

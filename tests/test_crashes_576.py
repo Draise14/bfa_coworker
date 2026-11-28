@@ -267,6 +267,68 @@ class DragGate(unittest.TestCase):
         self.assertEqual(res.check_fn()["result"], "late")
 
 
+class DragGateKeepsWatching669(unittest.TestCase):
+    """#669: a deferred or refused step must not mark its own change, or the drag test goes blind."""
+
+    def setUp(self):
+        ua.reset()
+        self.addCleanup(ua.reset)
+        self.wm = _wm()
+        bpy = types.SimpleNamespace(context=types.SimpleNamespace(window_manager=self.wm))
+        patcher = mock.patch.dict(sys.modules, {"bpy": bpy})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.ran = []
+
+    def _run(self):
+        self.ran.append(1)
+        return br._ExecResult({"status": "ok"})
+
+    def test_a_deferred_step_does_not_hide_the_users_updates(self):
+        cw = _load("coworker_api")
+        cw._own_until[0] = 0.0
+        ua.note_update()
+        res = br._busy_gate("", "execute_blender_code", WRITE, False, self._run)
+        self.assertIsNotNone(res.check_fn)
+        br._note_step("", "execute_blender_code", WRITE, False, res)
+        self.assertEqual(cw._own_until[0], 0.0)
+        before = ua._last_update[0]
+        ua.note_update()                               # the drag goes on
+        self.assertGreaterEqual(ua._last_update[0], before)
+        self.assertGreater(ua._last_update[0], 0.0)
+
+    def test_updates_keep_the_step_deferred_then_it_is_refused_at_the_limit(self):
+        ua.note_update()
+        t0 = 5000.0
+        with mock.patch.object(br.time, "monotonic", return_value=t0):
+            res = br._busy_gate("", "execute_blender_code", WRITE, False, self._run)
+        br._note_step("", "execute_blender_code", WRITE, False, res)
+        for i in range(1, 8):
+            ua.note_update()                           # an update every tick while the button is down
+            with mock.patch.object(br.time, "monotonic", return_value=t0 + i):
+                self.assertIsNone(res.check_fn())
+            br._note_step("", "execute_blender_code", WRITE, False, res)
+        self.assertEqual(self.ran, [])
+        ua.note_update()
+        with mock.patch.object(br.time, "monotonic", return_value=t0 + ua.WAIT_LIMIT + 1):
+            answer = res.check_fn()
+        self.assertEqual(self.ran, [])
+        self.assertEqual(answer["status"], "error")
+        self.assertIn("Nothing was changed", answer["message"])
+
+    def test_the_own_change_mark_is_set_where_the_step_runs(self):
+        src = (_ADDON / "mcp_to_blender_server.py").read_text(encoding="utf-8")
+        run_step = src[src.index("    def _run_code_step("):src.index("    def _run() -> _ExecResult")]
+        self.assertIn("coworker_api.own_change()", run_step)
+        note = src[src.index("def _note_step("):src.index("def _close_client(")]
+        self.assertNotIn("coworker_api.own_change()", note)
+
+    def test_the_known_limit_is_written_where_the_gate_lives(self):
+        src = (_ADDON / "mcp_to_blender_server.py").read_text(encoding="utf-8")
+        gate = src[src.index("def _busy_gate("):src.index("def _claim_gate(")]
+        self.assertIn("KNOWN LIMIT (#669)", gate)
+
+
 class PasteGuards(unittest.TestCase):
     def setUp(self):
         ua.reset()

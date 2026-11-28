@@ -1447,8 +1447,12 @@ def _execute_code_from_request(
 
     def _run_code_step(c: str, s: bool) -> _ExecResult:
         # The agent's code is on disk (redacted) before it runs, so a crash leaves it to read.
-        from . import scene_busy, step_code_log, ui_activity
+        from . import coworker_api, scene_busy, step_code_log, ui_activity
         from .risky_steps import is_toolcode
+        # #669: the step really runs now, so its depsgraph updates are Coworker's own.  Only here:
+        # a deferred (waiting) or refused step must not call this, or ``ui_activity.own`` hides the
+        # user's drag updates for a second and the gate reads "quiet" in the middle of the drag.
+        coworker_api.own_change()
         _logged = None
         if not _internal and (not is_toolcode(c) or scene_busy.changes_scene(_tool, c)):
             _logged = step_code_log.begin(_tool, c, _thread)
@@ -1556,6 +1560,10 @@ def _busy_gate(thread: str, tool: str, code: str, internal: bool, run: Callable[
         wm = bpy.context.window_manager
     except Exception:  # pylint: disable=broad-exception-caught
         wm = None
+    # KNOWN LIMIT (#669): the drag test is "a depsgraph update came within QUIET seconds".  A slider
+    # held still with the button down makes no update, so Python cannot see it and a step may run
+    # then.  Not fixable from the add-on today.  Never call ``own_change`` for a step that waits
+    # or is refused: it would hide the drag's own updates and release the gate mid-drag.
     kind, text = scene_busy.status(tool, code, internal, wm)
     if not kind:
         return run()
@@ -1744,9 +1752,10 @@ def _note_step(thread: str, tool: str, code: str, internal: bool, exec_result: _
     pushed undo steps (a write tool, or Coworker's own undo push), and while chats run
     side by side make a finished write call its own undo step, named by its chat
     ("Coworker (3D): execute blender code"), so Edit > Undo History shows who did what.
-    What the call changes is never read as the user's edit (Revert's check)."""
+    What the call changes is never read as the user's edit (Revert's check; the own-change mark
+    is set where the step runs, :func:`_run_code_step`, not here: this also sees a step that
+    only waits or was refused, #669)."""
     from . import coworker_api
-    coworker_api.own_change()
     if internal:
         if "undo_push" in code or "ed.undo" in code:
             side_by_side.JOURNAL.note(thread)

@@ -130,6 +130,12 @@ def _editor_kind(context: Any) -> str:
     return kind if kind in SIDEBAR_TYPES else ""
 
 
+def _agent_mode_state() -> dict[str, str]:
+    """The chat's External Agent mode-sync state (ui_chat), so a restore can skip the sync."""
+    from .ui_chat import _AGENT_MODE
+    return _AGENT_MODE
+
+
 def _ask(context: Any, text: str, mode: str, thread_id: str = "") -> bool:
     """Put *text* in the chat and send it (in *mode*), in the thread of the editor it was
     invoked from (Threads 2, #358), or in *thread_id*'s; False when the chat can't take it."""
@@ -149,7 +155,15 @@ def _ask(context: Any, text: str, mode: str, thread_id: str = "") -> bool:
             bpy.ops.bfacw.chat_send(editor=_editor_kind(context), text=text)
     finally:
         if props.chat_mode != before:
-            props.chat_mode = before
+            # Not an agent mode switch (#670): in External Agent the mode box change would
+            # flip the agent while the Ask turn starts. The next send syncs it (wait=True).
+            state = _agent_mode_state()
+            was = state["syncing"]
+            state["syncing"] = "1"
+            try:
+                props.chat_mode = before
+            finally:
+                state["syncing"] = was
     return True
 
 

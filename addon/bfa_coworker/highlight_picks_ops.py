@@ -60,6 +60,7 @@ KINDS = (("auto", "Auto", "Decide from the first minutes of the video", "AUTO", 
          ("tutorial", "Tutorial", "One tip with a result", "TOOL_SETTINGS", 2),
          ("talk", "Talk or Lecture", "A claim and its proof", "SPEAKER", 3))
 TICK = 0.25
+STILL_TICKS = 12          # 3 s without the frame moving while something plays: Preview stops watching
 NO_SHORT = "Make Short is built in Highlights H5 (#615) and is not in this build yet."
 NO_FINDER = "The search (Highlights H3, #613) is not in this build yet."
 
@@ -108,7 +109,10 @@ def check(scene: Any) -> tuple[dict[str, int] | None, str]:
     """Place every pick again in the edit as it plays now and keep the result on the scene.  ``(counts, "")``,
     or ``(None, why)`` when the edit's speech can't be read (the picks stay as they were)."""
     store = load(scene)
-    got = scene_reader_ops.read(scene)
+    try:
+        got = scene_reader_ops.read(scene)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        return None, "Couldn't read the edit: {!s}".format(ex)
     if not got["sentences"]:
         return None, "No speech to place the picks in: " + " ".join(got["report"]["messages"])
     counts = hp.place_all(store, got["sentences"], _wand._fps(scene))      # pylint: disable=protected-access
@@ -142,8 +146,23 @@ def _poll(cls: Any, context: Any) -> bool:
 
 # -- Find (a worker thread, a timer on the main thread) -------------------------------------------------
 
-_JOB: dict[str, Any] = {"running": False, "progress": "", "stop": None, "thread": None, "scene": "", "box": None,
-                        "message": "", "level": "ok"}
+def _idle_job() -> dict[str, Any]:
+    return {"running": False, "progress": "", "stop": None, "thread": None, "scene": "", "box": None,
+            "message": "", "level": "ok", "id": 0}
+
+
+_JOB: dict[str, Any] = _idle_job()
+
+
+def _reset_job() -> None:
+    """Forget a search for good (a file was loaded, or the add-on is going): its worker is told to stop, its
+    answer is dropped, and Find works again.  The next job gets a new id, so the old worker can't touch it."""
+    if _JOB["stop"] is not None:
+        _JOB["stop"].set()
+    new = _idle_job()
+    new["id"] = int(_JOB["id"]) + 1
+    _JOB.clear()
+    _JOB.update(new)
 
 
 def _finder() -> Any:
@@ -154,25 +173,29 @@ def _finder() -> Any:
 
 
 def _engine() -> tuple[str, str]:
-    """The line the dialog shows about where the transcript text goes: ``(text, kind)``."""
+    """The line the dialog shows about where the transcript text goes: ``(text, kind)``.  The kind is the one
+    ``ask_json.engine_kind`` decides, the decision the search itself acts on."""
+    from . import ask_json, llm_manager
     try:
-        prefs = bpy.context.preferences.addons[__package__].preferences
-        mode = str(prefs.operating_mode)
+        mode = str(bpy.context.preferences.addons[__package__].preferences.operating_mode)
     except (KeyError, AttributeError):
         mode = ""
+    try:
+        cfg = llm_manager.get_config()
+    except Exception:  # pylint: disable=broad-exception-caught
+        cfg = None
+    kind = ask_json.engine_kind(mode, cfg)
     host = ""
-    if mode == "REMOTE_API":
-        try:
-            from urllib.parse import urlparse
-            from . import llm_manager
-            host = urlparse(str(llm_manager.get_config().remote_api_url)).netloc
-        except Exception:  # pylint: disable=broad-exception-caught
-            host = ""
-    return hp.engine_line(mode, host)
+    if kind == "remote":
+        from urllib.parse import urlparse
+        host = urlparse(str(getattr(cfg, "remote_api_url", "") or "")).netloc
+    return hp.engine_line(kind, host)
 
 
 def _job_tick() -> float | None:
     """On the main thread: show the progress; when the worker is over, keep its picks on the scene."""
+    if not _JOB["running"]:
+        return None
     thread = _JOB["thread"]
     _redraw()
     if thread is not None and thread.is_alive():
@@ -184,13 +207,15 @@ def _job_tick() -> float | None:
         return None
     if box.get("error"):
         _JOB.update(message=box["error"], level="error")
+    elif "result" not in box:
+        _JOB.update(message="The search ended without an answer. Try Find Highlights again.", level="error")
     else:
         out = box["result"]
         sentences = box["sentences"]
         store = load(scene)
         found = hp.from_found(out["picks"], sentences)
         store["picks"] = found
-        store["found"] = {"edit": edit_signature(scene), "seconds": int(box["seconds"]), "kind": str(box["kind"]),
+        store["found"] = {"edit": box["edit"], "seconds": int(box["seconds"]), "kind": str(box["kind"]),
                           "count": int(box["count"])}
         if store["markers_on"]:
             sync_markers(scene, store)
@@ -203,12 +228,15 @@ def _job_tick() -> float | None:
     return None
 
 
-def _work(finder: Any, box: dict[str, Any], asker: Any, opts: dict[str, Any]) -> None:
+def _work(finder: Any, box: dict[str, Any], asker: Any, opts: dict[str, Any], stop: Any, job_id: int) -> None:
+    def progress(text: Any) -> None:
+        if _JOB["id"] == job_id:           # a worker from a job that was reset must not write into the next one
+            _JOB["progress"] = str(text)
     try:
         box["result"] = finder.find_highlights(
             box["sentences"], opts["fps"], asker, kind=opts["kind"], max_seconds=opts["seconds"],
-            count=opts["count"], context=opts["context"], should_stop=_JOB["stop"].is_set,
-            progress=lambda text: _JOB.update(progress=str(text)))
+            count=opts["count"], context=opts["context"], should_stop=stop.is_set,
+            progress=progress)
     except Exception as ex:  # pylint: disable=broad-exception-caught
         box["error"] = str(ex) or type(ex).__name__
 
@@ -265,15 +293,21 @@ class BFACW_OT_highlights_find(Operator):
         except ask_json.Unavailable as ex:
             self.report({'ERROR'}, str(ex))
             return {'CANCELLED'}
+        # the edit's signature belongs to the sentences read now, not to the edit as it is when the search ends
         box: dict[str, Any] = {"sentences": got["sentences"], "seconds": self.seconds, "kind": self.kind,
-                               "count": self.count}
+                               "count": self.count, "edit": edit_signature(scene)}
         opts = {"fps": _wand._fps(scene), "kind": self.kind, "seconds": float(self.seconds),      # pylint: disable=protected-access
                 "count": int(self.count), "context": scene_reader_ops.context_tokens()}
-        thread = threading.Thread(target=_work, args=(finder, box, asker, opts), name="bfacw-highlights", daemon=True)
-        _JOB.update(running=True, progress="Reading the transcript...", stop=threading.Event(), thread=thread,
+        stop = threading.Event()
+        job_id = int(_JOB["id"]) + 1
+        thread = threading.Thread(target=_work, args=(finder, box, asker, opts, stop, job_id), name="bfacw-highlights",
+                                  daemon=True)
+        _JOB.update(running=True, progress="Reading the transcript...", stop=stop, thread=thread, id=job_id,
                     scene=scene.name, box=box, message="", level="ok", summary="")
         thread.start()
-        bpy.app.timers.register(_job_tick, first_interval=TICK)
+        if not bpy.app.timers.is_registered(_job_tick):
+            # persistent: a file load must not drop the timer and leave the panel stuck on "Searching"
+            bpy.app.timers.register(_job_tick, first_interval=TICK, persistent=True)
         self.report({'INFO'}, "Searching {:d} sentences. The Highlights panel shows the progress.".format(
             len(got["sentences"])))
         return {'FINISHED'}
@@ -287,9 +321,16 @@ class BFACW_OT_highlights_stop(Operator):
     bl_options = {'REGISTER'}
 
     def execute(self, _context: Any) -> set[str]:
+        if not _JOB["running"]:
+            return {'FINISHED'}
         if _JOB["stop"] is not None:
             _JOB["stop"].set()
-            _JOB["progress"] = "Stopping..."
+        thread = _JOB["thread"]
+        if thread is None or not thread.is_alive():
+            _job_tick()            # the worker is over but nobody took its answer (the timer was lost): take it now
+        else:
+            # H3 looks at the stop between requests: one already sent to the engine is waited for
+            _JOB["progress"] = "Stopping after the current request..."
         return {'FINISHED'}
 
 
@@ -347,7 +388,7 @@ _PREVIEW: dict[str, Any] = {"scene": "", "orig": None, "end": 0}
 
 
 def _stop_playback() -> None:
-    win, playing = _window_playing()
+    win, playing = _window_playing(bpy.data.scenes.get(_PREVIEW["scene"]))
     if playing and win is not None:
         try:
             with bpy.context.temp_override(window=win, screen=win.screen):
@@ -375,10 +416,13 @@ def _restore_preview() -> None:
     _redraw()
 
 
-def _window_playing() -> tuple[Any, bool]:
+def _window_playing(scene: Any = None) -> tuple[Any, bool]:
+    """``(the window to play in, is anything playing)``: the window that shows *scene* when there is one (the
+    Sequencer's scene can differ from the first window's), else the first window."""
     wm = bpy.context.window_manager
     wins = list(wm.windows) if wm else []
-    return (wins[0] if wins else None), any(w.screen.is_animation_playing for w in wins)
+    mine = [w for w in wins if scene is not None and getattr(w, "scene", None) is scene]
+    return (mine or wins or [None])[0], any(w.screen.is_animation_playing for w in wins)
 
 
 def _preview_tick() -> float | None:
@@ -386,9 +430,14 @@ def _preview_tick() -> float | None:
     scene = bpy.data.scenes.get(_PREVIEW["scene"])
     if _PREVIEW["orig"] is None or scene is None:
         return None
-    _win, playing = _window_playing()
+    _win, playing = _window_playing(scene)
     last = _PREVIEW.get("seen", 0)
     _PREVIEW["seen"] = scene.frame_current
+    # playback that never moves this scene's frame (another scene is playing): give up after a while
+    _PREVIEW["still"] = _PREVIEW.get("still", 0) + 1 if playing and scene.frame_current == last else 0
+    if _PREVIEW["still"] >= STILL_TICKS:
+        _stop_playback()
+        playing = False
     if playing and (scene.frame_current >= _PREVIEW["end"] or scene.frame_current < last):    # reached the end, or looped
         _stop_playback()
         playing = False
@@ -419,10 +468,11 @@ class BFACW_OT_highlights_preview(_PickOperator):
         scene.frame_preview_start, scene.frame_preview_end = first, last
         scene.frame_current = first
         _PREVIEW["seen"] = first
+        _PREVIEW["still"] = 0
         handlers = getattr(bpy.app.handlers, "frame_change_post", None)
         if handlers is not None and _on_frame not in handlers:
             handlers.append(_on_frame)
-        win, playing = _window_playing()
+        win, playing = _window_playing(scene)
         if win is not None and playing:
             with bpy.context.temp_override(window=win, screen=win.screen):
                 bpy.ops.screen.animation_cancel(restore_frame=False)
@@ -430,7 +480,7 @@ class BFACW_OT_highlights_preview(_PickOperator):
             with bpy.context.temp_override(window=win, screen=win.screen):
                 bpy.ops.screen.animation_play()
         if not bpy.app.timers.is_registered(_preview_tick):
-            bpy.app.timers.register(_preview_tick, first_interval=TICK)
+            bpy.app.timers.register(_preview_tick, first_interval=TICK, persistent=True)
         self.report({'INFO'}, "Playing '{:s}' ({:.0f} s)".format(found["title"], found["seconds"]))
         return {'FINISHED'}
 
@@ -616,18 +666,40 @@ _CLASSES = (BFACW_OT_highlights_find, BFACW_OT_highlights_stop, BFACW_OT_highlig
 _DONE: list[type] = []
 
 
+def _persistent(fn: Any) -> Any:
+    return getattr(bpy.app.handlers, "persistent", lambda f: f)(fn)
+
+
+@_persistent
+def _on_load(*_args: Any) -> None:
+    """Before another file replaces this one: put the preview range back on the scene that is still here, and forget
+    a running search, so nothing of this file is applied to the next one that happens to have the same scene name."""
+    try:
+        _restore_preview()
+    except Exception:  # pylint: disable=broad-exception-caught
+        _PREVIEW.update(orig=None)
+    if bpy.app.timers.is_registered(_preview_tick):
+        bpy.app.timers.unregister(_preview_tick)
+    _reset_job()
+
+
 def register() -> None:
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
         _DONE.append(cls)
+    handlers = getattr(bpy.app.handlers, "load_pre", None)
+    if handlers is not None and _on_load not in handlers:
+        handlers.append(_on_load)
 
 
 def unregister() -> None:
     for fn in (_job_tick, _preview_tick):
         if bpy.app.timers.is_registered(fn):
             bpy.app.timers.unregister(fn)
-    if _JOB["stop"] is not None:
-        _JOB["stop"].set()
+    handlers = getattr(bpy.app.handlers, "load_pre", None)
+    while handlers is not None and _on_load in handlers:
+        handlers.remove(_on_load)
+    _reset_job()
     _restore_preview()
     for cls in reversed(_DONE):
         try:

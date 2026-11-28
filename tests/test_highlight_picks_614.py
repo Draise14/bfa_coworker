@@ -27,6 +27,7 @@ __all__ = ()
 
 import json
 import sys
+import threading
 import types
 import unittest
 
@@ -258,14 +259,31 @@ class TestMarkersPreviewAndWords(unittest.TestCase):
         self.assertEqual(HP.preview_range({"start": 5, "end": 6}, 1, 1000), (5, 5))
 
     def test_engine_line_says_where_the_transcript_goes(self):
-        text, kind = HP.engine_line("LOCAL_LLM")
+        text, kind = HP.engine_line("local")
         self.assertEqual(kind, "local")
         self.assertIn("Nothing leaves", text)
-        text, kind = HP.engine_line("REMOTE_API", "api.example.com")
+        text, kind = HP.engine_line("remote", "api.example.com")
         self.assertEqual((kind, "api.example.com" in text), ("remote", True))
         self.assertIn("sent", text)
-        self.assertEqual(HP.engine_line("EXTERNAL_AGENT")[1], "external")
-        self.assertEqual(HP.engine_line("")[1], "local")
+        text, kind = HP.engine_line("external")
+        self.assertEqual(kind, "external")
+        self.assertIn("needs Local or Remote", text)       # the search is refused in this mode: the line says so
+        self.assertNotIn("Nothing leaves", text)
+
+    def test_the_privacy_line_follows_the_decision_the_search_acts_on(self):
+        aj = W._import("ask_json")
+        cfg = types.SimpleNamespace(mode="remote")
+        for mode, config, kind in (("LOCAL_LLM", types.SimpleNamespace(mode="local"), "local"),
+                                   ("REMOTE_API", types.SimpleNamespace(mode="local"), "remote"),
+                                   ("LOCAL_LLM", cfg, "remote"), ("", types.SimpleNamespace(mode="local"), "local"),
+                                   ("EXTERNAL_AGENT", cfg, "external"), ("EXTERNAL_HARNESS", cfg, "external")):
+            self.assertEqual(aj.engine_kind(mode, config), kind, (mode, config))
+            if kind == "external":
+                with self.assertRaises(aj.Unavailable):
+                    aj.engine_target(mode, config, True)
+            else:
+                aj.engine_target(mode, types.SimpleNamespace(mode=config.mode, remote_api_url="http://x", local_port=1),
+                                 True)
 
     def test_clock_and_summary(self):
         self.assertEqual(HP.clock(30 * 42, 30), "0:42")
@@ -303,8 +321,8 @@ def _fake_bpy():
     bpy.props.EnumProperty = bpy.props.IntProperty = bpy.props.StringProperty = lambda **kw: ("prop", kw)
     timers = {}
     bpy.app = types.SimpleNamespace(timers=types.SimpleNamespace(
-        register=lambda fn, first_interval=0.0: timers.__setitem__(fn, first_interval),
-        unregister=lambda fn: timers.pop(fn, None), is_registered=lambda fn: fn in timers), handlers=types.SimpleNamespace())
+        register=lambda fn, first_interval=0.0, persistent=False: timers.__setitem__(fn, (first_interval, persistent)),
+        unregister=lambda fn: timers.pop(fn, None), is_registered=lambda fn: fn in timers), handlers=types.SimpleNamespace(load_pre=[], frame_change_post=[]))
     bpy.timers = timers
     bpy.data = types.SimpleNamespace(scenes={})
     bpy.context = types.SimpleNamespace(window_manager=None, preferences=types.SimpleNamespace(addons={}))
@@ -519,6 +537,134 @@ class TestOperators(unittest.TestCase):
         self.assertEqual(self.ops.load(self.scene)["found"]["kind"], "tutorial")
         self.assertFalse(self.ops._JOB["running"])
         self.assertIn("1 highlight found", self.ops._JOB["message"])
+
+    def _find_op(self):
+        op = self.ops.BFACW_OT_highlights_find()
+        op.seconds, op.count, op.kind = "60", 5, "auto"
+        op.reports = []
+        op.report = lambda level, text: op.reports.append((sorted(level)[0], text))
+        return op
+
+    def _start_find(self, finder):
+        self.ops._finder = lambda: types.SimpleNamespace(find_highlights=finder)
+        self._patch(self.ops.scene_reader_ops, "context_tokens", lambda: 16384)
+        aj = W._import("ask_json")
+        aj.STUB = lambda *a, **k: None
+        self.addCleanup(setattr, aj, "STUB", None)
+        self.addCleanup(self.ops._reset_job)
+        op = self._find_op()
+        self.assertEqual(op.execute(self.ctx), {'FINISHED'})
+        return op
+
+    def test_the_search_timer_is_persistent_so_a_file_load_cannot_drop_it(self):
+        self._start_find(lambda sentences, fps, ask, **kw: {"picks": [], "report": {}})
+        self.ops._JOB["thread"].join(5)
+        self.assertEqual(self.bpy.timers[self.ops._job_tick][1], True)
+
+    def test_find_works_again_after_the_timer_was_dropped_and_stop_takes_the_answer(self):
+        self._start_find(lambda sentences, fps, ask, **kw: {"picks": [pick_of(sentences, 2, 3, title="Late")],
+                                                              "report": {"messages": []}})
+        self.ops._JOB["thread"].join(5)
+        self.bpy.timers.clear()                          # Blender dropped the timer
+        self.assertTrue(self.ops._JOB["running"])
+        self.assertEqual(self.ops.BFACW_OT_highlights_stop().execute(None), {'FINISHED'})
+        self.assertFalse(self.ops._JOB["running"])
+        self.assertEqual([p["title"] for p in self.ops.load(self.scene)["picks"]], ["Late"])
+        self.assertEqual(self._find_op().execute(self.ctx), {'FINISHED'})      # no "already running"
+
+    def test_stop_with_a_dead_worker_and_no_answer_clears_running(self):
+        self._start_find(lambda sentences, fps, ask, **kw: (_ for _ in ()).throw(SystemExit()))
+        self.ops._JOB["thread"].join(5)
+        self.bpy.timers.clear()
+        self.ops.BFACW_OT_highlights_stop().execute(None)
+        self.assertFalse(self.ops._JOB["running"])
+        self.assertEqual(self.ops._JOB["level"], "error")
+
+    def test_stop_while_a_request_is_out_says_it_waits(self):
+        gate = threading.Event()
+        self._start_find(lambda sentences, fps, ask, **kw: (gate.wait(5), {"picks": [], "report": {}})[1])
+        self.ops.BFACW_OT_highlights_stop().execute(None)
+        self.assertTrue(self.ops._JOB["running"])
+        self.assertIn("current request", self.ops._JOB["progress"])
+        gate.set()
+        self.ops._JOB["thread"].join(5)
+        self.assertIsNone(self.ops._job_tick())
+        self.assertFalse(self.ops._JOB["running"])
+
+    def test_unregister_and_a_file_load_forget_a_running_search(self):
+        gate = threading.Event()
+        self._start_find(lambda sentences, fps, ask, progress=None, **kw: (progress("old"), gate.wait(5),
+                                                                          {"picks": [], "report": {}})[2])
+        old = self.ops._JOB["stop"]
+        self.ops._on_load()
+        self.assertTrue(old.is_set())
+        self.assertFalse(self.ops._JOB["running"])
+        gate.set()
+        self.assertIsNone(self.ops._job_tick())
+        self.assertEqual(len(self.ops.load(self.scene)["picks"]), 2)      # the dropped job's answer was not applied
+        self.assertEqual(self._find_op().execute(self.ctx), {'FINISHED'})
+        self.ops.unregister()
+        self.assertFalse(self.ops._JOB["running"])
+
+    def test_the_picks_keep_the_signature_of_the_edit_that_was_read_not_the_one_at_the_end(self):
+        def strip(left):
+            return types.SimpleNamespace(name="s", type="SOUND", channel=1, left_handle=left, right_handle=left + 10,
+                                         content_start=0.0, mute=False)
+        self.scene.sequence_editor.strips_all = [strip(1)]
+        first = self.ops.edit_signature(self.scene)
+
+        def finder(sentences, fps, ask, **kw):
+            self.scene.sequence_editor.strips_all = [strip(50)]        # the artist moves a strip meanwhile
+            return {"picks": [pick_of(sentences, 2, 3)], "report": {}}
+        self._start_find(finder)
+        self.ops._JOB["thread"].join(5)
+        self.ops._job_tick()
+        self.assertEqual(self.ops.load(self.scene)["found"]["edit"], first)
+        self.assertNotEqual(first, self.ops.edit_signature(self.scene))     # so the panel's "edit changed" line shows
+
+    def test_a_file_load_puts_the_preview_range_back_and_forgets_the_preview(self):
+        self.bpy.ops = types.SimpleNamespace(screen=types.SimpleNamespace(
+            animation_play=lambda: None, animation_cancel=lambda restore_frame=True: None))
+        self.ops.bpy.context = types.SimpleNamespace(window_manager=types.SimpleNamespace(windows=[]),
+                                                     temp_override=lambda **kw: _Ctx())
+        op = self.ops.BFACW_OT_highlights_preview()
+        op.pick, op.report = self.ids[0], lambda *a: None
+        op.execute(self.ctx)
+        self.assertIsNotNone(self.ops._PREVIEW["orig"])
+        self.ops._on_load()
+        self.assertIsNone(self.ops._PREVIEW["orig"])
+        self.assertNotIn(self.ops._preview_tick, self.bpy.timers)
+        self.assertFalse(self.scene.use_preview_range)
+        self.assertNotIn(self.ops._on_frame, self.bpy.app.handlers.frame_change_post)
+
+    def test_preview_stops_watching_when_another_scene_is_the_one_playing(self):
+        played = []
+        self.bpy.ops = types.SimpleNamespace(screen=types.SimpleNamespace(
+            animation_play=lambda: played.append("play"), animation_cancel=lambda restore_frame=True: played.append("cancel")))
+        other = types.SimpleNamespace(name="Other")
+        win = types.SimpleNamespace(scene=other, screen=types.SimpleNamespace(is_animation_playing=False, areas=[]))
+        self.bpy.context = types.SimpleNamespace(window_manager=types.SimpleNamespace(windows=[win]),
+                                                 temp_override=lambda **kw: _Ctx(), preferences=types.SimpleNamespace(addons={}))
+        self.ops.bpy.context = self.bpy.context
+        op = self.ops.BFACW_OT_highlights_preview()
+        op.pick, op.report = self.ids[0], lambda *a: None
+        op.execute(self.ctx)
+        win.screen.is_animation_playing = True            # playing, but our scene's frame never moves
+        for _ in range(self.ops.STILL_TICKS - 1):
+            self.assertEqual(self.ops._preview_tick(), self.ops.TICK)
+        self.assertIsNone(self.ops._preview_tick())
+        self.assertIn("cancel", played)
+        self.assertFalse(self.scene.use_preview_range)
+
+    def test_check_with_a_reader_that_raises_leaves_the_picks_and_says_why(self):
+        def broken(scene, context=None):
+            raise RuntimeError("no reader")
+        self._patch(self.ops.scene_reader_ops, "read", broken)
+        before = self.scene[HP.PROP]
+        counts, why = self.ops.check(self.scene)
+        self.assertIsNone(counts)
+        self.assertIn("no reader", why)
+        self.assertEqual(self.scene[HP.PROP], before)
 
     def test_edit_signature_changes_when_a_strip_moves(self):
         def strip(left):

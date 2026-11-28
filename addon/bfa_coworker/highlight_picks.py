@@ -300,13 +300,14 @@ def state_text(state: str) -> str:
     return {"ok": "", "changed": "Changed, check it", "gone": "No longer in the edit"}.get(state, "")
 
 
-def engine_line(operating_mode: str, host: str = "") -> tuple[str, str]:
-    """``(text, kind)``: what the dialog says about where the transcript text goes.  *kind* is
-    ``local`` (nothing leaves the machine), ``remote`` or ``external``."""
-    if operating_mode == "REMOTE_API":
+def engine_line(kind: str, host: str = "") -> tuple[str, str]:
+    """``(text, kind)``: what the dialog says about where the transcript text goes.  *kind* is what
+    ``ask_json.engine_kind`` decided (``local``, ``remote`` or ``external``), the same decision the search acts on."""
+    if kind == "remote":
         return ("The transcript text is sent to {:s}.".format(host or "the Remote API"), "remote")
-    if operating_mode in ("EXTERNAL_AGENT", "EXTERNAL_HARNESS"):
-        return ("The agent you started reads the transcript text; Coworker sends it nothing itself.", "external")
+    if kind == "external":
+        return ("The search needs Local or Remote: an External Agent or Harness runs its own model. Switch Coworker "
+                "to Local LLM or Remote API to use Find Highlights.", "external")
     return ("Nothing leaves this computer: the Local model reads the transcript.", "local")
 
 

@@ -41,6 +41,7 @@ __all__ = (
     "Result",
     "Unavailable",
     "ask_json",
+    "engine_kind",
     "engine_target",
     "extract_candidates",
     "make_asker",
@@ -356,6 +357,16 @@ def _local_has_vision(port: int, fetch: Callable[[str], dict[str, Any]] | None =
     return None
 
 
+def engine_kind(operating_mode: str, cfg: Any) -> str:
+    """Which engine a request goes to: ``external`` (no direct asking), ``remote`` or ``local``.  The one decision
+    :func:`engine_target` acts on and the Find dialog's privacy line is worded from."""
+    if operating_mode in ("EXTERNAL_AGENT", "EXTERNAL_HARNESS"):
+        return "external"
+    if operating_mode == "REMOTE_API" or getattr(cfg, "mode", "") == "remote":
+        return "remote"
+    return "local"
+
+
 def engine_target(operating_mode: str, cfg: Any, running: bool, *, purpose: str = "This tool",
                   vision: bool = False,
                   fetch: Callable[[str], dict[str, Any]] | None = None) -> tuple[str, str, str]:
@@ -364,11 +375,12 @@ def engine_target(operating_mode: str, cfg: Any, running: bool, *, purpose: str 
     *purpose* names the caller in the messages; *vision* also needs a model that sees images.
     """
     need = " (with a vision model)" if vision else ""
-    if operating_mode in ("EXTERNAL_AGENT", "EXTERNAL_HARNESS"):
+    kind = engine_kind(operating_mode, cfg)
+    if kind == "external":
         raise Unavailable("{:s} asks the model directly; an External Agent or Harness runs its own. "
                           "Switch Coworker to Local LLM{:s} or Remote API to use it.".format(purpose, need),
                           "external")
-    if operating_mode == "REMOTE_API" or getattr(cfg, "mode", "") == "remote":
+    if kind == "remote":
         url = str(getattr(cfg, "remote_api_url", "") or "")
         if not url:
             raise Unavailable("{:s} needs {:s}: set the Remote API URL, key and model in Coworker's "

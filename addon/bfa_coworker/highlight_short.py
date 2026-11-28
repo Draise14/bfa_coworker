@@ -81,8 +81,8 @@ def _silences(short: Any, first: int, last: int) -> tuple[str, int]:
     names = [s.name for s in _media(short.sequence_editor, first, last + 1)]
     if not names:
         return sp.step_line("Remove Silences", "skipped", "no sound in the range"), 0
-    out = _wand.remove_silences(short, sp.SILENCES, names, ripple=True, update_end=False, report_progress=False,
-                                frame_range=(first, last + 1))
+    out = _wand.remove_silences(short, sp.SILENCES, names, ripple=True, update_end=False, context=bpy.context,
+                                report_progress=True, frame_range=(first, last + 1))
     if out["status"] == "ok":
         return sp.step_line("Remove Silences", "done", out["message"].replace(" from the edit", "")), int(out["frames_removed"])
     if out["status"] == "nothing":
@@ -190,6 +190,9 @@ def build(scene: Any, pick: dict[str, Any], steps: dict[str, bool], window: Any 
         raise ShortError("This scene has no strips.")
     if len(ed.meta_stack):
         raise ShortError("Leave the meta strip first (Tab): a short is made from the top level of the edit.")
+    problem = sp.range_problem(pick["start"], pick["end"], scene.frame_start, scene.frame_end)
+    if problem:
+        raise ShortError(problem)
     before = ops.edit_signature(scene)
     try:
         got = scene_reader_ops.read(scene)

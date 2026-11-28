@@ -20,12 +20,20 @@ Run with::
 
 __all__ = ()
 
+import importlib
 import json
 import re
+import sys
+import types
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 import test_wand_remove_silences as W
+import test_captions as TC
+from test_reframe_copy_saved import _Action, _Scene
+from test_sequencer_ui import _reframe
 
 SP = W._import("short_plan")
 CP = W._import("wand.cut_plan")
@@ -150,6 +158,197 @@ class TestWithin(unittest.TestCase):
         self.assertEqual(CP.within([(0, 100)], 100, 200), [])
 
 
+class TestTheRangeFitsTheScene(unittest.TestCase):
+    """The picks come from the strips, which may reach past the scene's range: refuse, don't cut off."""
+
+    def test_borders_alone_would_clamp_silently_so_the_check_comes_first(self):
+        self.assertEqual(SP.borders(500, 700, None, None, 24.0, 1, 250), (492, 492))      # the 1-frame short
+        self.assertEqual(SP.borders(200, 400, None, None, 24.0, 1, 250), (192, 250))      # cut off
+        self.assertTrue(SP.range_problem(500, 700, 1, 250))
+        self.assertTrue(SP.range_problem(200, 400, 1, 250))
+
+    def test_a_pick_past_the_end_is_refused_with_a_way_out(self):
+        text = SP.range_problem(500, 700, 1, 250)
+        self.assertIn("outside the scene's range", text)
+        self.assertIn("Move the Start / End frame", text)
+
+    def test_a_pick_that_crosses_the_end_is_refused(self):
+        text = SP.range_problem(200, 400, 1, 250)
+        self.assertIn("past the scene's End frame (250)", text)
+        self.assertIn("Extend the End frame", text)
+
+    def test_a_pick_before_the_start_is_refused(self):
+        self.assertIn("before the scene's Start frame", SP.range_problem(5, 100, 50, 250))
+        self.assertTrue(SP.range_problem(1, 40, 50, 250))
+
+    def test_a_pick_inside_the_range_is_fine_also_when_it_ends_on_the_last_frame(self):
+        self.assertEqual(SP.range_problem(100, 251, 1, 250), "")
+        self.assertEqual(SP.range_problem(1, 251, 1, 250), "")
+        self.assertEqual(SP.range_problem(100, 200, 1, 250), "")
+
+
+class TestWithinMerges(unittest.TestCase):
+
+    def test_touching_and_overlapping_cuts_become_one(self):
+        self.assertEqual(CP.within([(10, 20), (20, 30), (28, 40), (60, 70)], 0, 100), [(10, 40), (60, 70)])
+
+    def test_merged_before_clipping(self):
+        self.assertEqual(CP.within([(90, 110), (110, 130)], 100, 120), [(100, 120)])
+
+
+class TestRemoveSilencesInARange(unittest.TestCase):
+    """``wand.sequencer.remove_silences(frame_range=...)`` with the sound reading stood in (no sound, no Blender):
+    what reaches ``apply_cuts`` is only what lies inside the range."""
+
+    def _run(self, cuts, frame_range):
+        seq = W._load_sequencer(W._fake_bpy(False))
+        sound = SimpleNamespace(name="talk", select=False)
+        scene = SimpleNamespace(name="Scene", sequence_editor=SimpleNamespace())
+        got = {}
+
+        def fake_apply(scn, applied, ripple, update_end, what):
+            got["cuts"] = list(applied)
+            return {"status": "ok", "cuts": len(applied), "seconds_removed": 1.0, "captions_dropped": [],
+                    "scene_end_changed": False, "frames_removed": sum(b - a for a, b in applied)}
+
+        with mock.patch.multiple(seq, _level=lambda ed: ([sound], None), _listen=lambda every, chosen: [sound],
+                                 _analyse=lambda *a: ([{"name": "talk"}], [], []), _overhang=lambda *a: None,
+                                 _common=lambda *a: (cuts, []), apply_cuts=fake_apply):
+            out = seq.remove_silences(scene, (-40.0, 0.3, 0.1, 0.2), ["talk"], frame_range=frame_range)
+        return out, got
+
+    def test_only_the_cuts_inside_the_range_are_applied(self):
+        out, got = self._run([(10, 20), (90, 120), (150, 160), (190, 260), (300, 310)], (100, 200))
+        self.assertEqual(out["status"], "ok")
+        self.assertEqual(got["cuts"], [(100, 120), (150, 160), (190, 200)])
+
+    def test_no_range_means_all_cuts(self):
+        _out, got = self._run([(10, 20), (300, 310)], None)
+        self.assertEqual(got["cuts"], [(10, 20), (300, 310)])
+
+    def test_nothing_in_the_range_is_nothing_and_changes_nothing(self):
+        out, got = self._run([(10, 20), (300, 310)], (100, 200))
+        self.assertEqual(out["status"], "nothing")
+        self.assertNotIn("cuts", got)
+
+
+class TestCaptionsInARange(TC._OpsCase):
+
+    def test_the_captions_are_clipped_to_the_range(self):
+        clip = TC._clip(self.scene)                                   # 1..3001, the whole talk
+        self.ops.add_captions(self.scene, [clip], "CLEAN", None, self.transcript, frame_range=(1, 1 + 10 * 24))
+        lines = self.lines()
+        self.assertEqual(len(lines), 3)                              # the first 10 s, as with a 10 s strip
+        self.assertTrue(all(s.right_handle <= 1 + 10 * 24 for s in lines))
+        self.assertEqual(clip.right_handle, 3001)                    # the strip itself is not touched
+
+    def test_a_range_without_the_strip_gives_nothing_to_caption(self):
+        clip = TC._clip(self.scene)
+        with self.assertRaises(self.ops.CaptionsError):
+            self.ops.add_captions(self.scene, [clip], "CLEAN", None, self.transcript, frame_range=(5000, 6000))
+        self.assertEqual(self.lines(), [])
+
+
+class TestCopySceneNameAndTags(unittest.TestCase):
+
+    def test_copy_scene_has_its_own_name_and_tags(self):
+        rf = _reframe()
+        short = rf.copy_scene(_Scene("Long", _Action("a")), "Short 01: Hi", {"a": "b", "c": 2})
+        self.assertEqual(short.name, "Short 01: Hi")
+        self.assertEqual((short.get("a"), short.get("c")), ("b", 2))
+        self.assertTrue(short.use_extra_user)
+
+    def test_make_verticals_copy_is_still_called_vertical_and_tagged(self):
+        rf = _reframe()
+        copy = rf._copy_scene(_Scene("Long", _Action("a")))             # pylint: disable=protected-access
+        self.assertEqual(copy.name, "Long Vertical")
+        self.assertEqual(copy.get(rf.VERTICAL_TAG), "Long")
+
+
+class TestBuildFailureRemovesTheCopy(unittest.TestCase):
+    """``build()`` with the Blender parts stood in: a step that raises takes the half-made copy away."""
+
+    @staticmethod
+    def _module(removed):
+        pkg = "bfacw_short615_pkg"
+        root = types.ModuleType(pkg)
+        root.__path__ = [str(W._ADDON)]
+        stubs = {
+            "bpy": types.ModuleType("bpy"),
+            pkg: root,
+            pkg + ".highlight_picks": SimpleNamespace(PROP="coworker_picks", clock=lambda f, fps: "0:00"),
+            pkg + ".highlight_picks_ops": SimpleNamespace(edit_signature=lambda scene: ("sig",), load=lambda scene: {},
+                                                           _redraw=lambda: None),
+            pkg + ".reframe": SimpleNamespace(VERTICAL_TAG="vertical", _SHOWN_BEFORE={}, ReframeError=RuntimeError,
+                                              copy_scene=lambda scene, name, tags: _FakeShort(name)),
+            pkg + ".scene_reader_ops": SimpleNamespace(read=lambda scene: {"sentences": []}),
+            pkg + ".wand.sequencer": SimpleNamespace(remove_silences=None),
+            pkg + ".wand": SimpleNamespace(sequencer=None),
+        }
+        stubs[pkg + ".wand"].sequencer = stubs[pkg + ".wand.sequencer"]
+        
+        class _Scenes(list):
+            remove = removed.append
+
+        stubs["bpy"].data = SimpleNamespace(scenes=_Scenes(), filepath="")
+        stubs["bpy"].context = SimpleNamespace()
+        stubs[pkg + ".wand.sequencer"].remove_silences = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        return pkg, stubs
+
+    def test_a_failing_step_removes_the_half_made_copy_and_raises(self):
+        removed = []
+        pkg, stubs = self._module(removed)
+        with mock.patch.dict(sys.modules, stubs):
+            sys.modules.pop(pkg + ".highlight_short", None)
+            hs = importlib.import_module(pkg + ".highlight_short")
+            sound = SimpleNamespace(type="SOUND", mute=False, right_handle=300, left_handle=1, name="talk")
+            scene = _FakeScene(sound)
+            pick = {"start": 50, "end": 200, "title": "T"}
+            with mock.patch.object(hs, "_fps", lambda s: 24.0):
+                with self.assertRaises(RuntimeError):
+                    hs.build(scene, pick, {"silences": True})
+            self.assertEqual(len(removed), 1)
+            self.assertTrue(removed[0].name.startswith("Short 01"))
+            sys.modules.pop(pkg + ".highlight_short", None)
+
+    def test_a_pick_past_the_range_is_refused_before_any_copy_is_made(self):
+        removed, made = [], []
+        pkg, stubs = self._module(removed)
+        stubs[pkg + ".reframe"].copy_scene = lambda *a: made.append(a)
+        with mock.patch.dict(sys.modules, stubs):
+            sys.modules.pop(pkg + ".highlight_short", None)
+            hs = importlib.import_module(pkg + ".highlight_short")
+            scene = _FakeScene(None)
+            with self.assertRaises(hs.ShortError) as ctx:
+                hs.build(scene, {"start": 500, "end": 700, "title": "T"}, {})
+            self.assertIn("scene's range", str(ctx.exception))
+            self.assertEqual((made, removed), ([], []))
+            sys.modules.pop(pkg + ".highlight_short", None)
+
+
+class _FakeShort:
+    def __init__(self, name):
+        self.name = name
+        self.props = {}
+        self.timeline_markers = []
+        self.use_preview_range = True
+        self.frame_start = self.frame_end = self.frame_current = 0
+        self.render = SimpleNamespace(fps=24, fps_base=1.0)
+        self.sequence_editor = SimpleNamespace(strips=[SimpleNamespace(type="SOUND", mute=False, right_handle=300,
+                                                                       left_handle=1, name="talk", channel=1)])
+
+    def __contains__(self, key):
+        return key in self.props
+
+
+class _FakeScene:
+    def __init__(self, sound):
+        self.name = "Long"
+        self.frame_start, self.frame_end, self.frame_current = 1, 250, 1
+        self.render = SimpleNamespace(fps=24, fps_base=1.0)
+        self.sequence_editor = SimpleNamespace(meta_stack=[], strips=[sound] if sound else [])
+
+
 class TestTheSourceKeepsTheIssue(unittest.TestCase):
     """What the Blender side must do, read from its source (it is run live: the PR's by-hand checks)."""
 
@@ -163,6 +362,11 @@ class TestTheSourceKeepsTheIssue(unittest.TestCase):
         self.assertIn("short.frame_start, short.frame_end", self.src)
         for call in (".strips.remove(", "bpy.ops.sequencer.delete", "bpy.ops.sequencer.split"):
             self.assertNotIn(call, self.src)
+
+    def test_remove_silences_shows_progress_while_it_reads_the_sound(self):
+        self.assertIn("context=bpy.context", self.src)
+        self.assertIn("report_progress=True", self.src)
+        self.assertNotIn("report_progress=False", self.src)
 
     def test_the_picks_and_the_vertical_tag_are_not_inherited(self):
         self.assertIn("(hp.PROP, reframe.VERTICAL_TAG)", self.src)

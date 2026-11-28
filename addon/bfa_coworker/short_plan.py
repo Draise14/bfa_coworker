@@ -40,6 +40,7 @@ __all__ = (
     "neighbours",
     "next_number",
     "output_path",
+    "range_problem",
     "short_name",
     "step_line",
     "tag",
@@ -111,6 +112,22 @@ def borders(start: int, end: int, prev_end: int | None, next_start: int | None, 
     first = max(int(lo), int(start) - min(lead, room_before))
     last = min(int(hi), int(end) - 1 + min(tail, room_after))
     return first, max(first, last)
+
+
+def range_problem(start: int, end: int, lo: int, hi: int) -> str:
+    """Why a pick of the frames ``start..end`` (end exclusive) can't be made into a short of an edit whose
+    scene range is ``lo..hi`` (inclusive), or ``""`` when it fits.  The picks come from the strips, which can
+    reach past the scene range; a short made from a pick outside it would be empty or cut off without a word."""
+    if end <= lo or start > hi:
+        return ("The pick (frames {:d}-{:d}) lies outside the scene's range ({:d}-{:d}). "
+                "Move the Start / End frame to include it, then try again.").format(start, end - 1, lo, hi)
+    if start < lo:
+        return ("The pick starts at frame {:d}, before the scene's Start frame ({:d}). "
+                "Move the Start frame to include it, then try again.").format(start, lo)
+    if end - 1 > hi:
+        return ("The pick runs to frame {:d}, past the scene's End frame ({:d}). "
+                "Extend the End frame to include it, then try again.").format(end - 1, hi)
+    return ""
 
 
 def layout_for(kind: str) -> str:
